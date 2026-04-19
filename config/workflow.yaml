@@ -1,0 +1,113 @@
+version: "1.0"
+workflow:
+  name: "JS Restore Pipeline"
+  description: "通用 JS 逆向还原流水线，任何 AI 都可解析执行"
+  
+  # 全局变量
+  variables:
+    workspace: "{workspace}"
+    run_id: "{run_id}"
+    profile: "{profile|strict}"
+  
+  # 执行步骤
+  steps:
+    - id: "ensure-project-cache"
+      name: "确保项目缓存存在"
+      rule: "rules/ensure-project-cache.yaml"
+      next_on_success: "clear-output"
+      
+    - id: "clear-output"
+      name: "清理输出目录"
+      rule: "rules/clear-output.yaml"
+      next_on_success: "init-run"
+      
+    - id: "init-run"
+      name: "初始化运行"
+      rule: "rules/init-run.yaml"
+      next_on_success: "normalize-input"
+      
+    - id: "normalize-input"
+      name: "标准化输入"
+      rule: "rules/normalize-input.yaml"
+      next_on_success: "infer-build-origin"
+      
+    - id: "infer-build-origin"
+      name: "推断构建来源"
+      rule: "rules/infer-build-origin.yaml"
+      next_on_success: "scan-structure"
+      
+    - id: "scan-structure"
+      name: "扫描结构"
+      rule: "rules/scan-structure.yaml"
+      next_on_success: "build-code-portrait"
+      
+    - id: "build-code-portrait"
+      name: "构建代码画像"
+      rule: "rules/build-code-portrait.yaml"
+      next_on_success: "analyze-obfuscation"
+      
+    - id: "analyze-obfuscation"
+      name: "分析混淆"
+      rule: "rules/analyze-obfuscation.yaml"
+      next_on_success: "extract-chains"
+      
+    - id: "extract-chains"
+      name: "提取调用链"
+      rule: "rules/extract-chains.yaml"
+      next_on_success: "build-evidence"
+      
+    - id: "build-evidence"
+      name: "构建证据"
+      rule: "rules/build-evidence.yaml"
+      next_on_success: "restore-readable"
+      
+    - id: "restore-readable"
+      name: "还原可读代码"
+      rule: "rules/restore-readable.yaml"
+      next_on_success: "bootstrap-source-rules"
+      
+    - id: "bootstrap-source-rules"
+      name: "启动源码规则"
+      rule: "rules/bootstrap-source-rules.yaml"
+      next_on_success: "decompile-bundle-structure"
+      
+    - id: "decompile-bundle-structure"
+      name: "反编译 Bundle 结构"
+      rule: "rules/decompile-bundle-structure.yaml"
+      next_on_success: "extract-source-modules"
+      
+    - id: "extract-source-modules"
+      name: "提取源码模块"
+      rule: "rules/extract-source-modules.yaml"
+      next_on_success: "build-source-graph"
+      
+    - id: "build-source-graph"
+      name: "构建源码图"
+      rule: "rules/build-source-graph.yaml"
+      next_on_success: "build-source-project"
+      
+    - id: "build-source-project"
+      name: "构建源码项目"
+      rule: "rules/build-source-project.yaml"
+      next_on_success: "verify-source-project"
+      
+    - id: "verify-source-project"
+      name: "验证源码项目"
+      rule: "rules/verify-source-project.yaml"
+      next_on_success: "verify"
+      
+    - id: "verify"
+      name: "验证还原结果"
+      rule: "rules/verify.yaml"
+      next_on_success: "finalize"
+      
+    - id: "finalize"
+      name: "收尾"
+      rule: "rules/finalize.yaml"
+      next_on_success: null  # 流程结束
+
+  # 失败处理策略
+  on_failure:
+    action: "stop"
+    save_state: true
+    notify: false

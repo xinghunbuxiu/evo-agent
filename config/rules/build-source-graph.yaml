@@ -1,0 +1,37 @@
+version: "1.0"
+rule:
+  id: "build-source-graph"
+  name: "构建源码图"
+  description: "构建模块依赖图，分析模块间关系"
+  
+  responsibilities:
+    - "分析模块依赖"
+    - "构建模块图"
+    - "识别循环依赖"
+    - "标记入口模块"
+  
+  constraints:
+    - "基于候选模块"
+    - "输出图结构"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/component_candidates.json"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-source-graph"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/module_graph.json"
+  
+  on_failure:
+    action: "continue"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["reconstruction", "graph", "dependencies"]

@@ -1,0 +1,80 @@
+version: "1.0"
+rule:
+  id: "build-code-portrait"
+  name: "构建代码画像"
+  description: "多维度代码画像：文件、类、方法、常量、语义、库匹配"
+  
+  responsibilities:
+    - "构建文件级画像"
+    - "构建实体级画像（类/函数）"
+    - "构建方法级画像"
+    - "构建常量/枚举画像"
+    - "语义分析"
+    - "第三方库识别"
+  
+  constraints:
+    - "不生成还原代码"
+    - "仅分析特征"
+    - "为后续步骤提供输入"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/structure_scan.json"
+  
+  # 并行执行多个画像任务
+  action:
+    type: "parallel"
+    steps:
+      - name: "build-portrait"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-portrait"
+        timeout: 300
+      - name: "build-file-portraits"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-file-portraits"
+        timeout: 300
+      - name: "build-class-portraits"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-class-portraits"
+        timeout: 300
+      - name: "build-method-portraits"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-method-portraits"
+        timeout: 300
+      - name: "build-constant-portraits"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-constant-portraits"
+        timeout: 300
+      - name: "build-js-semantic-profile"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-js-semantic-profile"
+        timeout: 300
+      - name: "build-library-match"
+        type: "cli"
+        command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} build-library-match"
+        timeout: 300
+    join_type: "all"  # 等待全部完成
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/code_portrait.json"
+    - type: "file_exists"
+      path: "{workspace}/cache/portraits/file_portraits.json"
+    - type: "file_exists"
+      path: "{workspace}/cache/portraits/class_portraits.json"
+    - type: "file_exists"
+      path: "{workspace}/cache/portraits/method_portraits.json"
+    - type: "file_exists"
+      path: "{workspace}/cache/portraits/constant_portraits.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/js_semantic_profile.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/library_matches.json"
+  
+  on_failure:
+    action: "stop"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["analysis", "portrait", "parallel"]

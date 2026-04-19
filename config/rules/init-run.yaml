@@ -1,0 +1,50 @@
+version: "1.0"
+rule:
+  id: "init-run"
+  name: "初始化运行"
+  description: "创建新的运行实例，生成 run_id 和运行元数据"
+  
+  responsibilities:
+    - "生成唯一 run_id"
+    - "创建运行目录结构"
+    - "初始化运行元数据"
+  
+  constraints:
+    - "不可复用已有 run_id"
+    - "必须生成新的时间戳"
+    - "写入 run_meta.json"
+  
+  preconditions:
+    - type: "directory_exists"
+      path: "{workspace}/output"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} init-run"
+    working_dir: "{workspace}"
+    timeout: 60
+    capture_output: true
+    output_patterns:
+      run_id: "^run_id=(.+)$"
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/run_meta.json"
+    - type: "json_path"
+      file: "{workspace}/output/{run_id}/run_meta.json"
+      json_path: "run_id"
+      expected: "{run_id}"
+  
+  outputs:
+    - name: "run_id"
+      description: "新生成的运行 ID"
+      scope: "global"  # 全局变量，后续步骤可用
+  
+  on_failure:
+    action: "stop"
+    message: "初始化运行失败"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["init", "run"]

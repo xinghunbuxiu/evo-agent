@@ -1,0 +1,45 @@
+version: "1.0"
+rule:
+  id: "decompile-bundle-structure"
+  name: "反编译 Bundle 结构"
+  description: "分析 bundle 的运行时结构和组件导出"
+  
+  responsibilities:
+    - "分析运行时 shell"
+    - "识别动态导入组"
+    - "提取组件导出"
+    - "识别渲染块和处理块"
+  
+  constraints:
+    - "静态分析为主"
+    - "输出结构化信息"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/cache/project/source_reconstruction_rules.json"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} decompile-bundle-structure"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/runtime_shells.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/dynamic_import_groups.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/component_exports.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/render_blocks.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/handler_blocks.json"
+  
+  on_failure:
+    action: "continue"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["reconstruction", "decompile", "structure"]

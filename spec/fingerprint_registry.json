@@ -1,0 +1,98 @@
+{
+  "version": "1.1",
+  "description": "指纹包注册表 — 每个库/组件一个独立 pack，按 priority 升序加载合并。",
+  "packs": [
+    {
+      "id": "bridge_tauri_js",
+      "path": "spec/fingerprint_packs/components/bridge_tauri_js.json",
+      "enabled": true,
+      "priority": 10,
+      "_comment": "Tauri JS bridge 运行时"
+    },
+    {
+      "id": "bundler_vite_runtime",
+      "path": "spec/fingerprint_packs/components/bundler_vite_runtime.json",
+      "enabled": true,
+      "priority": 20,
+      "_comment": "Vite 构建运行时 / modulepreload"
+    },
+    {
+      "id": "framework_vue_runtime",
+      "path": "spec/fingerprint_packs/components/framework_vue_runtime.json",
+      "enabled": true,
+      "priority": 30,
+      "_comment": "Vue 3 框架运行时 + SFC 编译产物识别"
+    },
+    {
+      "id": "framework_vue_i18n",
+      "path": "spec/fingerprint_packs/components/framework_vue_i18n.json",
+      "enabled": true,
+      "priority": 40,
+      "_comment": "vue-i18n 国际化插件"
+    },
+    {
+      "id": "framework_react_runtime",
+      "path": "spec/fingerprint_packs/components/framework_react_runtime.json",
+      "enabled": true,
+      "priority": 50,
+      "_comment": "React 框架运行时"
+    },
+    {
+      "id": "state_pinia",
+      "path": "spec/fingerprint_packs/components/state_pinia.json",
+      "enabled": true,
+      "priority": 60,
+      "_comment": "Pinia 状态管理"
+    },
+    {
+      "id": "state_vuex",
+      "path": "spec/fingerprint_packs/components/state_vuex.json",
+      "enabled": true,
+      "priority": 70,
+      "_comment": "Vuex 状态管理"
+    },
+    {
+      "id": "state_zustand",
+      "path": "spec/fingerprint_packs/components/state_zustand.json",
+      "enabled": true,
+      "priority": 80,
+      "_comment": "Zustand 状态管理（React 生态）"
+    },
+    {
+      "id": "ui_naive_ui",
+      "path": "spec/fingerprint_packs/components/ui_naive_ui.json",
+      "enabled": true,
+      "priority": 90,
+      "_comment": "Naive UI 组件库"
+    },
+    {
+      "id": "vendor_lodash",
+      "path": "spec/fingerprint_packs/components/vendor_lodash.json",
+      "enabled": true,
+      "priority": 110,
+      "_comment": "Lodash 工具库"
+    },
+    {
+      "id": "vendor_axios",
+      "path": "spec/fingerprint_packs/components/vendor_axios.json",
+      "enabled": true,
+      "priority": 120,
+      "_comment": "Axios HTTP 客户端"
+    },
+    {
+      "id": "vendor_dayjs",
+      "path": "spec/fingerprint_packs/components/vendor_dayjs.json",
+      "enabled": true,
+      "priority": 130,
+      "_comment": "Day.js 日期库"
+    }
+  ],
+  "remote": {
+    "enabled": true,
+    "source": "https://gitee.com/xinghunbuxiu/ainixiang",
+    "branch": "main",
+    "subdir": "spec/fingerprint_packs/components",
+    "sync_mode": "merge",
+    "_description": "AI逆向工程指纹共享仓库 - 多项目通用的第三方库/框架指纹包"
+  }
+}

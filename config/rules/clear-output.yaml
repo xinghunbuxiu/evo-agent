@@ -1,0 +1,40 @@
+version: "1.0"
+rule:
+  id: "clear-output"
+  name: "清理输出目录"
+  description: "清理上一轮运行的输出，确保干净的环境"
+  
+  responsibilities:
+    - "创建输出目录"
+    - "清理旧输出（可选）"
+    - "保留重要历史（可选）"
+  
+  constraints:
+    - "仅在非恢复模式下清理"
+    - "不删除 input/ 目录"
+    - "不删除 cache/ 目录"
+  
+  preconditions:
+    - type: "directory_exists"
+      path: "{workspace}"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} clear-output"
+    working_dir: "{workspace}"
+    timeout: 60
+  
+  postconditions:
+    - type: "directory_exists"
+      path: "{workspace}/output"
+    - type: "directory_writable"
+      path: "{workspace}/output"
+  
+  on_failure:
+    action: "stop"
+    message: "无法清理输出目录"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["init", "cleanup"]

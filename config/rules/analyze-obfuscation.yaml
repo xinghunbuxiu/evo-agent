@@ -1,0 +1,44 @@
+version: "1.0"
+rule:
+  id: "analyze-obfuscation"
+  name: "分析混淆"
+  description: "识别混淆、压缩、helper 壳和聚合门面，评估还原风险"
+  
+  responsibilities:
+    - "识别混淆类型"
+    - "评估压缩程度"
+    - "识别 helper 壳"
+    - "评估还原风险"
+  
+  constraints:
+    - "不允许直接生成源码模块"
+    - "不允许把混淆分析和职责归属混写"
+    - "只负责混淆画像"
+    - "验收未通过时不得进入下一步"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/code_portrait.json"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} analyze-obfuscation"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/obfuscation_profile.json"
+    - type: "json_path"
+      file: "{workspace}/output/{run_id}/analysis/obfuscation_profile.json"
+      json_path: "level"
+      condition: "exists"
+  
+  on_failure:
+    action: "stop"
+    message: "混淆分析失败或风险过高"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["analysis", "obfuscation", "risk"]

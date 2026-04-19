@@ -1,0 +1,47 @@
+version: "1.0"
+rule:
+  id: "extract-source-modules"
+  name: "提取源码模块"
+  description: "识别和提取候选的组件、服务、store、composable 模块"
+  
+  responsibilities:
+    - "识别组件候选"
+    - "识别服务候选"
+    - "识别 store 候选"
+    - "识别 composable 候选"
+    - "识别 bootstrap 候选"
+  
+  constraints:
+    - "基于结构分析"
+    - "不生成完整源码"
+    - "输出候选列表"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/runtime_shells.json"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} extract-source-modules"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/component_candidates.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/service_candidates.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/store_candidates.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/composable_candidates.json"
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/analysis/source_reconstruction/bootstrap_candidates.json"
+  
+  on_failure:
+    action: "continue"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["reconstruction", "modules", "extraction"]

@@ -1,0 +1,45 @@
+version: "1.0"
+rule:
+  id: "normalize-input"
+  name: "标准化输入"
+  description: "将输入 bundle 标准化为可分析的格式"
+  
+  responsibilities:
+    - "读取 input/raw_bundle"
+    - "生成标准化工作副本"
+    - "准备分析环境"
+  
+  constraints:
+    - "不修改原始输入"
+    - "保留原始文件结构"
+    - "仅做格式标准化"
+  
+  preconditions:
+    - type: "directory_exists"
+      path: "{workspace}/input/raw_bundle"
+    - type: "file_exists"
+      path: "{workspace}/input/manifest.json"
+    - type: "variable_set"
+      name: "run_id"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} normalize"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "directory_exists"
+      path: "{workspace}/output/{run_id}/baseline/normalized_working_copy"
+    - type: "directory_not_empty"
+      path: "{workspace}/output/{run_id}/baseline/normalized_working_copy"
+  
+  on_failure:
+    action: "retry"
+    max_retries: 2
+    fallback: "stop"
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["baseline", "normalize"]

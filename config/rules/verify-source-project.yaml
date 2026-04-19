@@ -1,0 +1,41 @@
+version: "1.0"
+rule:
+  id: "verify-source-project"
+  name: "验证源码项目"
+  description: "验证重建的源码项目结构完整、可运行"
+  
+  responsibilities:
+    - "检查项目结构"
+    - "验证依赖完整性"
+    - "检查入口文件"
+  
+  constraints:
+    - "不运行实际测试"
+    - "仅静态验证"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/reconstructed_project/src/main.ts"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} verify-source-project"
+    working_dir: "{workspace}"
+    timeout: 300
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/reports/verify_source_report.json"
+    - type: "json_path"
+      file: "{workspace}/output/{run_id}/reports/verify_source_report.json"
+      json_path: "ok"
+      expected: true
+      optional: true  # 允许验证不通过
+  
+  on_failure:
+    action: "continue"  # 非阻断
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["verify", "source", "validation"]

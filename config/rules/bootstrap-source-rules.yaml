@@ -1,0 +1,36 @@
+version: "1.0"
+rule:
+  id: "bootstrap-source-rules"
+  name: "启动源码规则"
+  description: "为源码重建阶段准备规则配置"
+  
+  responsibilities:
+    - "生成源码重建规则"
+    - "准备模板配置"
+    - "初始化重建上下文"
+  
+  constraints:
+    - "不生成实际源码"
+    - "仅准备配置"
+  
+  preconditions:
+    - type: "file_exists"
+      path: "{workspace}/output/{run_id}/restore_v1/readable/pages/index.html"
+  
+  action:
+    type: "cli"
+    command: "python3 src/engine/restorex_cli.py --workspace {workspace} --rule-profile {profile} --run-id {run_id} bootstrap-source-rules"
+    working_dir: "{workspace}"
+    timeout: 120
+  
+  postconditions:
+    - type: "file_exists"
+      path: "{workspace}/cache/project/source_reconstruction_rules.json"
+  
+  on_failure:
+    action: "continue"  # 非关键步骤
+  
+  metadata:
+    author: "restorex"
+    version: "1.0"
+    tags: ["reconstruction", "rules", "bootstrap"]
