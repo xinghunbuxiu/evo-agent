@@ -1,0 +1,68 @@
+version: "3.8"
+
+services:
+  # Evo Admin 后台管理服务
+  evo-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: evo-admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./evo_workbench:/workspace
+      - ./.env:/app/.env:ro
+    environment:
+      - EVO_ADMIN_WORKSPACE=/workspace
+      - GITEE_CLIENT_ID=${GITEE_CLIENT_ID}
+      - GITEE_CLIENT_SECRET=${GITEE_CLIENT_SECRET}
+      - GITEE_REDIRECT_URI=${GITEE_REDIRECT_URI:-http://localhost:8000/auth/callback}
+      - SESSION_SECRET=${SESSION_SECRET:-evo-session-secret-change-in-production}
+      - EVO_ENV=${EVO_ENV:-production}
+      - EVO_SECURE_COOKIES=${EVO_SECURE_COOKIES:-true}
+      - PYTHONPATH=/app/src
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Evo Worker 任务执行服务（可选：分离计算密集型任务）
+  evo-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: evo-worker
+    command: python3 -m admin.worker  # 任务队列消费者
+    volumes:
+      - ./evo_workbench:/workspace
+      - ./.env:/app/.env:ro
+    environment:
+      - EVO_ADMIN_WORKSPACE=/workspace
+      - WORKER_MODE=true
+      - PYTHONPATH=/app/src
+    restart: unless-stopped
+    depends_on:
+      - evo-admin
+
+  # 可选：Redis 用于分布式任务队列（生产环境建议启用）
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: evo-redis
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+
+# 可选：添加 nginx 反向代理
+#  nginx:
+#    image: nginx:alpine
+#    ports:
+#      - "80:80"
+#      - "443:443"
+#    volumes:
+#      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+#      - ./ssl:/etc/nginx/ssl:ro
+#    depends_on:
+#      - evo-admin

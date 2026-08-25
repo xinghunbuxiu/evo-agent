@@ -1,0 +1,11 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "codex_case_user",
+      "password_hash": "b8da038ea497f29f2cc3f8049b67970b18d85e4892f41a6ba73f52e659e04245",
+      "name": "codex_case_user",
+      "login_type": "password"
+    }
+  ]
+}

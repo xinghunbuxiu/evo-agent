@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 敏感信息
+.env
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# 工作区临时文件
+.workflow/
+.queue/
+*.log
+*.tmp
+
+# Admin 运行时状态（保留 .config/ 纳入版本控制）
+.admin/
+.tenants/
+
+# Node
+node_modules/
+admin-ui/node_modules/
+admin-ui/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 工作区本地缓存
+evo_workbench/.workflow/
+.test_workspace/
+
+# 测试输出
+test_output/
+*.test
+
+# 渠道 Playwright 会话（cookie / 截图，勿入库）
+executors/*/data/browser/
+
+# graphify local corpus/cache
+graphify-out/.corpus/
+graphify-out/cache/

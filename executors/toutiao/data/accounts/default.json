@@ -1,0 +1,11 @@
+{
+  "account_id": "default",
+  "logged_in": false,
+  "display_name": "M1演示",
+  "profile_url": "https://www.toutiao.com/c/user/88878884717/",
+  "notes": "placeholder login session created by evo executor",
+  "login_target_url": "https://example.com",
+  "login_session_id": "login_default_20260809_182351",
+  "login_status": "awaiting_confirmation",
+  "updated_at": "2026-08-09T18:23:51.698976"
+}

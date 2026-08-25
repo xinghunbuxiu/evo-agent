@@ -1,0 +1,27 @@
+# Evo 智能体平台依赖
+
+# Web 框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+starlette>=0.27.0
+
+# 数据处理
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# HTTP 客户端
+httpx>=0.25.0
+requests>=2.31.0
+
+# 安全
+cryptography>=41.0.0
+
+# 工具
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+
+# 日志
+structlog>=23.2.0
+
+# 可选：性能
+# orjson>=3.9.0  # 更快的 JSON 处理

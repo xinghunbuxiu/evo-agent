@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evo.local/schemas/collaboration_policies.schema.json",
+  "title": "CollaborationPolicies",
+  "type": "object",
+  "required": ["version", "default_policy_id", "policies", "message_templates"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "default_policy_id": { "type": "string", "minLength": 1 },
+    "message_templates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["policy_id", "rules"],
+        "properties": {
+          "policy_id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["when_capability", "resolve_by"],
+              "properties": {
+                "when_capability": { "type": "string", "minLength": 1 },
+                "prefer_department_id": { "type": "string" },
+                "candidate_work_type_ids": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "resolve_by": {
+                  "type": "string",
+                  "enum": ["trainer_manual", "idle_member_in_work_type", "round_robin"]
+                },
+                "deliverable_template_id": { "type": "string" },
+                "reviewer_role": {
+                  "type": "string",
+                  "enum": ["talent_development_officer", "parent"]
+                },
+                "notify_on_approved": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["requester", "orchestrator", "parent"]
+                  }
+                },
+                "message_template_id": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

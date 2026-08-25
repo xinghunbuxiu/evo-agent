@@ -1,0 +1,11 @@
+{
+  "name": "example-js-extension",
+  "version": "0.1.0",
+  "compatibility": {
+    "evo": ">=0.1.0"
+  },
+  "capability_types": [
+    "javascript_reverse"
+  ],
+  "description": "Sample enterprise JavaScript strategy and evaluator extension."
+}

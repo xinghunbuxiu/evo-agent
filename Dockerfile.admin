@@ -1,0 +1,39 @@
+# Evo Admin — 生产镜像（含前端构建）
+
+# ---- 前端构建 ----
+FROM node:20-alpine AS ui-builder
+WORKDIR /build
+COPY admin-ui/package.json admin-ui/package-lock.json* ./
+RUN npm ci || npm install
+COPY admin-ui/ ./
+RUN npm run build
+
+# ---- Python 运行时 ----
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY src/ /app/src/
+COPY .config/ /app/.config/
+COPY scripts/ /app/scripts/
+COPY --from=ui-builder /build/dist /app/admin-ui/dist
+
+ENV PYTHONPATH=/app/src
+ENV PYTHONUNBUFFERED=1
+ENV EVO_ENV=production
+ENV EVO_SECURE_COOKIES=true
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
+  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+CMD ["python3", "-m", "uvicorn", "admin.server:create_app", "--host", "0.0.0.0", "--port", "8000", "--factory"]

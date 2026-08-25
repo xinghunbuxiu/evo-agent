@@ -1,0 +1,5 @@
+# 可选：渠道执行器真实浏览器（不装也能跑本地 stub）
+# 安装：
+#   pip install -r requirements-playwright.txt
+#   python -m playwright install chromium
+playwright>=1.40.0

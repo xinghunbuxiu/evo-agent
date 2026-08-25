@@ -1,0 +1,1072 @@
+{
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/package.json": {
+    "mtime": 1776658049.4644644,
+    "ast_hash": "b052b86f7e728f87553973b1c81443f7",
+    "semantic_hash": "b052b86f7e728f87553973b1c81443f7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/postcss.config.js": {
+    "mtime": 1776658112.8774288,
+    "ast_hash": "ef3ba2a81ba19f8ea5ddf625521e96f0",
+    "semantic_hash": "ef3ba2a81ba19f8ea5ddf625521e96f0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/App.vue": {
+    "mtime": 1783392374.7016585,
+    "ast_hash": "e5e3bf911b87342721cbe9bf49ebd275",
+    "semantic_hash": "e5e3bf911b87342721cbe9bf49ebd275"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/auth.ts": {
+    "mtime": 1776745245.656555,
+    "ast_hash": "f7b62b90b5c5b340de5cad63a953de43",
+    "semantic_hash": "f7b62b90b5c5b340de5cad63a953de43"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/evolution.ts": {
+    "mtime": 1777774033.9040759,
+    "ast_hash": "51a1acd546fabd830f9e8979d0039638",
+    "semantic_hash": "51a1acd546fabd830f9e8979d0039638"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/finance.ts": {
+    "mtime": 1783392374.714579,
+    "ast_hash": "33258a271f4826d5eaf46c4ab09c9539",
+    "semantic_hash": "33258a271f4826d5eaf46c4ab09c9539"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/git.ts": {
+    "mtime": 1776919409.803682,
+    "ast_hash": "c2f7116062a2300e137f2d7844f1e1e0",
+    "semantic_hash": "c2f7116062a2300e137f2d7844f1e1e0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/intake.ts": {
+    "mtime": 1786247596.3535483,
+    "ast_hash": "d70137e91f24793252597cec00f0a106",
+    "semantic_hash": "d70137e91f24793252597cec00f0a106"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/knowledge.ts": {
+    "mtime": 1777769820.0955327,
+    "ast_hash": "2da0fbd4bba23481ff021bac33ce10a5",
+    "semantic_hash": "2da0fbd4bba23481ff021bac33ce10a5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/missions.ts": {
+    "mtime": 1777775693.659098,
+    "ast_hash": "af14bca1a97a838e4d91a4998829c30d",
+    "semantic_hash": "af14bca1a97a838e4d91a4998829c30d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/plugins.ts": {
+    "mtime": 1786248373.1551478,
+    "ast_hash": "01350768efc47703d2ad2556d5312436",
+    "semantic_hash": "01350768efc47703d2ad2556d5312436"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/request.ts": {
+    "mtime": 1783392374.6948998,
+    "ast_hash": "d441486625bcfa62932c1b77b0528571",
+    "semantic_hash": "d441486625bcfa62932c1b77b0528571"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/selfMedia.ts": {
+    "mtime": 1777721007.8906813,
+    "ast_hash": "987cb0112eb45bacf66818fe8b647dfe",
+    "semantic_hash": "987cb0112eb45bacf66818fe8b647dfe"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/tasks.ts": {
+    "mtime": 1776752700.3791006,
+    "ast_hash": "5fc9ed904b5571048e5714b1daf079cc",
+    "semantic_hash": "5fc9ed904b5571048e5714b1daf079cc"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/workNodes.ts": {
+    "mtime": 1783392374.7142184,
+    "ast_hash": "57c453c23a782c6f8ade89cee37e87e4",
+    "semantic_hash": "57c453c23a782c6f8ade89cee37e87e4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/api/workTypes.ts": {
+    "mtime": 1783392374.712038,
+    "ast_hash": "8b74b0cee45e24b70110bd8ba6752e8e",
+    "semantic_hash": "8b74b0cee45e24b70110bd8ba6752e8e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/AutonomyStatusPanel.vue": {
+    "mtime": 1777971971.8110723,
+    "ast_hash": "975834faf131a011a906743468f8f421",
+    "semantic_hash": "975834faf131a011a906743468f8f421"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/CompanyWorkTypesPanel.vue": {
+    "mtime": 1783392374.695465,
+    "ast_hash": "349c4ea5c524b0a0f09686ed4315fb82",
+    "semantic_hash": "349c4ea5c524b0a0f09686ed4315fb82"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/EvolutionArchivePanel.vue": {
+    "mtime": 1777970420.7266457,
+    "ast_hash": "94fad3528e2d122d15c996c9453f7023",
+    "semantic_hash": "94fad3528e2d122d15c996c9453f7023"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/LearningTasksPanel.vue": {
+    "mtime": 1777970390.9029186,
+    "ast_hash": "17af1d8a6f8c8fde321f9a5a5fbfe640",
+    "semantic_hash": "17af1d8a6f8c8fde321f9a5a5fbfe640"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/MissionRunDetailPanel.vue": {
+    "mtime": 1783392374.714134,
+    "ast_hash": "9b2e5c183dacf4051e85298421b9b4bb",
+    "semantic_hash": "9b2e5c183dacf4051e85298421b9b4bb"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/MissionWorkerSummary.vue": {
+    "mtime": 1777772930.5267587,
+    "ast_hash": "a845860c7c53a75bc303c6575e752f06",
+    "semantic_hash": "a845860c7c53a75bc303c6575e752f06"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/ParentInboxPanel.vue": {
+    "mtime": 1777952319.8857822,
+    "ast_hash": "2b97e6709ddb25439dbeb22aacb06182",
+    "semantic_hash": "2b97e6709ddb25439dbeb22aacb06182"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/StatusBadge.vue": {
+    "mtime": 1776658233.2635334,
+    "ast_hash": "8308bc2e41f8503d8c8af7e323fb9ad6",
+    "semantic_hash": "8308bc2e41f8503d8c8af7e323fb9ad6"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerDispatchPanel.vue": {
+    "mtime": 1786247908.017312,
+    "ast_hash": "cc0ea81e4ae1861ca6488c369523749a",
+    "semantic_hash": "cc0ea81e4ae1861ca6488c369523749a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerExclusivePanel.vue": {
+    "mtime": 1783392374.6948576,
+    "ast_hash": "df95604c2b1cb48f4389642fcb0edc1b",
+    "semantic_hash": "df95604c2b1cb48f4389642fcb0edc1b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerKnowledgePanel.vue": {
+    "mtime": 1783392374.6951003,
+    "ast_hash": "8fadf6b304dcc30949fbdc78fe43fe0f",
+    "semantic_hash": "8fadf6b304dcc30949fbdc78fe43fe0f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerMainlineShell.vue": {
+    "mtime": 1783392374.695139,
+    "ast_hash": "0fb80189b9a951bbdd598c424d405f41",
+    "semantic_hash": "0fb80189b9a951bbdd598c424d405f41"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerPortraitPanel.vue": {
+    "mtime": 1783392374.6949718,
+    "ast_hash": "664c5dc0737e5cdef143fd11b9baefcd",
+    "semantic_hash": "664c5dc0737e5cdef143fd11b9baefcd"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerQuickWorkTypePanel.vue": {
+    "mtime": 1783392374.695382,
+    "ast_hash": "6b636cec9bc2ac525beaff814d35946a",
+    "semantic_hash": "6b636cec9bc2ac525beaff814d35946a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/TrainerReviewPanel.vue": {
+    "mtime": 1783392374.69541,
+    "ast_hash": "781ece846bfb179b4aa28becd1792f12",
+    "semantic_hash": "781ece846bfb179b4aa28becd1792f12"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/AppShell.vue": {
+    "mtime": 1786247646.598912,
+    "ast_hash": "993811bec0dedd1a3a324ac8d9082541",
+    "semantic_hash": "993811bec0dedd1a3a324ac8d9082541"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/CompanyTreeNav.vue": {
+    "mtime": 1783392374.6965244,
+    "ast_hash": "e555efd6d53650ed75965bb4ce6c947d",
+    "semantic_hash": "e555efd6d53650ed75965bb4ce6c947d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/CompanyTreeNavList.vue": {
+    "mtime": 1783392374.6954112,
+    "ast_hash": "76fe683ec19bc77f7fa0dea7eaedbc55",
+    "semantic_hash": "76fe683ec19bc77f7fa0dea7eaedbc55"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/MetricStrip.vue": {
+    "mtime": 1783392374.7013626,
+    "ast_hash": "e64369bc1bded7254883c0ed7489e9de",
+    "semantic_hash": "e64369bc1bded7254883c0ed7489e9de"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/WorkspacePageHeader.vue": {
+    "mtime": 1783392374.7144272,
+    "ast_hash": "fe02b854224c7695748912282c8bf3db",
+    "semantic_hash": "fe02b854224c7695748912282c8bf3db"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/shell/WorkspaceSubNav.vue": {
+    "mtime": 1783392374.6954837,
+    "ast_hash": "646fbe0c78a2b916dbe1423e8a44ae2e",
+    "semantic_hash": "646fbe0c78a2b916dbe1423e8a44ae2e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/ArchivePlaceholderPanel.vue": {
+    "mtime": 1783392374.7098012,
+    "ast_hash": "e50c33f074b11ae775738fd1d0a67fb9",
+    "semantic_hash": "e50c33f074b11ae775738fd1d0a67fb9"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/DashboardOverview.vue": {
+    "mtime": 1786248364.5562274,
+    "ast_hash": "5183a00f1e48e1bad0c58890fc69b6cd",
+    "semantic_hash": "5183a00f1e48e1bad0c58890fc69b6cd"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/ExperienceCardsPanel.vue": {
+    "mtime": 1783392374.7146895,
+    "ast_hash": "f3441c1a5056645653d6f61592d11cd6",
+    "semantic_hash": "f3441c1a5056645653d6f61592d11cd6"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/NodePhasePanel.vue": {
+    "mtime": 1783392374.7154367,
+    "ast_hash": "c11efbe84ae84ca036cb94de41dfc62e",
+    "semantic_hash": "c11efbe84ae84ca036cb94de41dfc62e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/NodeTimelineList.vue": {
+    "mtime": 1783392374.7154634,
+    "ast_hash": "ee79bb164b6f67e181a0101891bc0063",
+    "semantic_hash": "ee79bb164b6f67e181a0101891bc0063"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/SkillsPlaceholderPanel.vue": {
+    "mtime": 1783392374.6949227,
+    "ast_hash": "7fd24721f39a24e77b23572f61fb1b89",
+    "semantic_hash": "7fd24721f39a24e77b23572f61fb1b89"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/components/worknodes/WorkNodeWorkspace.vue": {
+    "mtime": 1783392374.696408,
+    "ast_hash": "f935425bc6b960e1084b6956d40e2ef5",
+    "semantic_hash": "f935425bc6b960e1084b6956d40e2ef5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/composables/companyConsole.ts": {
+    "mtime": 1783392374.6947906,
+    "ast_hash": "7367532845238fa56f312a40beadb49c",
+    "semantic_hash": "7367532845238fa56f312a40beadb49c"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/main.ts": {
+    "mtime": 1786247643.4240382,
+    "ast_hash": "31db6811fc3a4a4ab2c8cda7369b39e4",
+    "semantic_hash": "31db6811fc3a4a4ab2c8cda7369b39e4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/collaborationView.ts": {
+    "mtime": 1783392374.6722977,
+    "ast_hash": "dbddd2ed43c08894bef0656183eb8545",
+    "semantic_hash": "dbddd2ed43c08894bef0656183eb8545"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/companyTree.ts": {
+    "mtime": 1786248380.3987107,
+    "ast_hash": "e44c70b33f963bfcec3dc37864aed9ee",
+    "semantic_hash": "e44c70b33f963bfcec3dc37864aed9ee"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/formalTaskRecommendation.ts": {
+    "mtime": 1780060431.1732066,
+    "ast_hash": "a7722c5129ad751c99b72a022b5ca829",
+    "semantic_hash": "a7722c5129ad751c99b72a022b5ca829"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/memberEvolutionView.ts": {
+    "mtime": 1780065920.4157023,
+    "ast_hash": "4e8d0d34aed9f33a9c0b2d6eeeeeedd8",
+    "semantic_hash": "4e8d0d34aed9f33a9c0b2d6eeeeeedd8"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/organization.ts": {
+    "mtime": 1786248443.278303,
+    "ast_hash": "2b740fefd9fee5918b9dc10b15709307",
+    "semantic_hash": "2b740fefd9fee5918b9dc10b15709307"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/workNodes.ts": {
+    "mtime": 1783392374.6950958,
+    "ast_hash": "83a24927d0881d829925e0aef99b6d69",
+    "semantic_hash": "83a24927d0881d829925e0aef99b6d69"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/utils/workTypeDashboard.ts": {
+    "mtime": 1783392374.6953397,
+    "ast_hash": "905aa9115f0a56675e6f148f8d2bdab7",
+    "semantic_hash": "905aa9115f0a56675e6f148f8d2bdab7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/ChildWorkspace.vue": {
+    "mtime": 1786248439.5955086,
+    "ast_hash": "69c4c43c477cf3504cc4c443abd093a2",
+    "semantic_hash": "69c4c43c477cf3504cc4c443abd093a2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/CompanySettings.vue": {
+    "mtime": 1783392374.6951706,
+    "ast_hash": "d2499c15b6bd39de40834d55ee99fd33",
+    "semantic_hash": "d2499c15b6bd39de40834d55ee99fd33"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Dashboard.vue": {
+    "mtime": 1783392374.7061098,
+    "ast_hash": "aa1a8884bf549cc121231fa04b812bea",
+    "semantic_hash": "aa1a8884bf549cc121231fa04b812bea"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Evolution.vue": {
+    "mtime": 1783392374.6951692,
+    "ast_hash": "27258031bf1e2f09a032cb8d23729fd5",
+    "semantic_hash": "27258031bf1e2f09a032cb8d23729fd5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/FinanceWorkspace.vue": {
+    "mtime": 1786247904.435237,
+    "ast_hash": "8ed059216f3891f5e7a84a674d3f306d",
+    "semantic_hash": "8ed059216f3891f5e7a84a674d3f306d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/IntakeWorkspace.vue": {
+    "mtime": 1786248391.631667,
+    "ast_hash": "8eef53e2e85228f394e5c5bcc303f0f8",
+    "semantic_hash": "8eef53e2e85228f394e5c5bcc303f0f8"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Knowledge.vue": {
+    "mtime": 1783392374.7086973,
+    "ast_hash": "a03516529b8a5535fd974141a91b8dd6",
+    "semantic_hash": "a03516529b8a5535fd974141a91b8dd6"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Login.vue": {
+    "mtime": 1783392374.6950438,
+    "ast_hash": "e2e445ad74ca96c12872b318188bdc37",
+    "semantic_hash": "e2e445ad74ca96c12872b318188bdc37"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/MissionRunDetail.vue": {
+    "mtime": 1783392374.7057104,
+    "ast_hash": "f7841c1874aac52bd4dd315d58b9ba4a",
+    "semantic_hash": "f7841c1874aac52bd4dd315d58b9ba4a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/MissionRunsWorkspace.vue": {
+    "mtime": 1783392374.6750484,
+    "ast_hash": "c7e8e353c1832222102165d92240a73a",
+    "semantic_hash": "c7e8e353c1832222102165d92240a73a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/OrganizationNode.vue": {
+    "mtime": 1783392374.6956277,
+    "ast_hash": "6121665c4ae07cf7fcf2d28c970f3998",
+    "semantic_hash": "6121665c4ae07cf7fcf2d28c970f3998"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Settings.vue": {
+    "mtime": 1786248441.7380812,
+    "ast_hash": "f4c7ecab96b2d0ec167152c7f84a0738",
+    "semantic_hash": "f4c7ecab96b2d0ec167152c7f84a0738"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/Tasks.vue": {
+    "mtime": 1783392374.7145274,
+    "ast_hash": "c1a74db2582fb635f7860ab7e279b899",
+    "semantic_hash": "c1a74db2582fb635f7860ab7e279b899"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/views/TrainerToolsWorkspace.vue": {
+    "mtime": 1783392374.7015164,
+    "ast_hash": "967cd6765f26879f5c70d31bf1a8f4b2",
+    "semantic_hash": "967cd6765f26879f5c70d31bf1a8f4b2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/src/vite-env.d.ts": {
+    "mtime": 1783392374.6963608,
+    "ast_hash": "0352474ba2918efe13895edbc3780d94",
+    "semantic_hash": "0352474ba2918efe13895edbc3780d94"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/tailwind.config.js": {
+    "mtime": 1776658102.1139061,
+    "ast_hash": "8f45669bebe35316cd13f7a8724cbbe7",
+    "semantic_hash": "8f45669bebe35316cd13f7a8724cbbe7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/tsconfig.json": {
+    "mtime": 1776658063.9348147,
+    "ast_hash": "60756d06e5420a226b10004391878a63",
+    "semantic_hash": "60756d06e5420a226b10004391878a63"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/tsconfig.node.json": {
+    "mtime": 1776658076.0527577,
+    "ast_hash": "767b2e9abe6452170cdc399ca052cfbc",
+    "semantic_hash": "767b2e9abe6452170cdc399ca052cfbc"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/vite.config.ts": {
+    "mtime": 1783392374.6760933,
+    "ast_hash": "a0c97ec7ae49ae570d25cec96a5c64ab",
+    "semantic_hash": "a0c97ec7ae49ae570d25cec96a5c64ab"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/schemas/collaboration_policies.schema.json": {
+    "mtime": 1783392374.6954515,
+    "ast_hash": "fdbb4e99d77f5f4650611fcb442cfd9b",
+    "semantic_hash": "fdbb4e99d77f5f4650611fcb442cfd9b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/schemas/deliverable_templates.schema.json": {
+    "mtime": 1783392374.6652937,
+    "ast_hash": "1de133524fdd865bfaadc5d9819a7c28",
+    "semantic_hash": "1de133524fdd865bfaadc5d9819a7c28"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/schemas/intake_routing_policies.schema.json": {
+    "mtime": 1786247452.2681494,
+    "ast_hash": "ba82d1d84c769cee574d549d9c3b6d94",
+    "semantic_hash": "ba82d1d84c769cee574d549d9c3b6d94"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/openSpec/workers/android/definition.py": {
+    "mtime": 1777710954.2313864,
+    "ast_hash": "f024478192f065c27db67c67290613ed",
+    "semantic_hash": "f024478192f065c27db67c67290613ed"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/openSpec/workers/crawler/definition.py": {
+    "mtime": 1777710954.231044,
+    "ast_hash": "430e4fc4b80996d798d920881bc6ed6d",
+    "semantic_hash": "430e4fc4b80996d798d920881bc6ed6d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/openSpec/workers/javascript_reverse/definition.py": {
+    "mtime": 1780060431.1866696,
+    "ast_hash": "db245a0d355c5e86e861d0eb649b3a2c",
+    "semantic_hash": "db245a0d355c5e86e861d0eb649b3a2c"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/openSpec/workers/self_media_operations/definition.py": {
+    "mtime": 1780060431.14067,
+    "ast_hash": "6ed7563274154b4888ead69bfdeea171",
+    "semantic_hash": "6ed7563274154b4888ead69bfdeea171"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/scripts/bootstrap_self_media_worktype.py": {
+    "mtime": 1783392374.69644,
+    "ast_hash": "b2d0459af51ae490a473ccaaa8da5656",
+    "semantic_hash": "b2d0459af51ae490a473ccaaa8da5656"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/scripts/m1_ops_check.py": {
+    "mtime": 1786248381.9934454,
+    "ast_hash": "e064614812c3501e3494d97fde290001",
+    "semantic_hash": "e064614812c3501e3494d97fde290001"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/scripts/production_readiness_check.py": {
+    "mtime": 1783392374.6765563,
+    "ast_hash": "eba04434f5954cdd4423a86d44ebcb05",
+    "semantic_hash": "eba04434f5954cdd4423a86d44ebcb05"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/scripts/reset_workspace_for_e2e.py": {
+    "mtime": 1783392374.701492,
+    "ast_hash": "1a6c4ae202ba9f78228bddd8d0487f3a",
+    "semantic_hash": "1a6c4ae202ba9f78228bddd8d0487f3a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/scripts/start_production.sh": {
+    "mtime": 1783392374.7144792,
+    "ast_hash": "55d104e9d340c20e14a658c9474bde99",
+    "semantic_hash": "55d104e9d340c20e14a658c9474bde99"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/.config/evo.json": {
+    "mtime": 1780224401.4311585,
+    "ast_hash": "198ce397cc40f1b48ad3dc62b4db434d",
+    "semantic_hash": "198ce397cc40f1b48ad3dc62b4db434d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/__init__.py": {
+    "mtime": 1776663832.1370509,
+    "ast_hash": "677901fc9284c8eece290d49ee76a226",
+    "semantic_hash": "677901fc9284c8eece290d49ee76a226"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/autonomy_learning_runtime.py": {
+    "mtime": 1777683846.3052266,
+    "ast_hash": "f364f181f0620a89644ed712d57d9f9e",
+    "semantic_hash": "f364f181f0620a89644ed712d57d9f9e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/autonomy_validation_runtime.py": {
+    "mtime": 1777684856.1690958,
+    "ast_hash": "3bd95746d950aba951ec3fdb27b8a33c",
+    "semantic_hash": "3bd95746d950aba951ec3fdb27b8a33c"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/background_research_runtime.py": {
+    "mtime": 1783223398.7073274,
+    "ast_hash": "9a907662859470a78bbf67ccc378461f",
+    "semantic_hash": "9a907662859470a78bbf67ccc378461f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/collaboration_policy_runtime.py": {
+    "mtime": 1783392374.6514065,
+    "ast_hash": "0a56665d40d94455b2fc4e67f7957325",
+    "semantic_hash": "0a56665d40d94455b2fc4e67f7957325"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/collaboration_runtime.py": {
+    "mtime": 1783392374.6963935,
+    "ast_hash": "b514e2f68c12be7ce2596d28e2194180",
+    "semantic_hash": "b514e2f68c12be7ce2596d28e2194180"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/commercial_runtime.py": {
+    "mtime": 1786247848.1380928,
+    "ast_hash": "0ac8b228eb41d00cd12c67c9e1fd4abc",
+    "semantic_hash": "0ac8b228eb41d00cd12c67c9e1fd4abc"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/database.py": {
+    "mtime": 1776694695.8784242,
+    "ast_hash": "cd8deb71bbf9e39bd8986d69ecbf7499",
+    "semantic_hash": "cd8deb71bbf9e39bd8986d69ecbf7499"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/evolution_overview_runtime.py": {
+    "mtime": 1777689628.8062758,
+    "ast_hash": "0a4c19bfb4e33192f79386f57e77e765",
+    "semantic_hash": "0a4c19bfb4e33192f79386f57e77e765"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/evolution_summary_runtime.py": {
+    "mtime": 1777774019.1561062,
+    "ast_hash": "e1b87f0abca6fc19e933219349daed80",
+    "semantic_hash": "e1b87f0abca6fc19e933219349daed80"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/external_learning_runtime.py": {
+    "mtime": 1777689033.7691522,
+    "ast_hash": "93b7588555f9eff3b59c3b2f72922cf0",
+    "semantic_hash": "93b7588555f9eff3b59c3b2f72922cf0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/finance_runtime.py": {
+    "mtime": 1783392374.7057493,
+    "ast_hash": "1bd1974d6255d197cb85282af3181241",
+    "semantic_hash": "1bd1974d6255d197cb85282af3181241"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/formal_task_evolution_runtime.py": {
+    "mtime": 1783392374.695589,
+    "ast_hash": "2a29831ca1df44ee7f61371e57b39d51",
+    "semantic_hash": "2a29831ca1df44ee7f61371e57b39d51"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/git_knowledge_runtime.py": {
+    "mtime": 1777687973.6034772,
+    "ast_hash": "001c55932f59ee8511d26a58b53490f2",
+    "semantic_hash": "001c55932f59ee8511d26a58b53490f2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/growth_policy_runtime.py": {
+    "mtime": 1777686385.8856425,
+    "ast_hash": "6495a394fb15249f8c85fa8bd346da49",
+    "semantic_hash": "6495a394fb15249f8c85fa8bd346da49"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/intake_policy_runtime.py": {
+    "mtime": 1786247460.151818,
+    "ast_hash": "fc6d0b7b4ed221ad5637dd732e07516a",
+    "semantic_hash": "fc6d0b7b4ed221ad5637dd732e07516a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/intake_runtime.py": {
+    "mtime": 1786248356.5492349,
+    "ast_hash": "b191fa1a2659196c6a6decef63a22772",
+    "semantic_hash": "b191fa1a2659196c6a6decef63a22772"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/intelligence_bootstrap_runtime.py": {
+    "mtime": 1777770258.3754673,
+    "ast_hash": "209dfae68040c374e725eae4f12782b0",
+    "semantic_hash": "209dfae68040c374e725eae4f12782b0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/javascript_runtime.py": {
+    "mtime": 1777626057.6468692,
+    "ast_hash": "1adf0d2e01655cb76b9cac1569d9796b",
+    "semantic_hash": "1adf0d2e01655cb76b9cac1569d9796b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/knowledge_learning_runtime.py": {
+    "mtime": 1780065904.0959334,
+    "ast_hash": "9ba8ccc7ccbd934de7774d890f216315",
+    "semantic_hash": "9ba8ccc7ccbd934de7774d890f216315"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/knowledge_runtime.py": {
+    "mtime": 1777770315.6081493,
+    "ast_hash": "6ae8d6c2c2b8a740041046310d9c0bd9",
+    "semantic_hash": "6ae8d6c2c2b8a740041046310d9c0bd9"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/local_git_export_runtime.py": {
+    "mtime": 1780060431.173747,
+    "ast_hash": "5d9f03f56be46bc428075bc512e4a385",
+    "semantic_hash": "5d9f03f56be46bc428075bc512e4a385"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/m1_evolution_probe_runtime.py": {
+    "mtime": 1780065318.833087,
+    "ast_hash": "a75ba8e71c29abb16fd60313f9292f62",
+    "semantic_hash": "a75ba8e71c29abb16fd60313f9292f62"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/m1_intake_probe_runtime.py": {
+    "mtime": 1786248381.2048314,
+    "ast_hash": "cc18d68956d4f4cc744b424dec66704c",
+    "semantic_hash": "cc18d68956d4f4cc744b424dec66704c"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/member_clone_runtime.py": {
+    "mtime": 1780111639.5523274,
+    "ast_hash": "8792b1c1fbb66c7feee2eb22e8e70e36",
+    "semantic_hash": "8792b1c1fbb66c7feee2eb22e8e70e36"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/memory_hub_runtime.py": {
+    "mtime": 1780060431.170325,
+    "ast_hash": "73db368edf5f4e9ded166f7dae6cb4bf",
+    "semantic_hash": "73db368edf5f4e9ded166f7dae6cb4bf"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_action_runtime.py": {
+    "mtime": 1778426468.4300334,
+    "ast_hash": "66304633f056484f7e72dde13cbb8aff",
+    "semantic_hash": "66304633f056484f7e72dde13cbb8aff"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_app_runtime.py": {
+    "mtime": 1777772462.1952627,
+    "ast_hash": "ab7d8e2895744930b8ddea4ed661d3ec",
+    "semantic_hash": "ab7d8e2895744930b8ddea4ed661d3ec"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_bootstrap_runtime.py": {
+    "mtime": 1778426479.9022846,
+    "ast_hash": "c682c2fe9f05dc8b8b3d8ba199e79824",
+    "semantic_hash": "c682c2fe9f05dc8b8b3d8ba199e79824"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_execution_runtime.py": {
+    "mtime": 1777772150.9793668,
+    "ast_hash": "7180b5691a5b9fa74be47ef84371a260",
+    "semantic_hash": "7180b5691a5b9fa74be47ef84371a260"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_request_runtime.py": {
+    "mtime": 1778425906.8720152,
+    "ast_hash": "f3378894cc402f3b595240d4f771725a",
+    "semantic_hash": "f3378894cc402f3b595240d4f771725a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_run_builder_runtime.py": {
+    "mtime": 1777708593.1535382,
+    "ast_hash": "b956653fb3dae99842aed7b6cbaa85c4",
+    "semantic_hash": "b956653fb3dae99842aed7b6cbaa85c4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/mission_runtime.py": {
+    "mtime": 1780060431.1736138,
+    "ast_hash": "36573c77b13480368e3c00ef374efdd7",
+    "semantic_hash": "36573c77b13480368e3c00ef374efdd7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/__init__.py": {
+    "mtime": 1780111639.5524125,
+    "ast_hash": "108b874016d0da06bf3c5920ef814675",
+    "semantic_hash": "108b874016d0da06bf3c5920ef814675"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/auth.py": {
+    "mtime": 1777642503.399792,
+    "ast_hash": "66e9650782fadcb199fc736b6daccfe2",
+    "semantic_hash": "66e9650782fadcb199fc736b6daccfe2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/catalog.py": {
+    "mtime": 1780060431.1705356,
+    "ast_hash": "c26a227e2c7457adb3ed940aee063983",
+    "semantic_hash": "c26a227e2c7457adb3ed940aee063983"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/collaboration_routes.py": {
+    "mtime": 1783392374.6963718,
+    "ast_hash": "33fe46b8adcfa2470c2a38a72b608de1",
+    "semantic_hash": "33fe46b8adcfa2470c2a38a72b608de1"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/evolution_strategy.py": {
+    "mtime": 1777642393.8563728,
+    "ast_hash": "e3a2db9aaa82883546dd3718d0f00854",
+    "semantic_hash": "e3a2db9aaa82883546dd3718d0f00854"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/finance.py": {
+    "mtime": 1783392374.7059236,
+    "ast_hash": "e820b2603cd34956a16638c56334660b",
+    "semantic_hash": "e820b2603cd34956a16638c56334660b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/git_knowledge.py": {
+    "mtime": 1777887360.396611,
+    "ast_hash": "4c2c1244d9d0cac10fa417f1540bb07f",
+    "semantic_hash": "4c2c1244d9d0cac10fa417f1540bb07f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/intake_routes.py": {
+    "mtime": 1786247530.4688632,
+    "ast_hash": "6a93679dcd185ef51e130dc9c49b4ffa",
+    "semantic_hash": "6a93679dcd185ef51e130dc9c49b4ffa"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/missions.py": {
+    "mtime": 1777698932.775245,
+    "ast_hash": "edfa9e442956fd3b6b89b989e7a77f34",
+    "semantic_hash": "edfa9e442956fd3b6b89b989e7a77f34"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/self_media.py": {
+    "mtime": 1777716636.0742867,
+    "ast_hash": "c3f45fdc9c5485963c52c1355fe13b7a",
+    "semantic_hash": "c3f45fdc9c5485963c52c1355fe13b7a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/system_runtime.py": {
+    "mtime": 1786247592.838326,
+    "ast_hash": "05ff9c470ab40975a93dddd9f5c4631a",
+    "semantic_hash": "05ff9c470ab40975a93dddd9f5c4631a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/task_tools.py": {
+    "mtime": 1777641210.0135226,
+    "ast_hash": "3d244272e1dd23d3993ea96256ae96f4",
+    "semantic_hash": "3d244272e1dd23d3993ea96256ae96f4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/tenant_policies.py": {
+    "mtime": 1777640737.9308915,
+    "ast_hash": "b95944869236c4b6112c88ddac2f792b",
+    "semantic_hash": "b95944869236c4b6112c88ddac2f792b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/routes/work_nodes_routes.py": {
+    "mtime": 1783392374.7153912,
+    "ast_hash": "9c182f5a93e3eba3da71b06523531ffe",
+    "semantic_hash": "9c182f5a93e3eba3da71b06523531ffe"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/runtime_state.py": {
+    "mtime": 1786248433.6317852,
+    "ast_hash": "6d0730d81e24f00930c5e496a66cdc65",
+    "semantic_hash": "6d0730d81e24f00930c5e496a66cdc65"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/self_media_runtime.py": {
+    "mtime": 1778421792.7787328,
+    "ast_hash": "c6ae4b24509d49b1b3c88911d24490c5",
+    "semantic_hash": "c6ae4b24509d49b1b3c88911d24490c5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/server.py": {
+    "mtime": 1783392374.7121718,
+    "ast_hash": "97409e486c609079bea52fb0b5bb81a0",
+    "semantic_hash": "97409e486c609079bea52fb0b5bb81a0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/session_runtime.py": {
+    "mtime": 1777685324.965965,
+    "ast_hash": "403492b3c6e4e0af7e3de762ce2b630b",
+    "semantic_hash": "403492b3c6e4e0af7e3de762ce2b630b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/spa_static.py": {
+    "mtime": 1783392374.6764905,
+    "ast_hash": "c274251b7420fc1ad7a094ffcb2865e4",
+    "semantic_hash": "c274251b7420fc1ad7a094ffcb2865e4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_bindings.py": {
+    "mtime": 1777682099.2722502,
+    "ast_hash": "7126352763208b069db4cd6b9242e919",
+    "semantic_hash": "7126352763208b069db4cd6b9242e919"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_decision.py": {
+    "mtime": 1777644149.8517215,
+    "ast_hash": "9ca5858d7f8631556f06ba04e27c5ab2",
+    "semantic_hash": "9ca5858d7f8631556f06ba04e27c5ab2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_governance.py": {
+    "mtime": 1777643697.5741794,
+    "ast_hash": "f67ab8c60d68d52c5b84898eecfaa2f8",
+    "semantic_hash": "f67ab8c60d68d52c5b84898eecfaa2f8"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_loop.py": {
+    "mtime": 1777682107.4935813,
+    "ast_hash": "e2355a9e2e74a61bf2baf6b6abf48a5a",
+    "semantic_hash": "e2355a9e2e74a61bf2baf6b6abf48a5a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_orchestration.py": {
+    "mtime": 1777682085.422445,
+    "ast_hash": "676b70390152cc3de35179d2962816c7",
+    "semantic_hash": "676b70390152cc3de35179d2962816c7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_runtime.py": {
+    "mtime": 1777643132.3779056,
+    "ast_hash": "55b078b22d13ae03c3f843152170c054",
+    "semantic_hash": "55b078b22d13ae03c3f843152170c054"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/strategy_workflow.py": {
+    "mtime": 1777643540.039778,
+    "ast_hash": "8b07757a649576684e2cb57587e770e2",
+    "semantic_hash": "8b07757a649576684e2cb57587e770e2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/task_center_runtime.py": {
+    "mtime": 1780065841.8922155,
+    "ast_hash": "fe00c337327b1760bf4be651d333b04a",
+    "semantic_hash": "fe00c337327b1760bf4be651d333b04a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/trainer_coaching_runtime.py": {
+    "mtime": 1786248337.123653,
+    "ast_hash": "dd17bbba9deeaceaff40e3e610894431",
+    "semantic_hash": "dd17bbba9deeaceaff40e3e610894431"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/work_nodes_runtime.py": {
+    "mtime": 1783392374.7204125,
+    "ast_hash": "939294b679d0403716345376aafa1fb5",
+    "semantic_hash": "939294b679d0403716345376aafa1fb5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/worker.py": {
+    "mtime": 1779341085.2047422,
+    "ast_hash": "4a1110a3e047b763c92d8e93e04d4e95",
+    "semantic_hash": "4a1110a3e047b763c92d8e93e04d4e95"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/worker_bootstrap_runtime.py": {
+    "mtime": 1778421735.9924092,
+    "ast_hash": "31793174b9d8d58dae2a65a38cf7fc62",
+    "semantic_hash": "31793174b9d8d58dae2a65a38cf7fc62"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/admin/worker_route_runtime.py": {
+    "mtime": 1780060431.1731732,
+    "ast_hash": "59839dd080ab70cfdf953f6f4302ce5a",
+    "semantic_hash": "59839dd080ab70cfdf953f6f4302ce5a"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/__init__.py": {
+    "mtime": 1776930104.935202,
+    "ast_hash": "73d1acd5eba751783b69da9bf5ab5346",
+    "semantic_hash": "73d1acd5eba751783b69da9bf5ab5346"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/capabilities.py": {
+    "mtime": 1776921406.398416,
+    "ast_hash": "a75adce6376f6602326952f4b5e1d19e",
+    "semantic_hash": "a75adce6376f6602326952f4b5e1d19e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/capability_types.py": {
+    "mtime": 1776921455.7410576,
+    "ast_hash": "1a16837688eb782783c70a2637ae06fb",
+    "semantic_hash": "1a16837688eb782783c70a2637ae06fb"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/config.py": {
+    "mtime": 1776655880.0073793,
+    "ast_hash": "7cd8d3b2fcbe43413a6b3a336da067e4",
+    "semantic_hash": "7cd8d3b2fcbe43413a6b3a336da067e4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/decision.py": {
+    "mtime": 1777770526.7332473,
+    "ast_hash": "fe527a5a33c12c6371ac0f680d95008e",
+    "semantic_hash": "fe527a5a33c12c6371ac0f680d95008e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/git_provider.py": {
+    "mtime": 1776918458.555014,
+    "ast_hash": "9741e798a94ddc18e2a74931ec710f8e",
+    "semantic_hash": "9741e798a94ddc18e2a74931ec710f8e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/learning.py": {
+    "mtime": 1776921507.3475723,
+    "ast_hash": "a91791db6d909970b3412d999b163038",
+    "semantic_hash": "a91791db6d909970b3412d999b163038"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/mission_planner.py": {
+    "mtime": 1780060431.1652334,
+    "ast_hash": "efde904cf31fca3aab49b1eb90132d58",
+    "semantic_hash": "efde904cf31fca3aab49b1eb90132d58"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/orchestration.py": {
+    "mtime": 1776770206.6452568,
+    "ast_hash": "8944a2a311f0a002b3b5eb3beec19f26",
+    "semantic_hash": "8944a2a311f0a002b3b5eb3beec19f26"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/plugins.py": {
+    "mtime": 1776921581.6610868,
+    "ast_hash": "89e226862d037a6efa2b04e6deb926dc",
+    "semantic_hash": "89e226862d037a6efa2b04e6deb926dc"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/skill_system.py": {
+    "mtime": 1776921520.0344267,
+    "ast_hash": "b8dbef754741d4b388b03f83955f8992",
+    "semantic_hash": "b8dbef754741d4b388b03f83955f8992"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/storage.py": {
+    "mtime": 1776914368.9112728,
+    "ast_hash": "581b3b7c5ba5f0920065797d50f1f626",
+    "semantic_hash": "581b3b7c5ba5f0920065797d50f1f626"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/task_queue.py": {
+    "mtime": 1776657598.0241292,
+    "ast_hash": "df92d27171a9e3b4278ee6d433d486b3",
+    "semantic_hash": "df92d27171a9e3b4278ee6d433d486b3"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/core/tenant.py": {
+    "mtime": 1776921544.9123719,
+    "ast_hash": "6d328e4421d43c49e1ec77ea5c02e323",
+    "semantic_hash": "6d328e4421d43c49e1ec77ea5c02e323"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/__init__.py": {
+    "mtime": 1776921729.8141534,
+    "ast_hash": "951fcbdc1afd3637df5a6c800fc672cf",
+    "semantic_hash": "951fcbdc1afd3637df5a6c800fc672cf"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/android/__init__.py": {
+    "mtime": 1776651662.288799,
+    "ast_hash": "03718f4261c4393e39419eb949a09ff1",
+    "semantic_hash": "03718f4261c4393e39419eb949a09ff1"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/android/analyzer.py": {
+    "mtime": 1776651662.2918425,
+    "ast_hash": "f22f50bdcf1611764ff35a1803785ef6",
+    "semantic_hash": "f22f50bdcf1611764ff35a1803785ef6"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/android/decompiler.py": {
+    "mtime": 1776651662.2942889,
+    "ast_hash": "d96c65a0cd5c30554c01cda57670c067",
+    "semantic_hash": "d96c65a0cd5c30554c01cda57670c067"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/dev/__init__.py": {
+    "mtime": 1776651676.0247307,
+    "ast_hash": "6f0548e4a28d289f8dc0ce4414cb1c74",
+    "semantic_hash": "6f0548e4a28d289f8dc0ce4414cb1c74"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/dev/assistant.py": {
+    "mtime": 1776651676.0272465,
+    "ast_hash": "d178f2ef928210e7151c824158237b38",
+    "semantic_hash": "d178f2ef928210e7151c824158237b38"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/__init__.py": {
+    "mtime": 1776739406.8663106,
+    "ast_hash": "b5cb333bd2d69d9b74849a691f057702",
+    "semantic_hash": "b5cb333bd2d69d9b74849a691f057702"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/analyzer.py": {
+    "mtime": 1776953011.9811316,
+    "ast_hash": "b5c474cf118575695a19ef5da72bb5aa",
+    "semantic_hash": "b5c474cf118575695a19ef5da72bb5aa"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/commands.py": {
+    "mtime": 1776952987.8403397,
+    "ast_hash": "9a4a286649befc6f0b4d4536026ae66c",
+    "semantic_hash": "9a4a286649befc6f0b4d4536026ae66c"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/fingerprint.py": {
+    "mtime": 1776651607.6109302,
+    "ast_hash": "2d2ab7680876b7f5d2a6813223026052",
+    "semantic_hash": "2d2ab7680876b7f5d2a6813223026052"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/provider.py": {
+    "mtime": 1776952958.9628866,
+    "ast_hash": "1a22f45ef154081db179d5eec0eb372f",
+    "semantic_hash": "1a22f45ef154081db179d5eec0eb372f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/reconstructor.py": {
+    "mtime": 1776956537.115227,
+    "ast_hash": "bcb524c95fe05d732874d6b490f6a816",
+    "semantic_hash": "bcb524c95fe05d732874d6b490f6a816"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/javascript/strategy.py": {
+    "mtime": 1776953078.1518643,
+    "ast_hash": "87569d25be77f3f9b8fee1ef38566cca",
+    "semantic_hash": "87569d25be77f3f9b8fee1ef38566cca"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/pc/__init__.py": {
+    "mtime": 1776651676.0194995,
+    "ast_hash": "9a7b184621e900b45dbc54aad8174143",
+    "semantic_hash": "9a7b184621e900b45dbc54aad8174143"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/domains/pc/analyzer.py": {
+    "mtime": 1776651676.0221436,
+    "ast_hash": "b09b0a4dc9d64b3855f2c723a0208f2b",
+    "semantic_hash": "b09b0a4dc9d64b3855f2c723a0208f2b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/project_caps.py": {
+    "mtime": 1780060431.1404037,
+    "ast_hash": "332961fd71e9ad0249913ee915122bc8",
+    "semantic_hash": "332961fd71e9ad0249913ee915122bc8"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/server.py": {
+    "mtime": 1779341085.2234824,
+    "ast_hash": "f95dbf860b31fad59483482f2f93e5f9",
+    "semantic_hash": "f95dbf860b31fad59483482f2f93e5f9"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/work_type_runtime.py": {
+    "mtime": 1780060431.164408,
+    "ast_hash": "f8b47c48eed37e4b5bf9d592d6529b1f",
+    "semantic_hash": "f8b47c48eed37e4b5bf9d592d6529b1f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/work_types.py": {
+    "mtime": 1780111639.5664444,
+    "ast_hash": "414dac7a3f60538ddfb3e8916ca636a3",
+    "semantic_hash": "414dac7a3f60538ddfb3e8916ca636a3"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/__init__.py": {
+    "mtime": 1780060431.164452,
+    "ast_hash": "88b1767fd16f0f265ff460bc111ea3d2",
+    "semantic_hash": "88b1767fd16f0f265ff460bc111ea3d2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/javascript_reverse/__init__.py": {
+    "mtime": 1780060431.1730964,
+    "ast_hash": "8dcbea57dc2ed997032673c704a67669",
+    "semantic_hash": "8dcbea57dc2ed997032673c704a67669"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/javascript_reverse/runtime.py": {
+    "mtime": 1777773340.0589554,
+    "ast_hash": "7b938f53940a2106025b3d9db26a057b",
+    "semantic_hash": "7b938f53940a2106025b3d9db26a057b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/registry.py": {
+    "mtime": 1780060431.1864748,
+    "ast_hash": "12eb72b01f8529452def350e613c872b",
+    "semantic_hash": "12eb72b01f8529452def350e613c872b"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/self_media_operations/__init__.py": {
+    "mtime": 1780060431.173763,
+    "ast_hash": "c2491c6808f33a7c6f3f4f5080512379",
+    "semantic_hash": "c2491c6808f33a7c6f3f4f5080512379"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/self_media_operations/content.py": {
+    "mtime": 1778424265.3419127,
+    "ast_hash": "474ba173964511e17b2f57cdb449ed2f",
+    "semantic_hash": "474ba173964511e17b2f57cdb449ed2f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/self_media_operations/feedback.py": {
+    "mtime": 1778420999.8564734,
+    "ast_hash": "9af310e2cf8e781a1527bee2a3a56c93",
+    "semantic_hash": "9af310e2cf8e781a1527bee2a3a56c93"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/self_media_operations/monitor.py": {
+    "mtime": 1780060431.1832178,
+    "ast_hash": "fc04c1159670520ec9425d0be6fba3c2",
+    "semantic_hash": "fc04c1159670520ec9425d0be6fba3c2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/src/workers/self_media_operations/runtime.py": {
+    "mtime": 1778421761.0280714,
+    "ast_hash": "139f32bf0693345d62de0950b9758397",
+    "semantic_hash": "139f32bf0693345d62de0950b9758397"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/ADMIN_README.md": {
+    "mtime": 1776657883.11496,
+    "ast_hash": "5bcae2c17ae73439140c1d51a2a2ee4d",
+    "semantic_hash": "5bcae2c17ae73439140c1d51a2a2ee4d"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/ARCHITECTURE.md": {
+    "mtime": 1779341085.1872983,
+    "ast_hash": "1fe400984c3e58711d2efee45232d9c3",
+    "semantic_hash": "1fe400984c3e58711d2efee45232d9c3"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/README.md": {
+    "mtime": 1786247994.4560921,
+    "ast_hash": "78b80d8b8df02c0ff54f7b25dda2ed3f",
+    "semantic_hash": "78b80d8b8df02c0ff54f7b25dda2ed3f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/START.md": {
+    "mtime": 1786248026.4775023,
+    "ast_hash": "9f95878e7d4496c395fdd8dabdc8569f",
+    "semantic_hash": "9f95878e7d4496c395fdd8dabdc8569f"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/index.html": {
+    "mtime": 1783392374.6953864,
+    "ast_hash": "5f85355748c5962b49b78953170013e7",
+    "semantic_hash": "5f85355748c5962b49b78953170013e7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/COLLABORATION_ARCHITECTURE_CN.md": {
+    "mtime": 1783392374.6953032,
+    "ast_hash": "f109b4eccbf016606a097b9f56640ec7",
+    "semantic_hash": "f109b4eccbf016606a097b9f56640ec7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/COMMERCIAL_BRAIN_PRINCIPLES_CN.md": {
+    "mtime": 1786247447.001308,
+    "ast_hash": "94f8e5e421a7fae5cae1f865a9110b81",
+    "semantic_hash": "94f8e5e421a7fae5cae1f865a9110b81"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/EVO_CAPABILITY_ARCHITECTURE_CN.md": {
+    "mtime": 1779341085.226294,
+    "ast_hash": "2221e7aa7a2adfe5842b6803f81e9ada",
+    "semantic_hash": "2221e7aa7a2adfe5842b6803f81e9ada"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/EVO_MAINLINE_STATUS_CN.md": {
+    "mtime": 1786247981.8710797,
+    "ast_hash": "eec87a8071708a260b4da56d01aaa4c7",
+    "semantic_hash": "eec87a8071708a260b4da56d01aaa4c7"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/FINGERPRINT_PACK_SPEC_CN.md": {
+    "mtime": 1779341085.217603,
+    "ast_hash": "c2748a4c29895ab513bfe63a68c052a4",
+    "semantic_hash": "c2748a4c29895ab513bfe63a68c052a4"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/INTAKE_ARCHITECTURE_CN.md": {
+    "mtime": 1786247999.3264425,
+    "ast_hash": "491aaaeecc35d2edffada6d063f478e5",
+    "semantic_hash": "491aaaeecc35d2edffada6d063f478e5"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/LAYER_BOUNDARY_CN.md": {
+    "mtime": 1779341085.1870897,
+    "ast_hash": "61596c02197f6a5583794172cd72601e",
+    "semantic_hash": "61596c02197f6a5583794172cd72601e"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/PLUGIN_SYSTEM_CN.md": {
+    "mtime": 1779341085.1925566,
+    "ast_hash": "598fbff69877d7d8202b841984ff8080",
+    "semantic_hash": "598fbff69877d7d8202b841984ff8080"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/PRODUCT_M1_CHECKLIST_CN.md": {
+    "mtime": 1786247998.811686,
+    "ast_hash": "3b5bc4298400608a85ccbb96a8652ca0",
+    "semantic_hash": "3b5bc4298400608a85ccbb96a8652ca0"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/capability-types.md": {
+    "mtime": 1776921709.6791089,
+    "ast_hash": "315ebfc315c37b65874581c17f385bd2",
+    "semantic_hash": "315ebfc315c37b65874581c17f385bd2"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/evo-autonomy-mainline.md": {
+    "mtime": 1779341085.2302957,
+    "ast_hash": "e4a02663e2e2f93ab5935d4feb0596a8",
+    "semantic_hash": "e4a02663e2e2f93ab5935d4feb0596a8"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/evo-index-schema.md": {
+    "mtime": 1776919452.8006608,
+    "ast_hash": "cbff3749b78e0de9215b82bcdb0f5010",
+    "semantic_hash": "cbff3749b78e0de9215b82bcdb0f5010"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/knowledge-containers.md": {
+    "mtime": 1779341085.2171233,
+    "ast_hash": "6dfb313c7332e28b5284eda23ccc0370",
+    "semantic_hash": "6dfb313c7332e28b5284eda23ccc0370"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/docs/mission-planner.md": {
+    "mtime": 1776930399.2728539,
+    "ast_hash": "058398c9fd1ed2f675616763a19ab173",
+    "semantic_hash": "058398c9fd1ed2f675616763a19ab173"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/log.md": {
+    "mtime": 1786248392.6274018,
+    "ast_hash": "506a08a97d5efce320e185c2d2197c24",
+    "semantic_hash": "506a08a97d5efce320e185c2d2197c24"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/openSpec/workers/README.md": {
+    "mtime": 1780060431.1737182,
+    "ast_hash": "b96608a496c27cda7395c4ee1c51a9bc",
+    "semantic_hash": "b96608a496c27cda7395c4ee1c51a9bc"
+  },
+  "/Users/lixiaohong/AndroidStudioProjects/bak/ceshi/evo-mcp/graphify-out/.corpus/admin-ui/public/favicon.svg": {
+    "mtime": 1783392374.7060902,
+    "ast_hash": "45d4538cb1512ba5adf47d42135c8b8b",
+    "semantic_hash": "45d4538cb1512ba5adf47d42135c8b8b"
+  }
+}

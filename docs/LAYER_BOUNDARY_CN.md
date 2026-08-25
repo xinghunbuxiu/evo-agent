@@ -1,92 +1,45 @@
-# Restore Workbench 分层边界说明
+# Evo 智能体平台分层边界
 
-## 核心原则
+## 原则
 
-1. **核心引擎层（`src/engine/`）禁止写入任何项目特定信息**
-2. **`spec/` 目录用于指纹规范，`config/` 用于流程配置，运行时数据在 `cache/`**
-3. **画像层持久化，不随 `output/` 清空丢失**
-4. **还原产物层可随时清空重建**
-5. **所有通用配置来自文件，引擎不写代码兜底**
+1. **`src/core/`** 只放跨领域内核（决策、存储、租户、队列），不写具体工种逻辑
+2. **`src/domains/`** 只放内置能力实现（如 JavaScript analyze/reconstruct）
+3. **`src/admin/`** 负责 HTTP、会话、策略治理与运行时编排
+4. **`src/workers/`** 与 **`executors/`** 放外部工种与执行器，通过能力包与任务队列接入
+5. **运行时数据**（`.queue/`、`.tenants/`、`.admin/`）与代码分离，不入库
 
----
-
-## 目录结构
+## 目录结构（当前）
 
 ```
-restorex-mcp/                      ← MCP 服务项目（本仓库）
+evo-mcp/
 ├── src/
-│   ├── mcp/                      ← MCP 服务层
-│   └── engine/                   ← 核心引擎（通用，不跟项目走）
-├── input/                         ← 输入包（唯一输入源）
-├── cache/                         ← 所有缓存（分四类）
-│   ├── remote/                    ← 服务器拉取的通用配置（首次运行时拉取）
-│   │   ├── rename_rules.json      ← 通用改名规则（必须存在）
-│   │   ├── chain_rules.json       ← 通用链路规则（必须存在）
-│   │   ├── library_match_rules.json
-│   │   ├── module_rules.json
-│   │   ├── portrait_rules.json
-│   │   ├── reconstruct_rules.json
-│   │   ├── origin_labels.json
-│   │   ├── pipeline_contract.json
-│   │   ├── fingerprint_registry.json
-│   │   ├── fingerprint_packs/     ← 通用指纹包
-│   │   └── profiles/              ← 通用档位配置（strict/balanced/aggressive）
-│   ├── project/                   ← 扫描项目生成的配置（每个项目一份）
-│   │   ├── semantic_rules.json    ← 扫描项目代码生成的语义规则
-│   │   └── project_hints.json     ← 扫描项目生成的模块名/hotspot等
-│   ├── portraits/                 ← 画像产物（扫描 input/ 生成，持久化）
-│   │   ├── file_portraits.json
-│   │   ├── class_portraits.json
-│   │   ├── method_portraits.json
-│   │   ├── constant_portraits.json
-│   │   └── */（子目录）
-│   └── fingerprints/              ← 指纹匹配产物（持久化）
-└── output/                        ← 每次 run 的还原产物（可清空重建）
-    └── run_<id>/
-        ├── baseline/              ← 输入快照
-        ├── analysis/              ← 基于画像推导的证据/映射（可重建）
-        ├── restore_v1/            ← 还原代码
-        ├── reconstructed_project/ ← 测试/重建代码
-        └── reports/               ← 报告
+│   ├── core/           # 内核：capabilities、decision、learning、tenant、task_queue
+│   ├── admin/          # Admin API + 各 runtime（strategy、autonomy、self_media…）
+│   ├── domains/        # 内置能力包（javascript / android 占位 / pc 占位）
+│   ├── workers/        # 工种 worker（如自媒体运营）
+│   └── server.py       # 平台自检（冒烟，非 HTTP 服务）
+├── admin-ui/           # 管理前端
+├── plugins/            # 可插拔能力扩展
+├── executors/          # 外部执行器（CLI/脚本）
+├── openSpec/workers/   # 工种 OpenSpec
+├── .config/            # evo.json 等平台配置
+└── evo_workbench/      # 默认工作区（Docker 挂载）
 ```
 
----
+## 工作区边界
 
-## 四类缓存说明
+| 路径 | 用途 | 清空策略 |
+|------|------|----------|
+| `EVO_ADMIN_WORKSPACE` | 租户数据、经验、输入样本 | 按租户管理 |
+| `.cache/` | 分布式缓存、指纹等 | 可重建 |
+| `.queue/` | 异步任务 | 消费后归档或清理 |
+| `.tenants/` | 租户隔离目录 | 勿删生产租户 |
+| `.admin/` | Admin 运行时 JSON | 服务可重建 |
 
-### `cache/remote/` — 服务器拉取的通用配置
-- **来源**：首次运行时从服务器拉取，或随引擎版本更新
-- **特点**：适用所有项目，不含项目特定信息
-- **清空策略**：版本升级时更新，不随项目切换清空
+## 调用边界
 
-### `cache/project/` — 扫描项目生成的配置
-- **来源**：引擎扫描 `input/` 后自动生成
-- **特点**：每个项目一份，包含该项目的语义规则和模块提示
-- **清空策略**：切换项目时清空，重新扫描生成
+- **对外入口**：`admin.server:create_app`（FastAPI），非 MCP stdio
+- **能力调用**：`DecisionEngine` → `CapabilityRegistry` → `domains/*` 或 `plugins/*`
+- **指纹**：`POST /api/fingerprint/generate`，实现见 `domains/javascript/fingerprint.py`
 
-### `cache/portraits/` — 画像产物
-- **来源**：引擎扫描 `input/` 后生成的文件/类/方法/常量画像
-- **特点**：跨 run 复用，不随 `output/` 清空
-- **清空策略**：`input/` 更新时重新生成
-
-### `cache/fingerprints/` — 指纹匹配产物
-- **来源**：引擎对 `input/` 做指纹匹配后生成
-- **特点**：跨 run 复用
-- **清空策略**：`input/` 更新时重新生成
-
----
-
-## 分层隔离规则
-
-| 操作 | 允许 | 禁止 |
-|---|---|---|
-| 核心引擎读取 `cache/remote/` | ✅ | |
-| 核心引擎读取 `cache/project/` | ✅ | |
-| 核心引擎硬编码项目信息 | | ❌ |
-| 核心引擎硬编码配置兜底值 | | ❌ |
-| 画像写入 `cache/portraits/` | ✅ | |
-| 画像写入 `output/run_xxx/` | | ❌ |
-| 清空 `output/` | ✅ | |
-| 清空 `cache/project/` + `cache/portraits/` | 切换项目时 | |
-| 清空 `cache/remote/` | 版本升级时 | |
-| `spec/` 目录 | 指纹规范 | ✅ |
+更完整的模块说明见 [ARCHITECTURE.md](../ARCHITECTURE.md)。

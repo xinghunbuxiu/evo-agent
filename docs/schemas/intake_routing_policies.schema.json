@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evo.local/schemas/intake_routing_policies.schema.json",
+  "title": "IntakeRoutingPolicies",
+  "type": "object",
+  "required": ["version", "default_policy_id", "policies"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "default_policy_id": { "type": "string", "minLength": 1 },
+    "capability_aliases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["policy_id", "rules"],
+        "properties": {
+          "policy_id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["when_capability", "resolve_by"],
+              "properties": {
+                "when_capability": { "type": "string", "minLength": 1 },
+                "prefer_department_id": { "type": "string" },
+                "candidate_work_type_ids": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "prefer_operation_prefix": { "type": "string" },
+                "resolve_by": {
+                  "type": "string",
+                  "enum": ["trainer_manual", "idle_member_by_capability", "round_robin"]
+                },
+                "require_independent_ready": { "type": "boolean" },
+                "deliverable_template_id": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
