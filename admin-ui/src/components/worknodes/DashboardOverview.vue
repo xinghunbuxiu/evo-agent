@@ -32,6 +32,14 @@
     <template v-else>
       <MetricStrip :items="summaryMetrics" />
 
+      <TeamFlowBoard
+        :nodes="allNodes"
+        :members="consoleCtx?.autonomyStatus.value?.child_members?.items || []"
+        :lead-name="consoleCtx?.autonomyStatus.value?.parent_profile?.display_name || '育成师 / 团队负责人'"
+        @select-node="openNodeById"
+        @select-member="openMemberById"
+      />
+
       <section class="grid gap-3 lg:grid-cols-2">
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
@@ -296,6 +304,7 @@
 import { computed, inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import MetricStrip, { type MetricStripItem } from '../shell/MetricStrip.vue'
+import TeamFlowBoard from './TeamFlowBoard.vue'
 import { getCommercialReadiness, type CommercialReadiness } from '../../api/finance'
 import { listUnboundMembers } from '../../utils/companyTree'
 import { companyConsoleKey } from '../../composables/companyConsole'
@@ -399,6 +408,15 @@ const firstMemberLink = computed(() => {
   }
   return `/organization/child/${encodeURIComponent(memberId)}/workspace`
 })
+
+const openNodeById = (nodeId: string) => {
+  const node = allNodes.value.find((item) => item.node_id === nodeId)
+  if (node) openNode(node)
+}
+
+const openMemberById = (memberId: string) => {
+  router.push({ path: '/dashboard', query: { scope: 'member', member: memberId } })
+}
 
 const attentionNodes = computed(() => (
   allNodes.value
