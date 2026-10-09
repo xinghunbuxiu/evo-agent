@@ -24,6 +24,10 @@ export type WorkNodeArchiveMeta = {
   target_url?: string
   branch?: string
   files?: string[]
+  verified_files?: string[]
+  remote_uploaded_files?: string[]
+  integrity_verified?: boolean
+  synced_at?: string
   archived_at?: string
   next_action?: string
 }
@@ -66,6 +70,13 @@ export function getWorkNodeSkills(params: {
 export function archiveWorkNode(taskId: string, payload: { tenant_id?: string } = {}) {
   return post<{ archive: WorkNodeArchiveMeta; autonomy?: Record<string, unknown> }>(
     `/api/autonomy/work-nodes/${encodeURIComponent(taskId)}/archive`,
+    payload,
+  )
+}
+
+export function retryWorkNodeArchive(taskId: string, payload: { tenant_id?: string } = {}) {
+  return post<{ archive: WorkNodeArchiveMeta; autonomy?: Record<string, unknown> }>(
+    `/api/autonomy/work-nodes/${encodeURIComponent(taskId)}/archive/retry`,
     payload,
   )
 }
