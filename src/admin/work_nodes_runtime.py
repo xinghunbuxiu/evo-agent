@@ -500,10 +500,6 @@ def attach_archive_to_task(runtime: dict, task_id: str, archive_meta: dict) -> b
         if _normalize(task.get("task_id")) != _normalize(task_id):
             continue
         task["work_node_archive"] = archive_meta
-        pending = task.get("integration_pending") if isinstance(task.get("integration_pending"), dict) else {}
-        if archive_meta.get("status") in {"archived", "exported", "local_only"}:
-            pending = {**pending, "phase": "integrated"}
-            task["integration_pending"] = pending
         changed = True
         break
     return changed
