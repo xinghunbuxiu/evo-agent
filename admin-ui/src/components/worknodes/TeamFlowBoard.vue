@@ -81,8 +81,13 @@
                 <span class="text-sm font-medium text-slate-800">{{ node.title }}</span>
                 <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px]" :class="statusClass(node.status)">{{ node.status_label || statusLabel(node.status) }}</span>
               </div>
-              <p v-if="node.phases.find((phase) => phase.key === 'submitted')?.summary" class="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{{ node.phases.find((phase) => phase.key === 'submitted')?.summary }}</p>
+              <p v-if="node.objective" class="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">目标：{{ node.objective }}</p>
+              <p v-if="node.phases.find((phase) => phase.key === 'submitted')?.summary" class="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">提交：{{ node.phases.find((phase) => phase.key === 'submitted')?.summary }}</p>
               <p v-else class="mt-1 text-xs text-slate-400">暂未记录提交摘要</p>
+              <div v-if="node.assigned_by_name || node.deliverables?.length" class="mt-2 flex flex-wrap gap-1.5">
+                <span v-if="node.assigned_by_name" class="rounded-md bg-slate-100 px-2 py-1 text-[10px] text-slate-600">分派：{{ node.assigned_by_name }}</span>
+                <span v-if="node.deliverables?.length" class="rounded-md bg-violet-50 px-2 py-1 text-[10px] text-violet-700">交付物 {{ node.deliverables.length }} 项</span>
+              </div>
               <div class="mt-2 text-[10px] text-slate-400">{{ formatDate(node.updated_at) || '暂无更新时间' }}</div>
             </button>
           </div>
