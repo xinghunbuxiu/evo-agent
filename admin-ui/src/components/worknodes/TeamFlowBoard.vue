@@ -14,14 +14,14 @@
     </div>
 
     <div class="mt-5 overflow-x-auto pb-2">
-      <div class="min-w-[760px]">
+      <div class="min-w-0">
         <div class="mx-auto max-w-xs rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
           <div class="text-[10px] font-medium uppercase tracking-wider text-slate-400">协调与验收</div>
           <div class="mt-1 text-sm font-semibold text-slate-800">{{ leadName }}</div>
           <div class="mt-1 text-xs text-slate-500">任务协调 · 交付确认 · 复盘归档</div>
         </div>
         <div class="mx-auto h-5 w-px bg-slate-300"></div>
-        <div class="grid grid-cols-4 gap-3 border-t border-dashed border-slate-300 pt-4">
+        <div class="grid grid-cols-2 gap-3 border-t border-dashed border-slate-300 pt-4 sm:grid-cols-3 xl:grid-cols-4">
           <button
             v-for="member in visibleMembers"
             :key="member.id"
@@ -40,7 +40,7 @@
             </div>
             <div class="mt-1 text-[10px] text-slate-400">当前负载 {{ member.load }}%</div>
           </button>
-          <div v-if="!visibleMembers.length" class="col-span-4 rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+          <div v-if="!visibleMembers.length" class="col-span-full rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
             暂无岗位成员。创建员工并绑定工种后，这里会显示团队分工。
           </div>
         </div>
@@ -130,7 +130,7 @@ const normalizedMembers = computed(() => props.members
     }
   }).filter((item) => item.id))
 
-const visibleMembers = computed(() => normalizedMembers.value.slice(0, 4))
+const visibleMembers = computed(() => normalizedMembers.value)
 const leadName = computed(() => props.leadName || '育成师 / 团队负责人')
 const completed = computed(() => props.nodes.filter((n) => ['archived', 'approved', 'completed', 'done'].includes(String(n.status))).slice(0, 100))
 const active = computed(() => props.nodes.filter((n) => ['running', 'submitted'].includes(String(n.status))))
