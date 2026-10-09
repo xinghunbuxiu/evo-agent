@@ -99,6 +99,17 @@
             </article>
           </div>
           <div v-else class="mt-3 rounded-xl border border-dashed border-slate-200 bg-white/70 px-4 py-5 text-xs leading-5 text-slate-500">暂无已编译经验卡。系统不会用虚构内容填充；经验沉淀后会显示在这里。</div>
+          <div v-if="selectedMember.growth_state?.pending_git_export || selectedMember.growth_state?.last_git_export_status || selectedMember.growth_state?.last_git_export_path" class="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Gitee 经验归档</div>
+              <span class="rounded-full px-2 py-0.5 text-[10px] font-medium" :class="selectedMember.growth_state?.pending_git_export ? 'bg-amber-50 text-amber-700' : selectedMember.growth_state?.last_git_export_status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'">
+                {{ selectedMember.growth_state?.pending_git_export ? '待归档' : selectedMember.growth_state?.last_git_export_status === 'success' ? '最近归档成功' : selectedMember.growth_state?.last_git_export_status || '暂无归档状态' }}
+              </span>
+            </div>
+            <p v-if="selectedMember.growth_state?.pending_git_export_reason" class="mt-1 text-xs leading-5 text-slate-600">{{ selectedMember.growth_state.pending_git_export_reason }}</p>
+            <a v-if="selectedMember.growth_state?.last_git_export_path" :href="selectedMember.growth_state.last_git_export_path" target="_blank" rel="noopener noreferrer" class="mt-2 block break-all text-xs text-teal-700 underline decoration-teal-200 underline-offset-2 hover:text-teal-900">查看最近归档记录</a>
+            <p v-if="selectedMember.growth_state?.last_git_export_at" class="mt-1 text-[10px] text-slate-400">最近归档时间：{{ formatDate(selectedMember.growth_state.last_git_export_at) || selectedMember.growth_state.last_git_export_at }}</p>
+          </div>
           <div v-if="selectedMember.growth_state?.next_goal" class="mt-3 rounded-xl bg-amber-50 px-3 py-2.5">
             <div class="text-[10px] font-semibold uppercase tracking-wider text-amber-700">下一成长目标</div>
             <p class="mt-1 text-xs leading-5 text-amber-950">{{ selectedMember.growth_state.next_goal }}</p>
@@ -163,7 +174,7 @@ type MemberInput = {
   role?: string
   persona?: { role_label?: string }
   status?: string
-  growth_state?: { commercial_settled_count?: number; phase?: string; current_focus?: string; next_goal?: string }
+  growth_state?: { commercial_settled_count?: number; phase?: string; current_focus?: string; next_goal?: string; pending_git_export?: boolean; pending_git_export_reason?: string; last_git_export_at?: string | null; last_git_export_status?: string | null; last_git_export_path?: string | null }
   experience_journal?: {
     card_count?: number
     last_compiled_at?: string | null
