@@ -205,12 +205,18 @@ const buildPhases = (input: {
       key: 'experience',
       summary: experienceCards[0]?.summary || experienceCards[0]?.title || undefined,
       detail: experienceCards[0]?.current_pattern || undefined,
-      at: member?.experience_journal?.last_compiled_at || experienceCards[0]?.created_at || null,
+      at: experienceCards[0]?.created_at || null,
     },
     {
       key: 'archive',
-      summary: archived ? '已写入经验仓库（本地或 Gitee）' : '任务确认后可归档到 Gitee experiences 仓库',
-      at: archived ? task.approved_at || null : null,
+      summary: archived
+        ? (task.work_node_archive?.gitee_path
+          ? `已写入 Gitee：${task.work_node_archive.gitee_path}`
+          : task.work_node_archive?.local_root
+            ? `已落盘本地：${task.work_node_archive.local_root}`
+            : '已完成归档，暂无可展示路径')
+        : '任务确认后可归档到 Gitee experiences 仓库',
+      at: archived ? task.work_node_archive?.archived_at || null : null,
     },
   ]
 
