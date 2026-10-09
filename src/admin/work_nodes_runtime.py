@@ -463,15 +463,18 @@ async def archive_work_node_to_storage(
                 branch=branch,
             )
             uploaded.append(full_path)
-    except GitProviderError as exc:
+    except Exception as exc:
+        # Remote providers can fail with transport/HTTP errors that are not
+        # normalized to GitProviderError. Preserve the node locally for any
+        # upload failure instead of losing the archive on an unexpected error.
         local = _write_local_node_archive(workspace, prefix, files)
         return {
             **local,
             "status": "local_only",
-            "reason": str(exc),
+            "reason": f"{type(exc).__name__}: {exc}",
             "target_repo": target_repo,
             "branch": branch,
-            "next_action": "远端失败，已落盘本地 workspace",
+            "next_action": "远端写入失败，已落盘本地 workspace；修复远端配置后可重新归档",
         }
 
     return {
