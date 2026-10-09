@@ -366,6 +366,21 @@ def _write_local_node_archive(workspace: Path, prefix: str, files: dict[str, str
             raise OSError(f"local archive integrity check failed: {rel}")
         saved.append(f"{prefix}/{rel}")
         verified.append(rel)
+
+    # Remove stale files left by an older snapshot (for example, phases that
+    # no longer exist) so the integrity manifest describes the whole archive.
+    expected_paths = {Path(rel) for rel in files}
+    for existing in base.rglob("*"):
+        if not existing.is_file() or existing.name.endswith(".tmp"):
+            continue
+        if existing.relative_to(base) not in expected_paths:
+            existing.unlink()
+    for directory in sorted((p for p in base.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+
     return {
         "status": "local_only",
         "local_root": str(base),
