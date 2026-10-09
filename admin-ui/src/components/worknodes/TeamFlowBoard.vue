@@ -158,7 +158,7 @@ type MemberInput = {
   role?: string
   persona?: { role_label?: string }
   status?: string
-  growth_state?: { commercial_settled_count?: number; phase?: string }
+  growth_state?: { commercial_settled_count?: number; phase?: string; current_focus?: string; next_goal?: string }
   experience_journal?: {
     card_count?: number
     last_compiled_at?: string | null
