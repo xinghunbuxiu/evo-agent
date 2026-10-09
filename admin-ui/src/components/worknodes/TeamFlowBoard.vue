@@ -224,7 +224,7 @@ const selectedMemberAllTasks = computed(() => props.nodes
 const selectedMemberTasks = computed(() => selectedMemberAllTasks.value.slice(0, 6))
 const selectedMemberCard = computed(() => normalizedMembers.value.find((item) => item.id === selectedMemberId.value) || null)
 const leadName = computed(() => props.leadName || '育成师 / 团队负责人')
-const completed = computed(() => props.nodes.filter((n) => ['archived', 'approved', 'completed', 'done'].includes(String(n.status))).slice(0, 100))
+const completed = computed(() => props.nodes.filter((n) => ['archived', 'approved', 'completed', 'done'].includes(String(n.status))))
 const active = computed(() => props.nodes.filter((n) => ['running', 'submitted'].includes(String(n.status))))
 const waiting = computed(() => props.nodes.filter((n) => !['archived', 'approved', 'completed', 'done', 'running', 'submitted'].includes(String(n.status))))
 const columns = computed(() => [
