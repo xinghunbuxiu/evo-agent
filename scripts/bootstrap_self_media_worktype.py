@@ -3,7 +3,7 @@
 可选 · 研发冒烟：向 work_types 写入一条测试工种（正式环境应走 Admin「添加工种」/ PUT /api/work-types）。
 
 用法:
-  cd evo-mcp
+  cd evo-os
   PYTHONPATH=src python3 scripts/bootstrap_self_media_worktype.py
 """
 

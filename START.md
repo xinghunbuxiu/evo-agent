@@ -5,7 +5,7 @@
 ## 1. 环境
 
 ```bash
-cd /path/to/evo-mcp
+cd /path/to/evo-os
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt

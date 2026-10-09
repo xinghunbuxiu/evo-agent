@@ -196,7 +196,7 @@ export function buildCompanyTree(input: {
           id: 'function:trainer',
           kind: 'link',
           label: '育成师',
-          subtitle: '供给环 · 建档带教复盘',
+          subtitle: '建档、带教与复盘',
           badge: unboundCount ? `${unboundCount}` : undefined,
           href: TRAINER_PORTRAIT_PATH,
           children: trainerChildren,
@@ -205,7 +205,7 @@ export function buildCompanyTree(input: {
           id: 'function:intake',
           kind: 'link',
           label: '接单台',
-          subtitle: '消费环 · 接入分派结算',
+          subtitle: '接入、分派与结算',
           href: '/organization/intake',
         },
         {

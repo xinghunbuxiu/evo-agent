@@ -139,7 +139,7 @@
           type="button"
           @click="submitWorkType"
           :disabled="workTypesSaving"
-          class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-60"
+          class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
         >
           {{ workTypesSaving ? '保存中...' : '保存工种' }}
         </button>
@@ -147,7 +147,7 @@
           type="button"
           @click="fillFromSelectedWorker"
           :disabled="!draft.worker_id || !draft.requires_worker"
-          class="rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-60"
+          class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
         >
           从执行器填充
         </button>

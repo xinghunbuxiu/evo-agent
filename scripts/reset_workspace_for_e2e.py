@@ -3,7 +3,7 @@
 清空 E2E 测试脏数据，保留内置育成师 + 平台配置 + 执行器注册表。
 
 用法:
-  cd evo-mcp
+  cd evo-os
   PYTHONPATH=src python3 scripts/reset_workspace_for_e2e.py
   PYTHONPATH=src python3 scripts/reset_workspace_for_e2e.py --dry-run
 """

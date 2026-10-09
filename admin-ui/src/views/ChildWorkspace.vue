@@ -366,7 +366,7 @@
                         class="break-all text-[11px] text-teal-800"
                       >
                         <span class="text-teal-600">{{ art.kind || 'file' }}</span>
-                        · {{ art.path || art.meta?.text || art.label || '--' }}
+                        · {{ String(art.path || (art.meta && typeof art.meta === 'object' && (art.meta as Record<string, unknown>).text) || art.label || '--') }}
                       </li>
                     </ul>
                   </div>
@@ -624,7 +624,7 @@
 
             <div v-if="childWorkspaceMode === 'growth'" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div class="text-lg font-semibold text-slate-900">成长状态</div>
-              <p class="mt-1 text-xs text-slate-500">供给环：训练复盘 + 消费环结算后的商业实绩回写</p>
+              <p class="mt-1 text-xs text-slate-500">训练复盘与结算后的业务实绩回写</p>
               <div class="mt-4 grid gap-3 md:grid-cols-2">
                 <div class="rounded-xl bg-slate-50 px-4 py-4 text-sm text-slate-700">
                   <div class="text-slate-400">当前专注</div>
@@ -683,19 +683,19 @@
               <p class="mt-1 text-xs text-slate-500">补知识 / 商业结算等写回的可复用经验</p>
               <div v-if="experienceCards.length" class="mt-4 space-y-3">
                 <div
-                  v-for="card in experienceCards.slice(0, 8)"
-                  :key="card.card_id || card.signature || card.title"
+                  v-for="(card, cardIndex) in experienceCards.slice(0, 8)"
+                  :key="String(card.card_id || card.signature || card.title || cardIndex)"
                   class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"
                 >
                   <div class="flex flex-wrap items-center gap-2">
-                    <div class="font-medium text-slate-900">{{ card.title || '未命名经验' }}</div>
+                    <div class="font-medium text-slate-900">{{ String(card.title || '未命名经验') }}</div>
                     <span
                       v-if="card.source"
                       class="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-500"
-                    >{{ card.source }}</span>
+                    >{{ String(card.source) }}</span>
                   </div>
-                  <div class="mt-2 leading-6 text-slate-600">{{ card.summary || card.current_pattern || '--' }}</div>
-                  <div class="mt-1 text-[11px] text-slate-400">{{ formatDate(card.created_at || card.updated_at) }}</div>
+                  <div class="mt-2 leading-6 text-slate-600">{{ String(card.summary || card.current_pattern || '--') }}</div>
+                  <div class="mt-1 text-[11px] text-slate-400">{{ formatDate(String(card.created_at || card.updated_at || '')) }}</div>
                 </div>
               </div>
               <div v-else class="mt-4 text-sm text-slate-500">还没有经验卡。完成补知识验证或商业结算后会出现在这里。</div>

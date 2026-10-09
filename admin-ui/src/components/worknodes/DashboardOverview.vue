@@ -1,21 +1,20 @@
 <template>
   <div class="w-full min-w-0 space-y-5 px-4 py-4 lg:px-6 lg:py-6">
       <header class="rounded-2xl border border-slate-200 bg-white px-5 py-5 shadow-sm">
-      <div class="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">公司总览</div>
-      <h1 class="mt-2 text-2xl font-semibold text-slate-900">商业智脑 · 双环总览</h1>
+      <div class="text-xs font-medium text-slate-500">公司总览</div>
+      <h1 class="mt-2 text-2xl font-semibold text-slate-900">经营看板</h1>
       <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-        <strong class="font-medium text-slate-800">消费环</strong>接单→分派→交付→结算；
-        <strong class="font-medium text-slate-800">供给环</strong>育成带教→员工成长→经验上云。两条线互相喂养。
+        查看接单进度、岗位交付与收支结论；从左侧组织树进入工种、员工与接单台。
       </p>
       <div class="mt-4 flex flex-wrap gap-2 text-xs">
         <router-link to="/organization/intake?section=create" class="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-white hover:bg-slate-800">
-          接单台 · 录入商业任务
+          新建接单
         </router-link>
         <router-link to="/organization/trainer/talent_development_officer/workspace?mode=portrait&portraitTab=summary" class="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-teal-800 hover:bg-teal-100">
-          育成师 · 建档派任务
+          育成与派工
         </router-link>
-        <router-link to="/organization/parent/workspace?section=worktypes" class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-violet-800 hover:bg-violet-100">
-          公司设置 · 添加工种
+        <router-link to="/organization/parent/workspace?section=worktypes" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700 hover:bg-slate-100">
+          工种配置
         </router-link>
       </div>
     </header>
@@ -36,7 +35,7 @@
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 class="text-sm font-semibold text-slate-900">消费环 · 接单漏斗</h2>
+              <h2 class="text-sm font-semibold text-slate-900">接单漏斗</h2>
               <p class="mt-1 text-xs text-slate-500">接入 → 分析分派 → 交付 → 结算</p>
             </div>
             <router-link
@@ -61,8 +60,8 @@
         <div class="rounded-2xl border border-teal-200 bg-teal-50/40 p-4 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 class="text-sm font-semibold text-teal-950">供给环 · 员工成长</h2>
-              <p class="mt-1 text-xs text-teal-800">建档带教 → 实战复盘 → 经验沉淀（结算后回写）</p>
+              <h2 class="text-sm font-semibold text-teal-950">岗位与成长</h2>
+              <p class="mt-1 text-xs text-teal-800">建档带教 → 实战复盘 → 经验沉淀</p>
             </div>
             <router-link
               to="/organization/trainer/talent_development_officer/workspace?mode=portrait&portraitTab=summary"
@@ -85,7 +84,7 @@
             to="/organization/evolution"
             class="mt-3 inline-block text-xs font-medium text-teal-800 underline"
           >
-            打开成长控制台
+            打开成长复盘
           </router-link>
         </div>
       </section>
@@ -115,14 +114,14 @@
 
       <section
         v-if="commercialReadiness && commercialReadiness.score < 100"
-        class="rounded-2xl border border-violet-200 bg-[linear-gradient(135deg,#f5f3ff_0%,#ffffff_100%)] p-5 shadow-sm"
+        class="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm"
       >
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 class="text-sm font-semibold text-violet-950">商业化就绪</h2>
-            <p class="mt-1 text-xs text-violet-800">{{ commercialReadiness.stage_label }} · 完成 {{ commercialReadiness.met_count }}/{{ commercialReadiness.total_steps }}</p>
+            <h2 class="text-sm font-semibold text-slate-900">上线准备</h2>
+            <p class="mt-1 text-xs text-slate-600">{{ commercialReadiness.stage_label }} · 完成 {{ commercialReadiness.met_count }}/{{ commercialReadiness.total_steps }}</p>
           </div>
-          <div class="text-2xl font-bold text-violet-900">{{ commercialReadiness.score }}%</div>
+          <div class="text-2xl font-bold text-slate-800">{{ commercialReadiness.score }}%</div>
         </div>
         <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <router-link
@@ -130,7 +129,7 @@
             :key="`ready-${step.key}`"
             :to="step.route || '/dashboard'"
             class="rounded-xl border px-3 py-3 text-sm transition"
-            :class="step.done ? 'border-emerald-200 bg-emerald-50/60 text-emerald-900' : 'border-violet-100 bg-white text-slate-700 hover:border-violet-300'"
+            :class="step.done ? 'border-emerald-200 bg-emerald-50/60 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'"
           >
             <div class="font-medium">{{ step.done ? '✓' : '○' }} {{ step.label }}</div>
             <div class="mt-1 text-[11px] opacity-80">{{ step.hint }}</div>
@@ -142,7 +141,7 @@
         v-if="financeVerdict?.headline && financeVerdict.recommendation !== 'wait_for_data'"
         class="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-4 shadow-sm"
       >
-        <div class="text-[11px] font-medium uppercase tracking-[0.16em] text-emerald-700">经营结论</div>
+        <div class="text-xs font-medium text-emerald-700">经营结论</div>
         <p class="mt-2 text-sm font-medium text-emerald-950">{{ financeVerdict.headline }}</p>
         <router-link to="/organization/finance" class="mt-2 inline-block text-xs text-emerald-800 underline">
           去财务中心记录决策 →
@@ -151,20 +150,20 @@
 
       <section
         v-if="showLaunchGuide"
-        class="rounded-2xl border border-emerald-200 bg-[linear-gradient(135deg,#ecfdf5_0%,#ffffff_100%)] p-5 shadow-sm"
+        class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
       >
-        <h2 class="text-sm font-semibold text-emerald-950">首次上线 · 5 分钟走通</h2>
-        <p class="mt-1 text-xs text-emerald-800">按顺序完成即可演示「个人公司」完整闭环。</p>
+        <h2 class="text-sm font-semibold text-slate-900">首次上手</h2>
+        <p class="mt-1 text-xs text-slate-600">按顺序完成，即可走通接单到结算。</p>
         <ol class="mt-4 space-y-2 text-sm text-slate-700 list-decimal pl-5">
           <li>
             <router-link class="text-teal-700 hover:underline" to="/organization/parent/workspace?section=worktypes">
               公司设置 → 添加工种并启用执行器
             </router-link>
-            <span class="text-xs text-slate-500">（启用后重启 Admin）</span>
+            <span class="text-xs text-slate-500">（启用后重启服务）</span>
           </li>
           <li>
             <router-link class="text-teal-700 hover:underline" to="/organization/trainer/talent_development_officer/workspace?mode=portrait&portraitTab=summary">
-              育成师建档并派首个正式任务
+              育成建档并派首个正式任务
             </router-link>
           </li>
           <li>
@@ -178,8 +177,8 @@
             </router-link>
           </li>
           <li>
-            <router-link class="text-teal-700 hover:underline" to="/organization/evolution">
-              成长复盘查看进化摘要
+            <router-link class="text-teal-700 hover:underline" to="/organization/intake">
+              接单台查看漏斗与结算
             </router-link>
           </li>
         </ol>
@@ -187,31 +186,31 @@
 
 
 
-      <section class="rounded-2xl border border-teal-200 bg-teal-50/50 p-4 shadow-sm">
-        <h2 class="text-sm font-semibold text-teal-950">端到端主路径（商业）</h2>
-        <p class="mt-1 text-xs text-teal-800">接单 → 智脑/育成分派 → 员工交付 → 结算入账 → 复盘上云</p>
+      <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 class="text-sm font-semibold text-slate-900">主路径</h2>
+        <p class="mt-1 text-xs text-slate-600">接单 → 分派 → 员工交付 → 结算入账</p>
         <div class="mt-3 flex flex-wrap gap-2">
           <router-link
             to="/organization/intake?section=create"
-            class="rounded-lg border border-teal-200 bg-white px-3 py-2 text-xs text-teal-800 hover:bg-teal-50"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100"
           >
             1. 接单台录入
           </router-link>
           <router-link
             to="/organization/intake"
-            class="rounded-lg border border-teal-200 bg-white px-3 py-2 text-xs text-teal-800 hover:bg-teal-50"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100"
           >
             2. 确认分派
           </router-link>
           <router-link
             :to="firstMemberLink"
-            class="rounded-lg border border-teal-200 bg-white px-3 py-2 text-xs text-teal-800 hover:bg-teal-50"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100"
           >
             3. 员工交付
           </router-link>
           <router-link
             to="/organization/finance"
-            class="rounded-lg border border-teal-200 bg-white px-3 py-2 text-xs text-teal-800 hover:bg-teal-50"
+            class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 hover:bg-slate-100"
           >
             4. 结算 / 决策
           </router-link>

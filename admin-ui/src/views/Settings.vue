@@ -2688,7 +2688,7 @@ const trainerMainlineCards = computed(() => ([
     key: 'intake',
     title: '2. 接单对接',
     description: '商业任务入口：智脑按能力推荐，育成确认分派与结算。',
-    badge: '消费环',
+    badge: '接单',
     badgeClass: 'bg-slate-900 text-white',
     active: false,
     activeClass: 'border-slate-400 bg-slate-50 shadow-sm',

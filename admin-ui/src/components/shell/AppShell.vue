@@ -11,10 +11,10 @@
             菜单
           </button>
           <div class="flex items-center gap-2">
-            <span class="text-lg">🧬</span>
+            <div class="flex h-7 w-7 items-center justify-center rounded-md bg-teal-600 text-[11px] font-semibold text-white">E</div>
             <div class="leading-tight">
               <div class="text-sm font-semibold text-slate-900">Evo</div>
-              <div class="text-[10px] uppercase tracking-[0.16em] text-slate-400">个人公司</div>
+              <div class="text-[11px] text-slate-500">经营控制台</div>
             </div>
           </div>
           <div v-if="breadcrumb.length" class="hidden min-w-0 items-center gap-1 text-xs text-slate-500 md:flex">

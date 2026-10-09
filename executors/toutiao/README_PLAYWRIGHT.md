@@ -5,7 +5,7 @@
 ## 安装
 
 ```bash
-cd evo-mcp
+cd evo-os
 # 推荐用项目 venv
 uv pip install -r requirements-playwright.txt --python .venv/bin/python
 .venv/bin/python -m playwright install chromium

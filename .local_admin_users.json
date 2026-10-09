@@ -6,6 +6,13 @@
       "password_hash": "b8da038ea497f29f2cc3f8049b67970b18d85e4892f41a6ba73f52e659e04245",
       "name": "codex_case_user",
       "login_type": "password"
+    },
+    {
+      "id": 2,
+      "username": "biz_162825",
+      "password_hash": "9162fa80a35c8c3336510915702da664974cd712ef46059f82f2bd7a8b8b8d17",
+      "name": "biz_162825",
+      "login_type": "password"
     }
   ]
 }

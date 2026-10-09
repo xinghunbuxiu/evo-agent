@@ -2,30 +2,30 @@
   <div class="min-h-screen bg-slate-50 lg:flex">
     <aside class="relative hidden w-[min(420px,38vw)] shrink-0 flex-col justify-between bg-slate-900 px-10 py-12 text-white lg:flex">
       <div>
-        <div class="flex items-center gap-3">
-          <span class="text-2xl">🧬</span>
-          <div class="leading-tight">
-            <div class="text-lg font-semibold">Evo</div>
-            <div class="text-[10px] uppercase tracking-[0.18em] text-slate-400">个人公司</div>
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/15 text-sm font-semibold text-teal-300">E</div>
+            <div class="leading-tight">
+              <div class="text-lg font-semibold">Evo</div>
+              <div class="text-xs text-slate-400">经营控制台</div>
+            </div>
           </div>
-        </div>
         <h1 class="mt-10 text-3xl font-semibold leading-tight">一个人，一家公司</h1>
         <p class="mt-4 max-w-sm text-sm leading-7 text-slate-300">
-          育成师带教岗位成员，财务看经营结果，成长复盘沉淀经验与 Mission 续跑——登录后从公司总览开始。
+          管理工种与岗位成员，跟进接单交付与收支，从公司总览开始日常经营。
         </p>
       </div>
       <div class="space-y-3 text-xs text-slate-400">
         <div class="flex items-center gap-2">
           <span class="h-1.5 w-1.5 rounded-full bg-teal-400" />
-          左树导航：部门 → 工种 → 员工
+          组织：部门 → 工种 → 员工
         </div>
         <div class="flex items-center gap-2">
           <span class="h-1.5 w-1.5 rounded-full bg-teal-400" />
-          节点流水：思考 → 归档全链路
+          业务：接单 → 分派 → 交付 → 结算
         </div>
         <div class="flex items-center gap-2">
           <span class="h-1.5 w-1.5 rounded-full bg-teal-400" />
-          成长与知识：知识库 / 复盘 / Mission
+          经营：财务看板与任务进度
         </div>
       </div>
     </aside>
@@ -33,21 +33,21 @@
     <main class="flex flex-1 items-center justify-center px-4 py-10 lg:px-8">
       <div class="w-full max-w-md">
         <div class="mb-8 flex items-center gap-3 lg:hidden">
-          <span class="text-2xl">🧬</span>
+          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-sm font-semibold text-white">E</div>
           <div class="leading-tight">
             <div class="text-base font-semibold text-slate-900">Evo</div>
-            <div class="text-[10px] uppercase tracking-[0.16em] text-slate-400">个人公司</div>
+            <div class="text-xs text-slate-500">经营控制台</div>
           </div>
         </div>
 
         <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           <div class="mb-6">
-            <div class="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">账户</div>
+            <div class="text-xs font-medium text-slate-500">账户</div>
             <h2 class="mt-2 text-2xl font-semibold text-slate-900">
               {{ isRegister ? '创建账户' : '登录控制台' }}
             </h2>
             <p class="mt-2 text-sm leading-6 text-slate-500">
-              {{ isRegister ? '注册后可管理工种、员工与收支摘要。' : '使用已有账户进入 Admin 控制台。' }}
+              {{ isRegister ? '注册后可管理工种、员工与收支摘要。' : '使用已有账户进入经营控制台。' }}
             </p>
           </div>
 
@@ -124,7 +124,7 @@
         </div>
 
         <p class="mt-6 text-center text-xs text-slate-400">
-          本地默认后端 http://localhost:8000
+          服务地址 http://127.0.0.1:8000
         </p>
       </div>
     </main>

@@ -1,10 +1,10 @@
 <template>
   <div class="w-full min-w-0 space-y-5 px-4 py-4 lg:px-6 lg:py-6">
     <WorkspacePageHeader
-      eyebrow="消费环 · 接单台"
-      title="商业接单"
-      description="消费环入口：输入任务 → 智脑推荐 → 育成分派 → 交付结算。结算后自动回写员工成长（供给环）。"
-      hint="路由由 capability 与策略配置驱动，不写死具体工种名。"
+      eyebrow="接单台"
+      title="接单与结算"
+      description="录入客户或经营任务，推荐人选后分派、交付并结算。"
+      hint="按所需能力推荐人选，不绑定固定工种名。"
       :loading="loading"
       refresh-label="刷新接单"
       :back-to="{ path: '/dashboard' }"
@@ -54,7 +54,7 @@
 
     <section v-if="section === 'create'" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 class="text-sm font-semibold text-slate-900">新建接单</h2>
-      <p class="mt-1 text-xs text-slate-500">老板或客户需求入口。可勾选能力标签；留空则由智脑从文案推断。</p>
+      <p class="mt-1 text-xs text-slate-500">老板或客户需求入口。可勾选能力标签；留空则由系统从文案推断。</p>
       <div class="mt-4 grid gap-4 lg:grid-cols-2">
         <label class="block text-sm text-slate-700 lg:col-span-2">
           <span class="mb-1 block text-xs text-slate-500">任务标题</span>
@@ -103,7 +103,7 @@
               {{ cap }}
             </button>
           </div>
-          <p v-else class="text-xs text-slate-500">尚未从工种配置读到能力目录；可先提交文案，由智脑推断。</p>
+          <p v-else class="text-xs text-slate-500">尚未从工种配置读到能力目录；可先提交文案，由系统推断。</p>
         </div>
       </div>
       <div class="mt-5 flex flex-wrap gap-2">
@@ -113,7 +113,7 @@
           :disabled="creating || !draft.title.trim()"
           @click="submitCreate"
         >
-          {{ creating ? '提交中…' : '创建并智脑分析' }}
+          {{ creating ? '提交中…' : '创建并分析' }}
         </button>
       </div>
     </section>
@@ -186,7 +186,7 @@
           v-if="item.routing?.candidates?.length"
           class="mt-4 rounded-xl border border-slate-100 bg-slate-50/80 p-3"
         >
-          <div class="text-xs font-medium text-slate-700">智脑路由候选</div>
+          <div class="text-xs font-medium text-slate-700">推荐人选</div>
           <ul class="mt-2 space-y-2">
             <li
               v-for="cand in item.routing.candidates.slice(0, 5)"
@@ -497,7 +497,7 @@ async function submitCreate() {
       auto_analyze: true,
     })
     if (res.code !== 0) throw new Error(res.message || '创建失败')
-    message.value = '接单已创建，智脑已完成初析'
+    message.value = '接单已创建，已完成初析'
     draft.title = ''
     draft.description = ''
     draft.client_label = ''
@@ -536,7 +536,7 @@ async function doAssign(item: IntakeItem, memberId?: string | null) {
   let overrideReason: string | undefined
   if (isOverride) {
     const typed = window.prompt(
-      '你改派了智脑推荐人选。请简短说明原因（会写入路由反馈，供后续分析加权）：',
+      '你改派了系统推荐人选。请简短说明原因（会写入路由反馈，供后续分析加权）：',
       '负载/能力更匹配',
     )
     if (typed == null) return

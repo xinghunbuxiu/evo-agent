@@ -1,6 +1,8 @@
-# Evo — 个人公司智能体平台
+# Evo — 个人公司智脑（仓库名：`evo-os`）
 
-为**一个人经营一家公司**设计的智能体系统：你是公司管理者，平台默认两条职能线配合你运转：
+> 仓库原名 `evo-mcp`，已更名为 **`evo-os`**，避免被误认为「MCP 协议产品」。产品品牌仍为 **Evo**。
+
+为**一个人经营一家公司**设计的商业智脑：你是公司管理者，平台默认两条职能线配合你运转：
 
 | 角色 | 职责 |
 |------|------|
@@ -9,6 +11,16 @@
 | **岗位成员** | 由你在平台创建，执行具体工种（测试工种见 `openSpec/workers/`，默认关闭） |
 
 底层仍有任务队列、经验沉淀、Git 知识容器与 Admin 控制台；**产品主线是「育成 + 管账 + 工种交付」**，不是代码逆向或 MCP 工具。
+
+### 本仓库 vs `workspace-mcp`
+
+| | **evo-os（本仓）** | **workspace-mcp（兄弟仓）** |
+|--|--|--|
+| 是什么 | Evo 个人公司智脑：Admin、接单、育成、财务、工种插件 | 通用本地项目 MCP（shell 等），给 ChatGPT SuperAssistant 用 |
+| 入口 | `http://127.0.0.1:8000`（Admin HTTP） | `http://127.0.0.1:3006/sse`（可选） |
+| 关系 | 产品本体 | **可选**本地改代码工具；与产品主线无关 |
+
+在本仓调试时若需 ChatGPT 改代码，用 `./scripts/start_chatgpt_workspace.sh`（转发到 `../workspace-mcp`），不要把本仓当成 MCP 服务本体。
 
 **内置职能**：育成师、财务。**业务工种**不在配置文件里写死，由用户在平台 **「添加工种」** 写入 `.admin/work_types.json`（API：`PUT /api/work-types`）。
 
@@ -71,7 +83,7 @@
   - 左树智脑区新增「Mission 运行」
 - **UI M10**：登录页与控制台视觉统一
   - `/login` `/register`：左品牌区（slate-900）+ 右表单卡片，与 AppShell 同系 slate/teal
-  - 文案对齐「个人公司智能体平台」；登录/注册 SubNav 与控制台一致
+  - 文案对齐「个人公司智脑」；登录/注册 SubNav 与控制台一致
 - **UI M11**：遗留清理与站点元信息
   - 移除未引用的旧组件 `Navbar.vue`、`QuickAction.vue`、`StatCard.vue`（已由 AppShell 与 Dashboard 组件替代）
   - `index.html` 标题/描述/theme-color 对齐产品品牌；新增 `public/favicon.svg`（slate/teal）

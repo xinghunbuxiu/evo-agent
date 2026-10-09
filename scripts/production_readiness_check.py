@@ -3,7 +3,7 @@
 上线前自检：P0 自动化 + 前端构建 + 环境变量 + 可选健康检查。
 
 用法:
-  cd evo-mcp
+  cd evo-os
   PYTHONPATH=src python3 scripts/production_readiness_check.py
   PYTHONPATH=src python3 scripts/production_readiness_check.py --check-health
 """

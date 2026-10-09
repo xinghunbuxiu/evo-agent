@@ -1,6 +1,40 @@
-# Evo-MCP 变更日志
+# Evo（evo-os）变更日志
+
+## 2026-08-26 - 仓库更名 evo-mcp → evo-os
+
+- 修改人：AI助手
+- 影响文件：仓库目录名、README/START/脚本路径示例、MCP config `WORKSPACE_ROOT`、UI 副标
+- 变更概要：去掉「产品=MCP」歧义；品牌仍为 **Evo**，副标 **个人公司智脑**；ChatGPT 本地改代码仍用兄弟仓 `../workspace-mcp`
+- 用法：见 README「本仓库 vs workspace-mcp」
+
+## 2026-08-25 - Workspace MCP 拆出为独立仓库
+
+- 修改人：AI助手
+- 影响文件：删除 `mcp_workspace/`、`mcp-superassistant/`、`scripts/init_workspace_mcp.py`、`scripts/start_workspace_mcp.sh`、`scripts/start_auto_task.sh`、`scripts/workspace_agent_loop.py`、`docs/WORKSPACE_MCP_CN.md`、`docs/AUTO_TASK_CN.md`
+- 变更概要：通用本地改项目 / ChatGPT shell MCP / 自动任务循环迁至独立项目 `../workspace-mcp`，与本仓（原 evo-mcp）解耦
+- 用法：见 `../workspace-mcp/README.md`
+
+## 2026-08-25 - 删除 mcp_bridge，仅保留 Workspace MCP
+
+- 修改人：AI助手
+- 影响文件：删除 `mcp_bridge/`、`scripts/start_chatgpt_bridge.sh`、`docs/CHATGPT_MCP_BRIDGE_CN.md`；更新 `init_workspace_mcp.py`、`start_workspace_mcp.sh`、`docs/WORKSPACE_MCP_CN.md`
+- 变更概要：通用本地改项目只保留 workspace；init 不再提供 `--merge-evo`
+- 用法：`python scripts/init_workspace_mcp.py /path/to/project` → `./scripts/start_workspace_mcp.sh`
+
+## 2026-08-25 - 通用 Workspace MCP（含 shell，可改本地项目）
+
+- 修改人：AI助手
+- 影响文件：`mcp_workspace/server.py`、`scripts/init_workspace_mcp.py`、`docs/WORKSPACE_MCP_CN.md`、`mcp-superassistant/config.json`
+- 变更概要：任意项目 `init_workspace_mcp.py` 后自动具备 list/grep/read/write/shell/git
+- 用法：ChatGPT 连 `http://127.0.0.1:3006/sse`
+
+## 2026-08-25 - ChatGPT 经 SuperAssistant 操作 evo-mcp（已废弃）
+
+- 修改人：AI助手
+- 变更概要：原 `mcp_bridge` 业务桥已删除；请改用 Workspace MCP
 
 ## 2026-08-09 - Playwright 验收员工工作台经验卡
+
 
 - 修改人：AI助手
 - 影响文件：`ChildWorkspace.vue`、`playwright_verify_experience_cards.py`、`m1_knowledge_learning_probe_runtime.py`（KEEP 落盘）

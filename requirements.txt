@@ -20,6 +20,9 @@ cryptography>=41.0.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.1
 
+# ChatGPT / MCP SuperAssistant 桥接（可选）
+mcp>=1.2,<2
+
 # 日志
 structlog>=23.2.0
 

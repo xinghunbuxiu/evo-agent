@@ -1,4 +1,4 @@
-# Evo 智能体平台分层边界
+# Evo 个人公司智脑 · 分层边界
 
 ## 原则
 
@@ -11,7 +11,7 @@
 ## 目录结构（当前）
 
 ```
-evo-mcp/
+evo-os/
 ├── src/
 │   ├── core/           # 内核：capabilities、decision、learning、tenant、task_queue
 │   ├── admin/          # Admin API + 各 runtime（strategy、autonomy、self_media…）

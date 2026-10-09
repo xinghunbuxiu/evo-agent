@@ -40,6 +40,7 @@ credentials.json
 # Admin 运行时状态（保留 .config/ 纳入版本控制）
 .admin/
 .tenants/
+mcp-superassistant/cookies.json
 
 # Node
 node_modules/
@@ -49,6 +50,7 @@ admin-ui/dist/
 # IDE
 .idea/
 .vscode/
+.cursor/mcp.json
 *.swp
 *.swo
 *~

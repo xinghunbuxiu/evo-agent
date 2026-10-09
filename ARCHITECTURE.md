@@ -1,16 +1,16 @@
-# Evo 智能体平台 - 架构文档
+# Evo 个人公司智脑 - 架构文档
 
 > **产品主线**见 [README.md](README.md) 与 [docs/PRODUCT_M1_CHECKLIST_CN.md](docs/PRODUCT_M1_CHECKLIST_CN.md)：个人公司 · 育成师 + 财务 + 工种。  
 > 本文档描述**技术分层**，供开发参考。
 
 ## 项目概述
 
-**Evo** — 个人公司智能体平台的技术实现：Admin 编排、任务队列、经验与 Git 知识容器；首条工种为头条自媒体（`self_media_operations`）。内置 `domains/javascript` 等能力包默认关闭，仅作研发扩展。
+**Evo** — 个人公司智脑（仓库 `evo-os`）的技术实现：Admin 编排、任务队列、经验与 Git 知识容器；首条工种为头条自媒体（`self_media_operations`）。内置 `domains/javascript` 等能力包默认关闭，仅作研发扩展。
 
 ## 分层架构
 
 ```
-evo-mcp/
+evo-os/
 ├── src/
 │   ├── core/                    # 核心平台层（跨领域通用）
 │   │   ├── config.py           # 分层配置管理
@@ -199,7 +199,7 @@ from core import (
 ## 运行测试
 
 ```bash
-cd evo-mcp
+cd evo-os
 PYTHONPATH=src python3 src/server.py
 ```
 

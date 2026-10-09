@@ -3,7 +3,7 @@
 M1 运营标准自检：验证「干净默认环境」+ 可选已启用工种的冒烟链路。
 
 用法:
-  cd evo-mcp
+  cd evo-os
   PYTHONPATH=src python3 scripts/m1_ops_check.py
   PYTHONPATH=src python3 scripts/m1_ops_check.py --with-worker-smoke
   PYTHONPATH=src python3 scripts/m1_ops_check.py --with-worker-smoke --keep-smoke-artifacts
