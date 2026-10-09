@@ -37,10 +37,14 @@
             </div>
             <div class="mt-1 truncate text-[11px] text-slate-500">{{ member.role }}</div>
             <div class="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium" :class="member.taskCount ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'"><span class="h-1.5 w-1.5 rounded-full" :class="member.taskCount ? 'bg-teal-500' : 'bg-slate-400'"></span>{{ member.taskCount ? '关联任务 ' + member.taskCount : '暂无关联任务' }}</div>
-            <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
-              <div class="h-full rounded-full bg-teal-600" :style="{ width: member.load + '%' }"></div>
+            <div class="mt-3 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+              <span>执行中 {{ member.runningCount }} 项</span>
+              <span>{{ member.taskCount }} 项关联任务</span>
             </div>
-            <div class="mt-1 text-[10px] text-slate-400">当前负载 {{ member.load }}%</div>
+            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-100">
+              <div class="h-full rounded-full bg-teal-600 transition-all" :style="{ width: member.load + '%' }"></div>
+            </div>
+            <div class="mt-1 text-[10px] text-slate-400">运行任务占比 {{ member.load }}%</div>
           </button>
           <div v-if="!visibleMembers.length" class="col-span-full rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
             暂无岗位成员。创建员工并绑定工种后，这里会显示团队分工。
@@ -61,7 +65,7 @@
           </div>
           <p class="mt-1 text-sm leading-6 text-slate-600">{{ selectedMember.role_memory?.long_term_goal || selectedMember.growth_state?.current_focus || '暂未填写长期目标，后续可在员工画像中完善。' }}</p>
           <div class="mt-3 flex flex-wrap gap-2 text-xs">
-            <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">工作节点 {{ selectedMemberTasks.length }} 条近期展示</span>
+            <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">关联节点 {{ selectedMemberAllTasks.length }} 条</span>
             <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">经验卡 {{ selectedMember.experience_journal?.card_count || 0 }} 张</span>
             <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">结算任务 {{ selectedMember.growth_state?.commercial_settled_count || 0 }} 次</span>
           </div>
@@ -187,19 +191,20 @@ const normalizedMembers = computed(() => props.members
       name: String(item.name || item.display_name || id || '未命名成员'),
       role: String(item.persona?.role_label || roleLabel(item.primary_role || item.role)),
       taskCount: tasks.length,
+      runningCount: tasks.filter((node) => node.status === 'running').length,
       level: Math.max(1, Math.min(20, 1 + Math.floor((Number(item.growth_state?.commercial_settled_count || 0) + Number(item.experience_journal?.card_count || 0)) / 3))),
       status: String(item.status || 'active'),
-      load: tasks.length ? Math.min(100, Math.max(18, tasks.filter((n) => n.status === 'running').length * 35)) : 8,
+      load: tasks.length ? Math.round((tasks.filter((node) => node.status === 'running').length / tasks.length) * 100) : 0,
     }
   }).filter((item) => item.id))
 
 const visibleMembers = computed(() => normalizedMembers.value)
 const selectedMemberId = ref('')
 const selectedMember = computed(() => props.members.find((item) => String(item.member_id || '') === selectedMemberId.value) || null)
-const selectedMemberTasks = computed(() => props.nodes
+const selectedMemberAllTasks = computed(() => props.nodes
   .filter((node) => String(node.member_id || '') === selectedMemberId.value)
-  .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
-  .slice(0, 6))
+  .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))))
+const selectedMemberTasks = computed(() => selectedMemberAllTasks.value.slice(0, 6))
 const selectedMemberCard = computed(() => normalizedMembers.value.find((item) => item.id === selectedMemberId.value) || null)
 const leadName = computed(() => props.leadName || '育成师 / 团队负责人')
 const completed = computed(() => props.nodes.filter((n) => ['archived', 'approved', 'completed', 'done'].includes(String(n.status))).slice(0, 100))
