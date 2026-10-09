@@ -532,6 +532,131 @@ async def archive_work_node_to_storage(
     }
 
 
+async def retry_local_work_node_archive(
+    *,
+    workspace: Path,
+    tenant_id: str,
+    runtime: dict,
+    task_id: str,
+    get_user_gitee_token: Callable,
+    tenant_manager,
+    config,
+    get_git_provider_instance: Callable,
+    get_tenant_git_repo: Callable,
+    request=None,
+) -> dict:
+    """Validate a saved local snapshot, then push and read back every file."""
+    nodes = build_work_nodes_from_runtime(workspace, runtime)
+    node = next((item for item in nodes if item.get("task_id") == task_id or item.get("node_id") == f"node:{task_id}"), None)
+    if not node:
+        return {"status": "failed", "reason": "node_not_found"}
+    task = next((
+        item for item in (runtime.get("task_center", {}) or {}).get("items", [])
+        if isinstance(item, dict) and _normalize(item.get("task_id")) == _normalize(node.get("task_id"))
+    ), {})
+    if _normalize(task.get("status")) != "approved":
+        return {"status": "blocked", "reason": "task_not_approved", "next_action": "请先由育成师确认任务后再同步"}
+
+    prefix = work_node_storage_prefix(
+        tenant_id,
+        str(node.get("work_type_id") or "__unbound__"),
+        str(node.get("member_id") or "unknown"),
+        str(node.get("task_id") or "unknown"),
+    )
+    base = workspace / ".admin" / "local_git_exports" / prefix
+    integrity_path = base / "archive.integrity.json"
+    try:
+        if not integrity_path.is_file():
+            raise ValueError("archive.integrity.json missing")
+        integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
+        if integrity.get("algorithm") != "sha256" or not isinstance(integrity.get("files"), dict):
+            raise ValueError("unsupported or malformed integrity manifest")
+        expected_hashes = integrity["files"]
+        files: dict[str, str] = {}
+        for rel_path, expected_hash in expected_hashes.items():
+            rel = Path(str(rel_path))
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                raise ValueError(f"invalid archive path: {rel_path}")
+            target = base / rel
+            if not target.is_file():
+                raise ValueError(f"archive file missing: {rel_path}")
+            content = target.read_text(encoding="utf-8")
+            actual_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if actual_hash != expected_hash:
+                raise ValueError(f"archive hash mismatch: {rel_path}")
+            files[str(rel)] = content
+        # Refuse unexpected files: they may indicate an incomplete or mixed snapshot.
+        actual_paths = {
+            p.relative_to(base).as_posix()
+            for p in base.rglob("*")
+            if p.is_file() and p.name != "archive.integrity.json" and not p.name.endswith(".tmp")
+        }
+        if actual_paths != set(expected_hashes):
+            raise ValueError("archive file set does not match integrity manifest")
+        files["archive.integrity.json"] = integrity_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "reason": f"local_archive_integrity_failed: {type(exc).__name__}: {exc}",
+            "local_root": str(base),
+            "next_action": "本地归档校验未通过，未向远端写入；请重新生成归档后再试",
+            "integrity_verified": False,
+        }
+
+    token = get_user_gitee_token(request) if request is not None else None
+    token = token or os.getenv("GITEE_TOKEN")
+    if not token or token == "your_real_token_here":
+        return {"status": "failed", "reason": "missing_gitee_token", "local_root": str(base),
+                "next_action": "本地快照已通过校验；配置 GITEE_TOKEN 后重试", "integrity_verified": True}
+    try:
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        target_repo, target_url = get_tenant_git_repo(
+            tenant_manager, tenant_id, "experiences",
+            config.experiences.full_name, config.experiences.url,
+        )
+        repos = git_knowledge.get("repos", {}) if isinstance(git_knowledge, dict) else {}
+        branch = _normalize(repos.get("experiences", {}).get("branch")) or "master" if isinstance(repos, dict) and isinstance(repos.get("experiences"), dict) else "master"
+        if not target_repo:
+            return {"status": "failed", "reason": "missing_git_repo", "local_root": str(base),
+                    "next_action": "本地快照已通过校验；配置 experiences 仓库后重试", "integrity_verified": True}
+        verified: list[str] = []
+        for rel_path, content in files.items():
+            full_path = f"{prefix}/{rel_path}"
+            await provider.upsert_text_file(
+                token=token, repo_full_name=target_repo, file_path=full_path,
+                content=content, message=f"Retry archive work node {node.get('node_id')}", branch=branch,
+            )
+        read_text_file = getattr(provider, "read_text_file", None)
+        if not callable(read_text_file):
+            raise RuntimeError("Git provider does not support remote archive verification")
+        for rel_path, expected in files.items():
+            full_path = f"{prefix}/{rel_path}"
+            actual = await read_text_file(
+                token=token, repo_full_name=target_repo, file_path=full_path, branch=branch,
+            )
+            if actual != expected:
+                raise RuntimeError(f"remote archive verification failed: {full_path}")
+            verified.append(full_path)
+        previous = task.get("work_node_archive") if isinstance(task.get("work_node_archive"), dict) else {}
+        return {
+            "status": "archived", "reason": None, "gitee_path": prefix,
+            "target_repo": target_repo, "target_url": target_url, "branch": branch,
+            "files": [f"{prefix}/{p}" for p in files],
+            "verified_files": verified, "integrity_verified": len(verified) == len(files),
+            "archived_at": previous.get("archived_at") or datetime.now().isoformat(),
+            "synced_at": datetime.now().isoformat(), "local_root": str(base),
+            "next_action": "本地快照已通过 SHA-256 校验，远端所有文件已逐一回读验证",
+        }
+    except Exception as exc:
+        return {
+            "status": "local_only", "reason": f"{type(exc).__name__}: {exc}",
+            "gitee_path": prefix, "local_root": str(base),
+            "next_action": "远端同步或回读校验失败；本地快照已保留，可修复配置后重试",
+            "integrity_verified": True,
+        }
+
+
 def attach_archive_to_task(runtime: dict, task_id: str, archive_meta: dict) -> bool:
     task_center = runtime.get("task_center") if isinstance(runtime.get("task_center"), dict) else {}
     items = task_center.get("items") if isinstance(task_center.get("items"), list) else []
