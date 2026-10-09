@@ -587,24 +587,31 @@ async def retry_local_work_node_archive(
         if integrity.get("algorithm") != "sha256" or not isinstance(integrity.get("files"), dict):
             raise ValueError("unsupported or malformed integrity manifest")
         expected_hashes = integrity["files"]
+        if "archive.integrity.json" in expected_hashes:
+            raise ValueError("integrity manifest must not hash itself")
         files: dict[str, str] = {}
         for rel_path, expected_hash in expected_hashes.items():
             rel = Path(str(rel_path))
-            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts or rel.as_posix() != str(rel_path):
                 raise ValueError(f"invalid archive path: {rel_path}")
             target = base / rel
+            # Do not follow symlinks while validating an archive snapshot.
+            if any(parent.is_symlink() for parent in [target, *target.parents] if parent != workspace.parent):
+                raise ValueError(f"symlink in archive path: {rel_path}")
             if not target.is_file():
                 raise ValueError(f"archive file missing: {rel_path}")
             content = target.read_text(encoding="utf-8")
             actual_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if actual_hash != expected_hash:
                 raise ValueError(f"archive hash mismatch: {rel_path}")
-            files[str(rel)] = content
+            files[rel.as_posix()] = content
         # Refuse unexpected files: they may indicate an incomplete or mixed snapshot.
         actual_paths = {
             p.relative_to(base).as_posix()
             for p in base.rglob("*")
-            if p.is_file() and p.name != "archive.integrity.json" and not p.name.endswith(".tmp")
+            if p.is_file()
+            and p.relative_to(base).as_posix() != "archive.integrity.json"
+            and not p.name.endswith(".tmp")
         }
         if actual_paths != set(expected_hashes):
             raise ValueError("archive file set does not match integrity manifest")
