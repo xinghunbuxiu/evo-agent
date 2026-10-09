@@ -27,6 +27,8 @@
             :key="member.id"
             type="button"
             class="team-member-card group min-w-0 rounded-2xl border border-slate-200 bg-white px-3 py-4 text-left transition hover:-translate-y-1 hover:border-teal-300 hover:shadow-lg"
+            :aria-pressed="selectedMemberId === member.id"
+            :class="selectedMemberId === member.id ? 'border-teal-400 ring-2 ring-teal-100' : ''"
             @click="openMember(member)"
           >
             <div class="flex flex-col items-center gap-2 text-center">
@@ -47,6 +49,62 @@
       </div>
     </div>
 
+
+    <section v-if="selectedMember && selectedMemberCard" class="mt-4 overflow-hidden rounded-2xl border border-teal-200 bg-gradient-to-br from-white via-white to-teal-50/70 shadow-sm">
+      <div class="flex flex-wrap items-start gap-4 border-b border-teal-100 px-4 py-4 sm:px-5">
+        <WorkerAvatar :name="selectedMemberCard.name" :role="selectedMemberCard.role" :level="selectedMemberCard.level" />
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="text-base font-semibold text-slate-900">{{ selectedMemberCard.name }}</h3>
+            <span class="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-medium text-teal-800">{{ selectedMemberCard.role }}</span>
+            <span class="rounded-full bg-white px-2 py-0.5 text-[10px] text-slate-500 ring-1 ring-slate-200">Lv.{{ selectedMemberCard.level }}</span>
+          </div>
+          <p class="mt-1 text-sm leading-6 text-slate-600">{{ selectedMember.role_memory?.long_term_goal || selectedMember.growth_state?.current_focus || '暂未填写长期目标，后续可在员工画像中完善。' }}</p>
+          <div class="mt-3 flex flex-wrap gap-2 text-xs">
+            <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">工作节点 {{ selectedMemberTasks.length }} 条近期展示</span>
+            <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">经验卡 {{ selectedMember.experience_journal?.card_count || 0 }} 张</span>
+            <span class="rounded-lg bg-white px-3 py-1.5 text-slate-600 ring-1 ring-slate-200">结算任务 {{ selectedMember.growth_state?.commercial_settled_count || 0 }} 次</span>
+          </div>
+        </div>
+        <button type="button" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50" @click="selectedMemberId = ''">收起详情</button>
+      </div>
+      <div class="grid gap-4 p-4 sm:p-5 lg:grid-cols-2">
+        <div>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">最近工作流水</h4>
+          <div v-if="selectedMemberTasks.length" class="mt-3 space-y-2">
+            <button v-for="node in selectedMemberTasks" :key="node.node_id" type="button" class="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-teal-300 hover:shadow-sm" @click="openNode(node)">
+              <div class="flex items-start justify-between gap-2">
+                <span class="text-sm font-medium text-slate-800">{{ node.title }}</span>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px]" :class="statusClass(node.status)">{{ node.status_label || statusLabel(node.status) }}</span>
+              </div>
+              <p v-if="node.phases.find((phase) => phase.key === 'submitted')?.summary" class="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{{ node.phases.find((phase) => phase.key === 'submitted')?.summary }}</p>
+              <p v-else class="mt-1 text-xs text-slate-400">暂未记录提交摘要</p>
+              <div class="mt-2 text-[10px] text-slate-400">{{ formatDate(node.updated_at) || '暂无更新时间' }}</div>
+            </button>
+          </div>
+          <div v-else class="mt-3 rounded-xl border border-dashed border-slate-200 bg-white/70 px-4 py-6 text-center text-xs text-slate-500">暂无关联工作节点，员工的详细任务记录会在创建并分配任务后显示。</div>
+        </div>
+        <div>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">经验与成长</h4>
+          <div v-if="selectedMember.experience_journal?.cards?.length" class="mt-3 space-y-2">
+            <article v-for="card in selectedMember.experience_journal.cards.slice(0, 4)" :key="card.card_id || card.title" class="rounded-xl border border-teal-100 bg-white p-3">
+              <div class="text-sm font-medium text-slate-800">{{ card.title || '经验记录' }}</div>
+              <p v-if="card.summary" class="mt-1 text-xs leading-5 text-slate-600">{{ card.summary }}</p>
+              <p v-if="card.current_pattern" class="mt-2 rounded-lg bg-teal-50 px-2.5 py-2 text-xs leading-5 text-teal-900">可复用方法：{{ card.current_pattern }}</p>
+              <p v-if="card.next_experiment" class="mt-1 text-xs text-slate-500">下一步实验：{{ card.next_experiment }}</p>
+            </article>
+          </div>
+          <div v-else class="mt-3 rounded-xl border border-dashed border-slate-200 bg-white/70 px-4 py-5 text-xs leading-5 text-slate-500">暂无已编译经验卡。系统不会用虚构内容填充；经验沉淀后会显示在这里。</div>
+          <div v-if="selectedMember.growth_state?.next_goal" class="mt-3 rounded-xl bg-amber-50 px-3 py-2.5">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-amber-700">下一成长目标</div>
+            <p class="mt-1 text-xs leading-5 text-amber-950">{{ selectedMember.growth_state.next_goal }}</p>
+          </div>
+          <div v-if="selectedMember.role_memory?.strengths?.length" class="mt-3 flex flex-wrap gap-1.5">
+            <span v-for="strength in selectedMember.role_memory.strengths.slice(0, 5)" :key="strength" class="rounded-full bg-violet-50 px-2.5 py-1 text-[10px] text-violet-700">{{ strength }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
     <div class="mt-4 grid gap-3 lg:grid-cols-3">
       <div v-for="column in columns" :key="column.key" class="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
         <div class="mb-3 flex items-center justify-between gap-2">
@@ -88,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { WorkNode } from '../../utils/workNodes'
 import WorkerAvatar from './WorkerAvatar.vue'
 
@@ -101,7 +159,12 @@ type MemberInput = {
   persona?: { role_label?: string }
   status?: string
   growth_state?: { commercial_settled_count?: number; phase?: string }
-  experience_journal?: { card_count?: number }
+  experience_journal?: {
+    card_count?: number
+    last_compiled_at?: string | null
+    cards?: Array<{ card_id?: string | null; title?: string | null; summary?: string | null; current_pattern?: string | null; next_experiment?: string | null }>
+  }
+  role_memory?: { long_term_goal?: string; strengths?: string[]; preferred_domains?: string[] }
 }
 
 const props = defineProps<{
@@ -131,6 +194,13 @@ const normalizedMembers = computed(() => props.members
   }).filter((item) => item.id))
 
 const visibleMembers = computed(() => normalizedMembers.value)
+const selectedMemberId = ref('')
+const selectedMember = computed(() => props.members.find((item) => String(item.member_id || '') === selectedMemberId.value) || null)
+const selectedMemberTasks = computed(() => props.nodes
+  .filter((node) => String(node.member_id || '') === selectedMemberId.value)
+  .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+  .slice(0, 6))
+const selectedMemberCard = computed(() => normalizedMembers.value.find((item) => item.id === selectedMemberId.value) || null)
 const leadName = computed(() => props.leadName || '育成师 / 团队负责人')
 const completed = computed(() => props.nodes.filter((n) => ['archived', 'approved', 'completed', 'done'].includes(String(n.status))).slice(0, 100))
 const active = computed(() => props.nodes.filter((n) => ['running', 'submitted'].includes(String(n.status))))
@@ -155,7 +225,7 @@ function openNode(node: WorkNode) {
   emit('select-node', node.node_id)
 }
 function openMember(member: { id: string }) {
-  emit('select-member', member.id)
+  selectedMemberId.value = selectedMemberId.value === member.id ? '' : member.id
 }
 function statusLabel(status: unknown) {
   const value = String(status || '')
