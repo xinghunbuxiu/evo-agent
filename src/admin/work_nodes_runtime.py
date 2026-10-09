@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -352,15 +353,25 @@ def work_node_storage_prefix(tenant_id: str, work_type_id: str, member_id: str, 
 def _write_local_node_archive(workspace: Path, prefix: str, files: dict[str, str]) -> dict:
     base = workspace / ".admin" / "local_git_exports" / prefix
     saved: list[str] = []
+    verified: list[str] = []
     for rel, content in files.items():
         target = base / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(content, encoding="utf-8")
+        # Replace atomically so a crash cannot leave a truncated archive file.
+        temporary.replace(target)
+        actual = target.read_text(encoding="utf-8")
+        if actual != content:
+            raise OSError(f"local archive integrity check failed: {rel}")
         saved.append(f"{prefix}/{rel}")
+        verified.append(rel)
     return {
         "status": "local_only",
         "local_root": str(base),
         "files": saved,
+        "verified_files": verified,
+        "integrity_verified": len(verified) == len(files),
         "gitee_path": prefix,
     }
 
@@ -424,6 +435,13 @@ async def archive_work_node_to_storage(
         }, ensure_ascii=False, indent=2),
         **phase_files,
     }
+    files["archive.integrity.json"] = json.dumps({
+        "algorithm": "sha256",
+        "files": {
+            path: hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for path, content in files.items()
+        },
+    }, ensure_ascii=False, indent=2)
 
     token = None
     if request is not None:
