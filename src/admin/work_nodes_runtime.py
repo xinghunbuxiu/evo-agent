@@ -595,8 +595,8 @@ async def retry_local_work_node_archive(
             if rel.is_absolute() or ".." in rel.parts or not rel.parts or rel.as_posix() != str(rel_path):
                 raise ValueError(f"invalid archive path: {rel_path}")
             target = base / rel
-            # Do not follow symlinks while validating an archive snapshot.
-            if any(parent.is_symlink() for parent in [target, *target.parents] if parent != workspace.parent):
+            # Do not follow symlinks inside the archive root.
+            if base.is_symlink() or any((base / Path(*rel.parts[:index])).is_symlink() for index in range(1, len(rel.parts) + 1)):
                 raise ValueError(f"symlink in archive path: {rel_path}")
             if not target.is_file():
                 raise ValueError(f"archive file missing: {rel_path}")
