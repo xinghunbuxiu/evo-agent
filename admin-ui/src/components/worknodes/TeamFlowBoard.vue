@@ -38,7 +38,7 @@
             <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
               <div class="h-full rounded-full bg-teal-600" :style="{ width: member.load + '%' }"></div>
             </div>
-            <div class="mt-1 text-[10px] text-slate-400">{{ member.taskCount }} 条关联节点</div>
+            <div class="mt-1 text-[10px] text-slate-400">当前负载 {{ member.load }}%</div>
           </button>
           <div v-if="!visibleMembers.length" class="col-span-4 rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
             暂无岗位成员。创建员工并绑定工种后，这里会显示团队分工。
