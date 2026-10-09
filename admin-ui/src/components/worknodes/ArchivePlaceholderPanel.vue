@@ -114,8 +114,8 @@ const runArchive = async (node: WorkNode) => {
     const result = await archiveWorkNode(node.task_id, {
       tenant_id: consoleCtx?.tenantId.value || 'default',
     })
-    archiveSuccess.value = true
-    archiveMessage.value = result.message || '归档完成'
+    archiveSuccess.value = result.archive?.status === 'archived'
+    archiveMessage.value = result.message || result.archive?.next_action || '归档完成'
     await consoleCtx?.refreshOverview()
   } catch (error) {
     archiveSuccess.value = false
