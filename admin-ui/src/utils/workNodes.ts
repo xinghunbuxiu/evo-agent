@@ -56,6 +56,10 @@ export type WorkNode = {
   work_type_title: string
   member_id: string
   member_name: string
+  assigned_by_member_id?: string
+  assigned_by_name?: string
+  objective?: string
+  deliverables?: string[]
   department_id?: string
   department_label?: string
   title: string
@@ -296,6 +300,10 @@ export function buildWorkNodes(input: {
         work_type_title: workTypeTitleById.get(workTypeId) || workTypeId,
         member_id: memberId,
         member_name: normalize(member?.name || member?.identity?.name || memberId),
+        assigned_by_member_id: normalize(task.assigned_by_member_id) || undefined,
+        assigned_by_name: normalize(memberById.get(normalize(task.assigned_by_member_id))?.name || memberById.get(normalize(task.assigned_by_member_id))?.identity?.name || task.assigned_by_member_id) || undefined,
+        objective: normalize(task.objective) || undefined,
+        deliverables: (task.deliverables || []).filter((item) => normalize(item)),
         department_id: normalize(member?.organization?.department_id) || undefined,
         department_label: normalize(member?.organization?.department_label) || undefined,
         title: normalize(task.title) || '未命名任务',
