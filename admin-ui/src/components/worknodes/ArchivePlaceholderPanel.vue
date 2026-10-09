@@ -25,6 +25,15 @@
         已写入 {{ node.archive.files.length }} 个文件
       </div>
       <button
+        v-if="node.archive?.status === 'local_only'"
+        type="button"
+        class="mt-3 ml-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+        :disabled="archivingId === node.task_id"
+        @click="runRetryArchive(node)"
+      >
+        {{ archivingId === node.task_id ? '同步中...' : '重试同步本地归档' }}
+      </button>
+      <button
         v-if="canArchive(node)"
         type="button"
         class="mt-3 rounded-lg border border-teal-300 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-800 hover:bg-teal-100 disabled:opacity-60"
@@ -46,7 +55,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
-import { archiveWorkNode } from '../../api/workNodes'
+import { archiveWorkNode, retryWorkNodeArchive } from '../../api/workNodes'
 import type { WorkNode } from '../../utils/workNodes'
 import { workNodeStatusClass } from '../../utils/workNodes'
 import { companyConsoleKey } from '../../composables/companyConsole'
@@ -72,6 +81,24 @@ const archiveHint = (node: WorkNode) => {
 }
 
 const canArchive = (node: WorkNode) => node.status === 'approved' || node.status === 'archived'
+
+const runRetryArchive = async (node: WorkNode) => {
+  archivingId.value = node.task_id
+  archiveMessage.value = ''
+  try {
+    const result = await retryWorkNodeArchive(node.task_id, {
+      tenant_id: consoleCtx?.tenantId.value || 'default',
+    })
+    archiveSuccess.value = result.archive?.status === 'archived'
+    archiveMessage.value = result.message || result.archive?.next_action || '同步完成'
+    await consoleCtx?.refreshOverview()
+  } catch (error) {
+    archiveSuccess.value = false
+    archiveMessage.value = error instanceof Error ? error.message : '同步失败'
+  } finally {
+    archivingId.value = ''
+  }
+}
 
 const runArchive = async (node: WorkNode) => {
   archivingId.value = node.task_id
