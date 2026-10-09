@@ -549,6 +549,17 @@ export interface AutonomyFormalTask {
   reflection?: string | null
   review_note?: string | null
   integration_pending?: AutonomyFormalTaskIntegrationPending | null
+  work_node_archive?: {
+    status?: string
+    reason?: string | null
+    gitee_path?: string
+    local_root?: string
+    target_repo?: string
+    target_url?: string
+    files?: string[]
+    archived_at?: string
+    next_action?: string
+  } | null
   metadata?: Record<string, unknown>
 }
 
