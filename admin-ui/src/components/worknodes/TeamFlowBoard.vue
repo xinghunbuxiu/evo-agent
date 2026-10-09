@@ -107,7 +107,7 @@
               </span>
             </div>
             <p v-if="selectedMember.growth_state?.pending_git_export_reason" class="mt-1 text-xs leading-5 text-slate-600">{{ selectedMember.growth_state.pending_git_export_reason }}</p>
-            <a v-if="selectedMember.growth_state?.last_git_export_path" :href="selectedMember.growth_state.last_git_export_path" target="_blank" rel="noopener noreferrer" class="mt-2 block break-all text-xs text-teal-700 underline decoration-teal-200 underline-offset-2 hover:text-teal-900">查看最近归档记录</a>
+            <p v-if="selectedMember.growth_state?.last_git_export_path" class="mt-2 break-all text-xs leading-5 text-slate-600">归档位置：<span class="font-mono text-[11px] text-slate-700">{{ selectedMember.growth_state.last_git_export_path }}</span></p>
             <p v-if="selectedMember.growth_state?.last_git_export_at" class="mt-1 text-[10px] text-slate-400">最近归档时间：{{ formatDate(selectedMember.growth_state.last_git_export_at) || selectedMember.growth_state.last_git_export_at }}</p>
           </div>
           <div v-if="selectedMember.growth_state?.next_goal" class="mt-3 rounded-xl bg-amber-50 px-3 py-2.5">
