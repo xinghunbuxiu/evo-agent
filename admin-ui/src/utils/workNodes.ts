@@ -46,7 +46,9 @@ export type WorkNodeArchiveMeta = {
   target_url?: string
   files?: string[]
   verified_files?: string[]
+  remote_uploaded_files?: string[]
   integrity_verified?: boolean
+  synced_at?: string
   archived_at?: string
   next_action?: string
 }
