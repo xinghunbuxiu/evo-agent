@@ -34,7 +34,7 @@
               <span class="max-w-full truncate text-sm font-semibold text-slate-900">{{ member.name }}</span>
             </div>
             <div class="mt-1 truncate text-[11px] text-slate-500">{{ member.role }}</div>
-            <div class="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ member.taskCount ? '关联任务 ' + member.taskCount : '待命中' }}</div>
+            <div class="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium" :class="member.taskCount ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-500'"><span class="h-1.5 w-1.5 rounded-full" :class="member.taskCount ? 'bg-teal-500' : 'bg-slate-400'"></span>{{ member.taskCount ? '关联任务 ' + member.taskCount : '暂无关联任务' }}</div>
             <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
               <div class="h-full rounded-full bg-teal-600" :style="{ width: member.load + '%' }"></div>
             </div>
@@ -98,6 +98,10 @@ type MemberInput = {
   display_name?: string
   primary_role?: string
   role?: string
+  persona?: { role_label?: string }
+  status?: string
+  growth_state?: { commercial_settled_count?: number; phase?: string }
+  experience_journal?: { card_count?: number }
 }
 
 const props = defineProps<{
@@ -118,9 +122,10 @@ const normalizedMembers = computed(() => props.members
     return {
       id,
       name: String(item.name || item.display_name || id || '未命名成员'),
-      role: String(item.primary_role || item.role || '岗位成员'),
+      role: String(item.persona?.role_label || roleLabel(item.primary_role || item.role)),
       taskCount: tasks.length,
-      level: Math.max(1, Math.min(20, Number((item as any).growth_state?.level || 1))),
+      level: Math.max(1, Math.min(20, 1 + Math.floor((Number(item.growth_state?.commercial_settled_count || 0) + Number(item.experience_journal?.card_count || 0)) / 3))),
+      status: String(item.status || 'active'),
       load: tasks.length ? Math.min(100, Math.max(18, tasks.filter((n) => n.status === 'running').length * 35)) : 8,
     }
   }).filter((item) => item.id))
@@ -135,6 +140,16 @@ const columns = computed(() => [
   { key: 'active', label: '执行中 · 待确认', dot: 'bg-teal-600', items: props.nodes.filter((n) => ['running', 'submitted'].includes(String(n.status))).slice(0, 5) },
   { key: 'waiting', label: '待处理 · 待分配', dot: 'bg-slate-400', items: props.nodes.filter((n) => !['archived', 'approved', 'completed', 'done', 'running', 'submitted'].includes(String(n.status))).slice(0, 5) },
 ])
+
+function roleLabel(value?: string) {
+  const labels: Record<string, string> = {
+    content_creator: '内容创作', researcher: '研究分析', developer: '研发工程',
+    operator: '运营执行', analyst: '数据分析', designer: '视觉设计',
+    talent_development: '育成师', sales: '商务拓展',
+  }
+  const key = String(value || '').trim()
+  return labels[key] || key.replace(/_/g, ' ') || '岗位成员'
+}
 
 function openNode(node: WorkNode) {
   emit('select-node', node.node_id)
