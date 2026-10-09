@@ -315,7 +315,7 @@ export function buildWorkNodes(input: {
         department_label: normalize(member?.organization?.department_label) || undefined,
         title: normalize(task.title) || '未命名任务',
         status,
-        status_label: archived ? '已归档' : formatTaskStatusLabel(taskStatus),
+        status_label: archiveStatus === 'local_only' ? '仅本地保存' : archived ? '已归档' : formatTaskStatusLabel(taskStatus),
         updated_at: task.approved_at || task.submitted_at || task.assigned_at || null,
         phases,
         experience_cards: experienceCards,
