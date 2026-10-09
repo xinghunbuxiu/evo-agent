@@ -103,8 +103,17 @@ const archiveSuccess = ref(false)
 
 const archiveHint = computed(() => {
   const meta = props.node.archive
-  if (meta?.gitee_path) return `已写入 Gitee：${meta.gitee_path}`
-  if (meta?.local_root) return `已落盘本地：${meta.local_root}`
+  if (meta?.status === 'archived') {
+    const verification = meta.integrity_verified === true ? '（远端回读校验通过）' : ''
+    return `已同步至 Gitee：${meta.gitee_path || meta.target_repo || 'experiences'}${verification}`
+  }
+  if (meta?.status === 'local_only') {
+    const reason = meta.reason ? `；原因：${meta.reason}` : ''
+    return `仅本地保存，尚未确认远端同步：${meta.local_root || meta.gitee_path || '本地归档目录'}${reason}`
+  }
+  if (meta?.status === 'failed') return `归档失败：${meta.reason || meta.next_action || '请检查配置后重试'}`
+  if (meta?.gitee_path) return `归档路径：${meta.gitee_path}`
+  if (meta?.local_root) return `本地归档：${meta.local_root}`
   return props.node.archive_hint || '任务确认后可归档到 experiences 仓库'
 })
 
