@@ -124,6 +124,11 @@ const selectedNode = computed(() => (
 ))
 
 const experienceCards = computed(() => collectExperienceCards(filteredNodes.value))
+const selectedMemberProfile = computed(() => (
+  consoleCtx?.autonomyStatus.value?.child_members?.items?.find(
+    (item) => String(item.member_id || '') === memberId.value,
+  ) || null
+))
 
 const headerEyebrow = computed(() => {
   if (scope.value === 'member') return '员工节点'
@@ -136,7 +141,12 @@ const WORK_TYPE_TITLE_FALLBACK: Record<string, string> = {
 }
 
 const headerTitle = computed(() => {
-  if (scope.value === 'member' && selectedNode.value) return selectedNode.value.member_name
+  if (scope.value === 'member') {
+    return selectedMemberProfile.value?.name
+      || selectedNode.value?.member_name
+      || memberId.value
+      || '员工工作档案'
+  }
   if (scope.value === 'work_type') {
     return filteredNodes.value[0]?.work_type_title
       || WORK_TYPE_TITLE_FALLBACK[workTypeId.value]
@@ -148,7 +158,17 @@ const headerTitle = computed(() => {
 
 const headerDescription = computed(() => {
   if (scope.value === 'member') {
-    return '查看该员工从思考、执行、提交到经验沉淀的完整节点流水。'
+    const role = selectedMemberProfile.value?.persona?.role_label
+    const focus = selectedMemberProfile.value?.growth_state?.current_focus
+    const nextGoal = selectedMemberProfile.value?.growth_state?.next_goal
+    const details = [
+      role ? `岗位：${role}` : '',
+      focus ? `当前重点：${focus}` : '',
+      nextGoal ? `下一目标：${nextGoal}` : '',
+    ].filter(Boolean).join(' · ')
+    return details
+      ? `${details}。查看该员工从思考、执行、提交到经验沉淀的完整节点流水。`
+      : '查看该员工从思考、执行、提交到经验沉淀的完整节点流水。'
   }
   if (scope.value === 'work_type') {
     return '聚合该工种下所有员工的任务节点，按时间查看经验与归档状态。'
