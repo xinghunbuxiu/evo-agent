@@ -481,6 +481,26 @@ async def archive_work_node_to_storage(
                 branch=branch,
             )
             uploaded.append(full_path)
+
+        # A successful write response is not enough: read every file back and
+        # compare it with the exact UTF-8 payload before reporting remote success.
+        remote_verified: list[str] = []
+        read_text_file = getattr(provider, "read_text_file", None)
+        if not callable(read_text_file):
+            raise RuntimeError("Git provider does not support remote archive verification")
+        for rel_path, expected_content in files.items():
+            full_path = f"{prefix}/{rel_path}"
+            actual_content = await read_text_file(
+                token=token,
+                repo_full_name=target_repo,
+                file_path=full_path,
+                branch=branch,
+            )
+            if actual_content is None:
+                raise RuntimeError(f"remote archive verification failed: missing {full_path}")
+            if actual_content != expected_content:
+                raise RuntimeError(f"remote archive verification failed: content mismatch {full_path}")
+            remote_verified.append(full_path)
     except Exception as exc:
         # Remote providers can fail with transport/HTTP errors that are not
         # normalized to GitProviderError. Preserve the node locally for any
@@ -492,7 +512,9 @@ async def archive_work_node_to_storage(
             "reason": f"{type(exc).__name__}: {exc}",
             "target_repo": target_repo,
             "branch": branch,
-            "next_action": "远端写入失败，已落盘本地 workspace；修复远端配置后可重新归档",
+            "next_action": "远端写入或回读校验失败，已尝试保存在本地；修复远端配置后可重新归档",
+            "remote_uploaded_files": uploaded,
+            "integrity_verified": False,
         }
 
     return {
@@ -503,8 +525,10 @@ async def archive_work_node_to_storage(
         "target_url": target_url,
         "branch": branch,
         "files": uploaded,
+        "verified_files": remote_verified,
+        "integrity_verified": len(remote_verified) == len(files),
         "archived_at": datetime.now().isoformat(),
-        "next_action": "节点已写入 Gitee experiences 仓库",
+        "next_action": "节点已写入 Gitee 并完成逐文件回读校验",
     }
 
 
