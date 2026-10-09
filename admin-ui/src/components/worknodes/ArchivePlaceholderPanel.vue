@@ -75,7 +75,14 @@ const archivableNodes = computed(() => (
 
 const archiveHint = (node: WorkNode) => {
   const meta = node.archive
-  if (meta?.gitee_path) return `Gitee：${meta.gitee_path}`
+  if (meta?.status === 'archived') {
+    return `已同步 Gitee：${meta.gitee_path || meta.target_repo || 'experiences'}${meta.integrity_verified === true ? ' · 回读校验通过' : ''}`
+  }
+  if (meta?.status === 'local_only') {
+    return `仅本地保存，尚未确认远端同步：${meta.local_root || meta.gitee_path || '本地归档目录'}`
+  }
+  if (meta?.status === 'failed') return `归档失败：${meta.reason || meta.next_action || '请检查配置后重试'}`
+  if (meta?.gitee_path) return `归档路径：${meta.gitee_path}`
   if (meta?.local_root) return `本地落盘：${meta.local_root}`
   return node.archive_hint || '任务确认后可归档'
 }
