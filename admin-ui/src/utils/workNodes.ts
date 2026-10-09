@@ -282,8 +282,9 @@ export function buildWorkNodes(input: {
       const taskId = normalize(task.task_id) || `task:${memberId}:${normalize(task.assigned_at)}`
       const taskStatus = normalize(task.status)
       const experienceCards = matchExperienceCards(member, task)
-      const journalCompiled = Boolean(member?.experience_journal?.last_compiled_at)
-      const archived = taskStatus === 'approved' && journalCompiled
+      const archiveMeta = task.work_node_archive
+      const archiveStatus = normalize(archiveMeta?.status)
+      const archived = ['archived', 'exported', 'local_only'].includes(archiveStatus)
       const status = archived ? 'archived' : mapTaskStatus(taskStatus)
 
       const phases = buildPhases({
@@ -312,9 +313,10 @@ export function buildWorkNodes(input: {
         updated_at: task.approved_at || task.submitted_at || task.assigned_at || null,
         phases,
         experience_cards: experienceCards,
-        archive_hint: archived
-          ? '可在 Gitee experiences 仓库按节点路径查看归档（M2 起自动写入）'
-          : '任务确认并沉淀经验后可归档',
+        archive: archiveMeta || undefined,
+        archive_hint: archiveMeta?.gitee_path || archiveMeta?.local_root || (archived
+          ? '已完成归档，但当前记录未提供可展示的路径'
+          : '任务确认并沉淀经验后可归档'),
         member_link: `/organization/child/${encodeURIComponent(memberId)}/workspace`,
         trainer_link: `/organization/trainer/talent_development_officer/workspace?mode=dispatch&member=${encodeURIComponent(memberId)}`,
       } satisfies WorkNode
