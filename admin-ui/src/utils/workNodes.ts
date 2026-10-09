@@ -44,6 +44,7 @@ export type WorkNodeArchiveMeta = {
   local_root?: string
   target_repo?: string
   target_url?: string
+  branch?: string
   files?: string[]
   verified_files?: string[]
   remote_uploaded_files?: string[]
