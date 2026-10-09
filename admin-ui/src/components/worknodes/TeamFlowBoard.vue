@@ -26,14 +26,15 @@
             v-for="member in visibleMembers"
             :key="member.id"
             type="button"
-            class="group min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-3 text-left transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-sm"
+            class="team-member-card group min-w-0 rounded-2xl border border-slate-200 bg-white px-3 py-4 text-left transition hover:-translate-y-1 hover:border-teal-300 hover:shadow-lg"
             @click="openMember(member)"
           >
-            <div class="flex items-center gap-2">
-              <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{{ initials(member.name) }}</span>
-              <span class="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">{{ member.name }}</span>
+            <div class="flex flex-col items-center gap-2 text-center">
+              <WorkerAvatar :name="member.name" :role="member.role" :level="member.level" />
+              <span class="max-w-full truncate text-sm font-semibold text-slate-900">{{ member.name }}</span>
             </div>
-            <div class="mt-2 truncate text-[11px] text-slate-500">{{ member.role }}</div>
+            <div class="mt-1 truncate text-[11px] text-slate-500">{{ member.role }}</div>
+            <div class="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ member.taskCount ? '关联任务 ' + member.taskCount : '待命中' }}</div>
             <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
               <div class="h-full rounded-full bg-teal-600" :style="{ width: member.load + '%' }"></div>
             </div>
@@ -89,6 +90,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { WorkNode } from '../../utils/workNodes'
+import WorkerAvatar from './WorkerAvatar.vue'
 
 type MemberInput = {
   member_id?: string
@@ -118,6 +120,7 @@ const normalizedMembers = computed(() => props.members
       name: String(item.name || item.display_name || id || '未命名成员'),
       role: String(item.primary_role || item.role || '岗位成员'),
       taskCount: tasks.length,
+      level: Math.max(1, Math.min(20, Number((item as any).growth_state?.level || 1))),
       load: tasks.length ? Math.min(100, Math.max(18, tasks.filter((n) => n.status === 'running').length * 35)) : 8,
     }
   }).filter((item) => item.id))
@@ -138,9 +141,6 @@ function openNode(node: WorkNode) {
 }
 function openMember(member: { id: string }) {
   emit('select-member', member.id)
-}
-function initials(value: string) {
-  return value.trim().slice(0, 2) || '员'
 }
 function statusLabel(status: unknown) {
   const value = String(status || '')
@@ -170,3 +170,8 @@ function formatDate(value: unknown) {
   return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 </script>
+
+<style scoped>
+.team-member-card { background: linear-gradient(180deg, #fff 0%, #fbfcff 100%); }
+.team-member-card:hover { box-shadow: 0 12px 28px -18px rgba(26,54,75,.35); }
+</style>
