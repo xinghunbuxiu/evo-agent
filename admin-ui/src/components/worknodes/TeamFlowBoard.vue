@@ -13,7 +13,8 @@
       </div>
     </div>
 
-    <div class="mt-5 overflow-x-auto pb-2">
+    <div class="mt-5 grid gap-4" :class="selectedMember ? 'xl:grid-cols-[minmax(0,1fr)_minmax(320px,400px)] xl:items-start' : 'grid-cols-1'">
+      <div class="min-w-0 overflow-x-auto pb-2">
       <div class="min-w-0">
         <div class="mx-auto max-w-xs rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
           <div class="text-[10px] font-medium uppercase tracking-wider text-slate-400">协调与验收</div>
@@ -51,10 +52,9 @@
           </div>
         </div>
       </div>
-    </div>
+      </div>
 
-
-    <section v-if="selectedMember && selectedMemberCard" class="mt-4 overflow-hidden rounded-2xl border border-teal-200 bg-gradient-to-br from-white via-white to-teal-50/70 shadow-sm">
+    <section v-if="selectedMember && selectedMemberCard" class="min-w-0 overflow-hidden rounded-2xl border border-teal-200 bg-gradient-to-br from-white via-white to-teal-50/70 shadow-sm xl:sticky xl:top-4">
       <div class="flex flex-wrap items-start gap-4 border-b border-teal-100 px-4 py-4 sm:px-5">
         <WorkerAvatar :name="selectedMemberCard.name" :role="selectedMemberCard.role" :level="selectedMemberCard.level" />
         <div class="min-w-0 flex-1">
@@ -109,6 +109,7 @@
         </div>
       </div>
     </section>
+    </div>
     <div class="mt-4 grid gap-3 lg:grid-cols-3">
       <div v-for="column in columns" :key="column.key" class="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
         <div class="mb-3 flex items-center justify-between gap-2">
