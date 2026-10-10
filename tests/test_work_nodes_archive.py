@@ -1,0 +1,81 @@
+"""Regression tests for work-node archive snapshot primitives.
+
+Run from the repository root with:
+    python -m unittest discover -s tests -p 'test_work_nodes_archive.py'
+"""
+import hashlib
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from admin.work_nodes_runtime import (  # noqa: E402
+    _write_local_node_archive,
+    attach_archive_to_task,
+    work_node_storage_prefix,
+)
+
+
+class LocalArchiveSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.workspace = Path(self.temp_dir.name)
+        self.prefix = work_node_storage_prefix("tenant-a", "design", "member-1", "task-1")
+
+    def test_storage_prefix_sanitizes_each_path_segment(self):
+        prefix = work_node_storage_prefix("tenant/a", "design role", "member:1", "task/1")
+        self.assertEqual(
+            prefix,
+            "tenants/tenant/a/work_types/design_role/members/member_1/nodes/task_1",
+        )
+
+    def test_snapshot_round_trips_utf8_and_reports_verified_files(self):
+        files = {
+            "manifest.json": json.dumps({"title": "户型设计"}, ensure_ascii=False),
+            "phases/approved.json": '{"status":"done"}',
+        }
+        result = _write_local_node_archive(self.workspace, self.prefix, files)
+        base = Path(result["local_root"])
+
+        self.assertEqual(result["status"], "local_only")
+        self.assertTrue(result["integrity_verified"])
+        self.assertEqual(set(result["verified_files"]), set(files))
+        for rel_path, expected in files.items():
+            self.assertEqual((base / rel_path).read_text(encoding="utf-8"), expected)
+
+    def test_snapshot_removes_stale_files_from_previous_version(self):
+        _write_local_node_archive(
+            self.workspace, self.prefix,
+            {"manifest.json": "v1", "phases/obsolete.json": "old"},
+        )
+        result = _write_local_node_archive(
+            self.workspace, self.prefix, {"manifest.json": "v2"},
+        )
+        base = Path(result["local_root"])
+        self.assertEqual((base / "manifest.json").read_text(encoding="utf-8"), "v2")
+        self.assertFalse((base / "phases/obsolete.json").exists())
+        self.assertEqual(result["files"], [f"{self.prefix}/manifest.json"])
+
+    def test_attach_archive_updates_only_matching_task(self):
+        runtime = {"task_center": {"items": [
+            {"task_id": "task-1", "status": "approved"},
+            {"task_id": "task-2", "status": "approved"},
+        ]}}
+        metadata = {"status": "local_only", "integrity_verified": True}
+        self.assertTrue(attach_archive_to_task(runtime, "task-1", metadata))
+        self.assertEqual(runtime["task_center"]["items"][0]["work_node_archive"], metadata)
+        self.assertNotIn("work_node_archive", runtime["task_center"]["items"][1])
+
+    def test_integrity_manifest_uses_sha256_utf8_bytes(self):
+        payload = "中文内容"
+        expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self.assertEqual(len(expected), 64)
+        self.assertEqual(expected, hashlib.sha256(payload.encode()).hexdigest())
+
+
+if __name__ == "__main__":
+    unittest.main()
