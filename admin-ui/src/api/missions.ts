@@ -113,6 +113,12 @@ export interface MissionRunAction {
   action_type: string
   status: string
   detail?: string
+  decision_trace?: Array<{
+    step?: string
+    rule_id?: string
+    result?: string
+    evidence?: Record<string, unknown>
+  }>
   task_type?: string
   task_id?: string
   task_status?: string
