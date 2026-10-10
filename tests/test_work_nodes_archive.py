@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from admin.work_nodes_runtime import (  # noqa: E402
     _write_local_node_archive,
     attach_archive_to_task,
+    retry_local_work_node_archive,
     work_node_storage_prefix,
 )
 
@@ -30,7 +31,7 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         prefix = work_node_storage_prefix("tenant/a", "design role", "member:1", "task/1")
         self.assertEqual(
             prefix,
-            "tenants/tenant/a/work_types/design_role/members/member_1/nodes/task_1",
+            "tenants/tenant_a/work_types/design_role/members/member_1/nodes/task_1",
         )
 
     def test_snapshot_round_trips_utf8_and_reports_verified_files(self):
@@ -69,6 +70,73 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertTrue(attach_archive_to_task(runtime, "task-1", metadata))
         self.assertEqual(runtime["task_center"]["items"][0]["work_node_archive"], metadata)
         self.assertNotIn("work_node_archive", runtime["task_center"]["items"][1])
+
+
+    def _write_retry_snapshot(self, files):
+        import hashlib
+        import json
+        base = self.workspace / ".admin" / "local_git_exports" / self.prefix
+        base.mkdir(parents=True, exist_ok=True)
+        hashes = {}
+        for rel_path, content in files.items():
+            target = base / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            hashes[rel_path] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        (base / "archive.integrity.json").write_text(
+            json.dumps({"algorithm": "sha256", "files": hashes}),
+            encoding="utf-8",
+        )
+        return base
+
+    def _retry(self):
+        import asyncio
+        import os
+        from unittest.mock import patch
+        from admin import work_nodes_runtime as archive_module
+
+        runtime = {"task_center": {"items": [{"task_id": "task-1", "status": "approved"}]}}
+        node = {"task_id": "task-1", "node_id": "node:task-1", "work_type_id": "design", "member_id": "member-1"}
+        with patch.object(archive_module, "build_work_nodes_from_runtime", return_value=[node]), patch.dict(os.environ, {"GITEE_TOKEN": ""}):
+            return asyncio.run(archive_module.retry_local_work_node_archive(
+                workspace=self.workspace,
+                tenant_id="tenant-a",
+                runtime=runtime,
+                task_id="task-1",
+                get_user_gitee_token=lambda request: None,
+                tenant_manager=None,
+                config=None,
+                get_git_provider_instance=lambda *args: None,
+                get_tenant_git_repo=lambda *args: (None, None),
+                request=object(),
+            ))
+
+    def test_retry_rejects_missing_integrity_manifest_before_remote_access(self):
+        result = self._retry()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("archive.integrity.json missing", result["reason"])
+        self.assertFalse(result["integrity_verified"])
+
+    def test_retry_rejects_hash_mismatch_before_remote_access(self):
+        import json
+        base = self.workspace / ".admin" / "local_git_exports" / self.prefix
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "manifest.json").write_text("tampered", encoding="utf-8")
+        (base / "archive.integrity.json").write_text(
+            json.dumps({"algorithm": "sha256", "files": {"manifest.json": "0" * 64}}),
+            encoding="utf-8",
+        )
+        result = self._retry()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("archive hash mismatch", result["reason"])
+        self.assertFalse(result["integrity_verified"])
+
+    def test_retry_keeps_valid_snapshot_when_gitee_token_is_missing(self):
+        self._write_retry_snapshot({"manifest.json": "{}", "skills.json": "[]"})
+        result = self._retry()
+        self.assertEqual(result["status"], "local_only")
+        self.assertEqual(result["reason"], "missing_gitee_token")
+        self.assertTrue(result["integrity_verified"])
 
     def test_integrity_manifest_uses_sha256_utf8_bytes(self):
         payload = "中文内容"
