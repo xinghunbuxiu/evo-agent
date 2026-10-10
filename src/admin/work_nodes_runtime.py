@@ -601,6 +601,8 @@ async def retry_local_work_node_archive(
         if integrity.get("algorithm") != "sha256" or not isinstance(integrity.get("files"), dict):
             raise ValueError("unsupported or malformed integrity manifest")
         expected_hashes = integrity["files"]
+        if not expected_hashes:
+            raise ValueError("integrity manifest contains no files")
         if "archive.integrity.json" in expected_hashes:
             raise ValueError("integrity manifest must not hash itself")
         files: dict[str, str] = {}
@@ -608,6 +610,8 @@ async def retry_local_work_node_archive(
             rel = Path(str(rel_path))
             if rel.is_absolute() or ".." in rel.parts or not rel.parts or rel.as_posix() != str(rel_path):
                 raise ValueError(f"invalid archive path: {rel_path}")
+            if not isinstance(expected_hash, str) or re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None:
+                raise ValueError(f"invalid SHA-256 digest: {rel_path}")
             target = base / rel
             # Do not follow symlinks inside the archive root.
             if base.is_symlink() or any((base / Path(*rel.parts[:index])).is_symlink() for index in range(1, len(rel.parts) + 1)):
