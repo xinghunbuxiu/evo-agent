@@ -347,7 +347,7 @@ def work_node_storage_prefix(tenant_id: str, work_type_id: str, member_id: str, 
     safe_task = _sanitize_path_segment(task_id)
     safe_wt = _sanitize_path_segment(work_type_id)
     safe_member = _sanitize_path_segment(member_id)
-    return f"tenants/{tenant_id}/work_types/{safe_wt}/members/{safe_member}/nodes/{safe_task}"
+    return f"tenants/{_sanitize_path_segment(tenant_id)}/work_types/{safe_wt}/members/{safe_member}/nodes/{safe_task}"
 
 
 def _write_local_node_archive(workspace: Path, prefix: str, files: dict[str, str]) -> dict:
