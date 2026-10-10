@@ -229,7 +229,7 @@ def build_work_nodes_from_runtime(
         task_status = _normalize(task.get("status"))
         experience_cards = _match_experience_cards(member, task)
         archive_meta = task.get("work_node_archive") if isinstance(task.get("work_node_archive"), dict) else {}
-        archived = _normalize(archive_meta.get("status")) in {"archived", "exported", "local_only"}
+        archived = _normalize(archive_meta.get("status")) in {"archived", "exported"}
         if archived:
             status = "archived"
         elif task_status == "approved":
