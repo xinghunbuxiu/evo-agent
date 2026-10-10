@@ -366,7 +366,7 @@
                         class="break-all text-[11px] text-teal-800"
                       >
                         <span class="text-teal-600">{{ art.kind || 'file' }}</span>
-                        · {{ art.path || art.meta?.text || art.label || '--' }}
+                        · {{ artifactDisplayText(art) }}
                       </li>
                     </ul>
                   </div>
@@ -1010,6 +1010,13 @@ const currentTaskArtifacts = computed(() => {
   if (!Array.isArray(raw)) return [] as Array<Record<string, unknown>>
   return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
 })
+
+const artifactDisplayText = (artifact: Record<string, unknown>) => {
+  const meta = artifact.meta && typeof artifact.meta === 'object'
+    ? artifact.meta as Record<string, unknown>
+    : {}
+  return String(artifact.path || meta.text || artifact.label || '--')
+}
 
 const currentTaskCommercialLabel = computed(() => {
   const task = activeOpenTask.value || currentTask.value
