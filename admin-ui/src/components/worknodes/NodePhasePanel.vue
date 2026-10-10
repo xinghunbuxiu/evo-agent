@@ -130,7 +130,7 @@ const runRetryArchive = async () => {
     const result = await retryWorkNodeArchive(props.node.task_id, {
       tenant_id: consoleCtx?.tenantId.value || 'default',
     })
-    archiveSuccess.value = result.archive?.status === 'archived'
+    archiveSuccess.value = result.data?.archive?.status === 'archived'
     archiveMessage.value = result.message || result.archive?.next_action || '同步完成'
     await consoleCtx?.refreshOverview()
   } catch (error) {
