@@ -2,6 +2,7 @@
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -136,7 +137,7 @@ class MissionStartOrchestrationTests(unittest.TestCase):
             error_response=lambda message, status: {"error": message, "status": status},
         )
         with (
-            unittest.mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": []}),
+            mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": []}),
             unittest.mock.patch.object(mission_runtime, "save_mission_runs"),
         ):
             latest, error = start({
