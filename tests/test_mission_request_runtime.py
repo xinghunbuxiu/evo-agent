@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.mission_request_runtime import prepare_mission_work_type_bundle  # noqa: E402
+from admin import mission_runtime  # noqa: E402
 
 
 class MissionRequestRuntimeTests(unittest.TestCase):
@@ -98,6 +99,86 @@ class MissionRequestRuntimeTests(unittest.TestCase):
         self.assertEqual(bundle["runtime_route"]["capability_ids"], ["vision", "geometry"])
         self.assertEqual(bundle["runtime_route"]["primary_capability_id"], "vision")
         self.assertEqual(bundle["runtime_route"]["execution_preference"], "capability_package")
+
+
+class MissionStartOrchestrationTests(unittest.TestCase):
+    def test_start_passes_resolved_goal_context_and_dispatch_route_to_planner(self):
+        calls = {}
+        plan = {"title": "planned mission", "nodes": [{"id": "understand"}, {"id": "execute"}]}
+
+        class Planner:
+            def plan(self, **kwargs):
+                calls["planner"] = kwargs
+                return dict(plan)
+
+        prepared = {
+            "goal": "识别户型图并检查门窗墙体",
+            "mission_kind": "floorplan_review",
+            "context": {"runtime_primary_worker_id": "floorplan_worker"},
+            "work_type_validation": {"valid": True, "missing_inputs": []},
+            "work_type": {"work_type_id": "floorplan"},
+            "work_type_summary": {"deliverables": ["validated_floorplan"]},
+            "runtime_route": {"primary_worker_id": "floorplan_worker", "worker_ids": ["floorplan_worker"]},
+        }
+        start = mission_runtime.create_start_mission(
+            workspace=Path("."),
+            task_queue=object(),
+            tenant_manager=object(),
+            prepare_mission_work_type_bundle=lambda **kwargs: prepared,
+            mission_planner=Planner(),
+            upsert_plan_learning_tasks=lambda **kwargs: ["learning-1"],
+            build_mission_run=lambda **kwargs: {
+                "mission_run_id": "mission-test",
+                "plan": kwargs["plan"],
+                "context": kwargs["context"],
+            },
+            refresh_mission_runs_fn=lambda **kwargs: {"items": []},
+            error_response=lambda message, status: {"error": message, "status": status},
+        )
+        with (
+            unittest.mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": []}),
+            unittest.mock.patch.object(mission_runtime, "save_mission_runs"),
+        ):
+            latest, error = start({
+                "goal": "  帮我看看户型图  ",
+                "tenant_id": "tenant-a",
+                "work_type_id": "floorplan",
+                "context": {"image_path": "/tmp/floorplan.png"},
+            }, refresh_runs=False)
+
+        self.assertIsNone(error)
+        self.assertEqual(calls["planner"]["tenant_id"], "tenant-a")
+        self.assertEqual(calls["planner"]["goal"], "识别户型图并检查门窗墙体")
+        self.assertEqual(calls["planner"]["mission_kind"], "floorplan_review")
+        self.assertEqual(calls["planner"]["context"]["runtime_primary_worker_id"], "floorplan_worker")
+        self.assertEqual(latest["plan"]["runtime_route"]["primary_worker_id"], "floorplan_worker")
+        self.assertEqual(latest["plan"]["learning_task_ids"], ["learning-1"])
+
+    def test_blank_goal_is_rejected_before_planner_or_task_creation(self):
+        calls = {"planner": 0, "learning": 0}
+
+        class Planner:
+            def plan(self, **kwargs):
+                calls["planner"] += 1
+                return {}
+
+        start = mission_runtime.create_start_mission(
+            workspace=Path("."),
+            task_queue=object(),
+            tenant_manager=object(),
+            prepare_mission_work_type_bundle=lambda **kwargs: {
+                "goal": " ", "mission_kind": None, "context": {}, "work_type_validation": {}
+            },
+            mission_planner=Planner(),
+            upsert_plan_learning_tasks=lambda **kwargs: calls.__setitem__("learning", calls["learning"] + 1) or [],
+            build_mission_run=lambda **kwargs: self.fail("mission must not be built"),
+            refresh_mission_runs_fn=lambda **kwargs: self.fail("refresh must not run"),
+            error_response=lambda message, status: {"error": message, "status": status},
+        )
+        latest, error = start({"goal": "  "}, refresh_runs=False)
+        self.assertIsNone(latest)
+        self.assertEqual(error, {"error": "goal 不能为空", "status": 400})
+        self.assertEqual(calls, {"planner": 0, "learning": 0})
 
 
 if __name__ == "__main__":
