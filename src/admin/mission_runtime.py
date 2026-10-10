@@ -271,6 +271,12 @@ def refresh_mission_runs(
             if error is not None or not isinstance(latest, dict):
                 current["auto_continue_status"] = "failed"
                 current["auto_continue_error"] = "自动续跑启动失败"
+                if isinstance(error, dict):
+                    detail = str(error.get("error") or error.get("message") or "").strip()
+                else:
+                    detail = str(error or "").strip()
+                if detail:
+                    current["auto_continue_error_detail"] = detail[:500]
                 continue
             current["auto_continue_triggered_at"] = datetime.now().isoformat()
             current["auto_continue_triggered_run_id"] = latest.get("mission_run_id")
