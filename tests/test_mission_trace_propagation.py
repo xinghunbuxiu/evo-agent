@@ -186,6 +186,62 @@ class MissionTracePropagationTests(unittest.TestCase):
         source = state["items"][0]
         self.assertEqual(source["auto_continue_status"], "failed")
         self.assertEqual(source["auto_continue_error"], "自动续跑启动失败")
+        self.assertEqual(source["auto_continue_error_detail"], "boom")
+
+    def test_repeated_refresh_does_not_spawn_duplicate_follow_up(self):
+        source = {
+            "mission_run_id": "run-source",
+            "tenant_id": "tenant-a",
+            "status": "completed",
+            "context": {"auto_continue": True, "autonomy_cycle": 1, "max_autonomy_cycles": 3},
+            "summary": {"next_cycle_plan": {"status": "ready", "next_steps": ["continue"]}},
+        }
+        persisted = {"items": [source]}
+        calls = []
+
+        def load_state(workspace):
+            return {"items": list(persisted["items"])}
+
+        def save_state(workspace, payload):
+            persisted["items"] = payload["items"]
+
+        def starter(payload, *, refresh_runs):
+            calls.append(payload)
+            return {
+                "mission_run_id": "run-next",
+                "context": payload["context"],
+                "status": "planning_only",
+            }, None
+
+        def refresh(**kwargs):
+            return kwargs["mission_run"]
+
+        with (
+            mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state),
+            mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state),
+        ):
+            first = mission_runtime.refresh_mission_runs(
+                workspace=Path("."),
+                task_queue=object(),
+                tenant_manager=object(),
+                refresh_runtime_learning_tasks=lambda **kwargs: None,
+                refresh_mission_run=refresh,
+                mission_starter=starter,
+            )
+            second = mission_runtime.refresh_mission_runs(
+                workspace=Path("."),
+                task_queue=object(),
+                tenant_manager=object(),
+                refresh_runtime_learning_tasks=lambda **kwargs: None,
+                refresh_mission_run=refresh,
+                mission_starter=starter,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first["items"][0]["mission_run_id"], "run-next")
+        source_after = next(item for item in second["items"] if item["mission_run_id"] == "run-source")
+        self.assertEqual(source_after["auto_continue_triggered_run_id"], "run-next")
+        self.assertEqual(source_after["auto_continue_status"], "triggered")
 
 
 if __name__ == "__main__":
