@@ -295,7 +295,7 @@ export function buildWorkNodes(input: {
       const experienceCards = matchExperienceCards(member, task)
       const archiveMeta = task.work_node_archive
       const archiveStatus = normalize(archiveMeta?.status)
-      const archived = ['archived', 'exported', 'local_only'].includes(archiveStatus)
+      const archived = ['archived', 'exported'].includes(archiveStatus)
       const status = archived ? 'archived' : mapTaskStatus(taskStatus)
 
       const phases = buildPhases({
