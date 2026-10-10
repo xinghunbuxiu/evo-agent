@@ -129,8 +129,14 @@ class MissionTracePropagationTests(unittest.TestCase):
             captured["refresh_runs"] = refresh_runs
             return spawned, None
 
-        with mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": [current]}), \\
-             mock.patch.object(mission_runtime, "save_mission_runs") as save:
+        persisted = {"items": [current]}
+        def load_state(workspace):
+            return persisted
+        def save_state(workspace, payload):
+            persisted.update(payload)
+
+        with mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state), \\
+             mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state) as save:
             state = mission_runtime.refresh_mission_runs(
                 workspace=Path("."),
                 task_queue=object(),
@@ -156,8 +162,14 @@ class MissionTracePropagationTests(unittest.TestCase):
             "context": {"auto_continue": True, "autonomy_cycle": 1, "max_autonomy_cycles": 3},
             "summary": {"next_cycle_plan": {"status": "ready"}},
         }
-        with mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": [current]}), \\
-             mock.patch.object(mission_runtime, "save_mission_runs"):
+        persisted = {"items": [current]}
+        def load_state(workspace):
+            return persisted
+        def save_state(workspace, payload):
+            persisted.update(payload)
+
+        with mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state), \\
+             mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state):
             state = mission_runtime.refresh_mission_runs(
                 workspace=Path("."),
                 task_queue=object(),
