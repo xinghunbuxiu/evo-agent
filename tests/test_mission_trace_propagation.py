@@ -135,8 +135,10 @@ class MissionTracePropagationTests(unittest.TestCase):
         def save_state(workspace, payload):
             persisted.update(payload)
 
-        with mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state), \\
-             mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state) as save:
+        with (
+            mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state),
+            mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state) as save,
+        ):
             state = mission_runtime.refresh_mission_runs(
                 workspace=Path("."),
                 task_queue=object(),
@@ -168,8 +170,10 @@ class MissionTracePropagationTests(unittest.TestCase):
         def save_state(workspace, payload):
             persisted.update(payload)
 
-        with mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state), \\
-             mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state):
+        with (
+            mock.patch.object(mission_runtime, "load_mission_runs", side_effect=load_state),
+            mock.patch.object(mission_runtime, "save_mission_runs", side_effect=save_state),
+        ):
             state = mission_runtime.refresh_mission_runs(
                 workspace=Path("."),
                 task_queue=object(),
