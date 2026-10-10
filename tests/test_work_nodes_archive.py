@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from admin.work_nodes_runtime import (  # noqa: E402
     _write_local_node_archive,
     attach_archive_to_task,
-    retry_local_work_node_archive,
     work_node_storage_prefix,
 )
 
@@ -73,8 +72,6 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
 
 
     def _write_retry_snapshot(self, files):
-        import hashlib
-        import json
         base = self.workspace / ".admin" / "local_git_exports" / self.prefix
         base.mkdir(parents=True, exist_ok=True)
         hashes = {}
@@ -118,7 +115,6 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertFalse(result["integrity_verified"])
 
     def test_retry_rejects_hash_mismatch_before_remote_access(self):
-        import json
         base = self.workspace / ".admin" / "local_git_exports" / self.prefix
         base.mkdir(parents=True, exist_ok=True)
         (base / "manifest.json").write_text("tampered", encoding="utf-8")
