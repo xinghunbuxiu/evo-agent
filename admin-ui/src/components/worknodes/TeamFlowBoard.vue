@@ -96,7 +96,7 @@
         <div>
           <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">经验与成长</h4>
           <div v-if="selectedMember.experience_journal?.cards?.length" class="mt-3 space-y-2">
-            <article v-for="card in selectedMember.experience_journal.cards.slice(0, 4)" :key="card.card_id || card.title" class="rounded-xl border border-teal-100 bg-white p-3">
+            <article v-for="(card, index) in selectedMember.experience_journal.cards.slice(0, 4)" :key="card.card_id || card.title || index class="rounded-xl border border-teal-100 bg-white p-3">
               <div class="text-sm font-medium text-slate-800">{{ card.title || '经验记录' }}</div>
               <p v-if="card.summary" class="mt-1 text-xs leading-5 text-slate-600">{{ card.summary }}</p>
               <p v-if="card.current_pattern" class="mt-2 rounded-lg bg-teal-50 px-2.5 py-2 text-xs leading-5 text-teal-900">可复用方法：{{ card.current_pattern }}</p>
