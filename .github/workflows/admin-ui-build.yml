@@ -1,0 +1,40 @@
+name: Admin UI Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "admin-ui/**"
+      - ".github/workflows/admin-ui-build.yml"
+  pull_request:
+    paths:
+      - "admin-ui/**"
+      - ".github/workflows/admin-ui-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-ui-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check and build
+        run: npm run build
