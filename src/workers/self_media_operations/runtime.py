@@ -66,6 +66,7 @@ def handle_self_media_operation_mission_node(
             "account_id": resolved_context.get("account_id") or "default",
             "_mission_run_id": mission_run_id,
             "_mission_node_id": node_id,
+            "_mission_decision_trace": node.get("decision_trace", []),
             "_mission_kind": plan.get("mission_kind"),
             "_goal": plan.get("goal"),
             "_role_reflection_context": role_reflection_context,
