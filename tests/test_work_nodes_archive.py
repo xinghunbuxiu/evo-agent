@@ -114,6 +114,26 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertIn("archive.integrity.json missing", result["reason"])
         self.assertFalse(result["integrity_verified"])
 
+    def test_retry_rejects_empty_integrity_manifest_before_remote_access(self):
+        self._write_retry_snapshot({})
+        result = self._retry()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("integrity manifest contains no files", result["reason"])
+        self.assertFalse(result["integrity_verified"])
+
+    def test_retry_rejects_malformed_sha256_digest_before_remote_access(self):
+        base = self.workspace / ".admin" / "local_git_exports" / self.prefix
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "manifest.json").write_text("{}", encoding="utf-8")
+        (base / "archive.integrity.json").write_text(
+            json.dumps({"algorithm": "sha256", "files": {"manifest.json": "not-a-sha256"}}),
+            encoding="utf-8",
+        )
+        result = self._retry()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("invalid SHA-256 digest", result["reason"])
+        self.assertFalse(result["integrity_verified"])
+
     def test_retry_rejects_hash_mismatch_before_remote_access(self):
         base = self.workspace / ".admin" / "local_git_exports" / self.prefix
         base.mkdir(parents=True, exist_ok=True)
