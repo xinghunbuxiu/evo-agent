@@ -59,6 +59,50 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(latest["plan"]["nodes"][0]["decision_trace"], trace)
         self.assertEqual(latest["plan"]["nodes"][0]["decision_trace"][0]["rule_id"], "mission.required_inputs.v1")
 
+    def test_follow_up_context_preserves_run_lineage_without_mutating_source(self):
+        source_context = {
+            "autonomy_cycle": 1,
+            "nested": {"keep": True},
+            "runtime_primary_worker_id": "worker-a",
+        }
+        source = {
+            "mission_run_id": "run-previous",
+            "root_mission_run_id": "run-root",
+            "autonomy_session_id": "session-1",
+            "context": source_context,
+            "runtime_route": {"primary_worker_id": "worker-a"},
+            "summary": {"next_cycle_plan": {
+                "next_steps": ["inspect failed step", "retry with evidence"],
+                "focus_points": ["dispatch trace"],
+            }},
+        }
+
+        context = mission_runtime.derive_follow_up_context(source)
+
+        self.assertEqual(context["previous_mission_run_id"], "run-previous")
+        self.assertEqual(context["root_mission_run_id"], "run-root")
+        self.assertEqual(context["autonomy_session_id"], "session-1")
+        self.assertEqual(context["autonomy_cycle"], 2)
+        self.assertEqual(context["deliverable_goal"], "inspect failed step；retry with evidence")
+        self.assertEqual(context["goal_hint"], "dispatch trace")
+        self.assertNotIn("previous_mission_run_id", source_context)
+        context["nested"]["keep"] = False
+        self.assertTrue(source_context["nested"]["keep"])
+
+    def test_auto_continue_is_blocked_after_a_source_run_has_triggered_follow_up(self):
+        base = {
+            "status": "completed",
+            "context": {"auto_continue": True, "autonomy_cycle": 1, "max_autonomy_cycles": 3},
+            "summary": {"next_cycle_plan": {"status": "ready"}},
+        }
+        self.assertTrue(mission_runtime.should_auto_continue_mission(base))
+        self.assertFalse(mission_runtime.should_auto_continue_mission({
+            **base, "auto_continue_source_mission_run_id": "run-source"
+        }))
+        self.assertFalse(mission_runtime.should_auto_continue_mission({
+            **base, "auto_continue_triggered_run_id": "run-next"
+        }))
+
 
 if __name__ == "__main__":
     unittest.main()
