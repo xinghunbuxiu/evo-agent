@@ -105,7 +105,7 @@ class MissionRequestRuntimeTests(unittest.TestCase):
 class MissionStartOrchestrationTests(unittest.TestCase):
     def test_start_passes_resolved_goal_context_and_dispatch_route_to_planner(self):
         calls = {}
-        plan = {"title": "planned mission", "nodes": [{"id": "understand"}, {"id": "execute"}]}
+        plan = {"title": "planned mission", "nodes": [{"id": "understand", "decision_trace": [{"step": "status_decision", "rule_id": "mission.status.capability_gap.v1", "result": "needs_learning", "evidence": {"gap_type": "capability_gap"}}]}, {"id": "execute", "decision_trace": []}]}
 
         class Planner:
             def plan(self, **kwargs):
@@ -151,6 +151,10 @@ class MissionStartOrchestrationTests(unittest.TestCase):
         self.assertEqual(calls["planner"]["tenant_id"], "tenant-a")
         self.assertEqual(calls["planner"]["goal"], "识别户型图并检查门窗墙体")
         self.assertEqual(calls["planner"]["mission_kind"], "floorplan_review")
+        self.assertEqual(
+            latest["plan"]["nodes"][0]["decision_trace"][0]["rule_id"],
+            "mission.status.capability_gap.v1",
+        )
         self.assertEqual(calls["planner"]["context"]["runtime_primary_worker_id"], "floorplan_worker")
         self.assertEqual(latest["plan"]["runtime_route"]["primary_worker_id"], "floorplan_worker")
         self.assertEqual(latest["plan"]["learning_task_ids"], ["learning-1"])
