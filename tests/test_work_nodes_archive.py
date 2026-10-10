@@ -134,6 +134,22 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertIn("invalid SHA-256 digest", result["reason"])
         self.assertFalse(result["integrity_verified"])
 
+    def test_retry_rejects_symlinked_archive_file_before_remote_access(self):
+        base = self.workspace / ".admin" / "local_git_exports" / self.prefix
+        base.mkdir(parents=True, exist_ok=True)
+        outside = self.workspace / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        (base / "manifest.json").symlink_to(outside)
+        digest = hashlib.sha256(b"{}").hexdigest()
+        (base / "archive.integrity.json").write_text(
+            json.dumps({"algorithm": "sha256", "files": {"manifest.json": digest}}),
+            encoding="utf-8",
+        )
+        result = self._retry()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("symlink in archive path", result["reason"])
+        self.assertFalse(result["integrity_verified"])
+
     def test_retry_rejects_hash_mismatch_before_remote_access(self):
         base = self.workspace / ".admin" / "local_git_exports" / self.prefix
         base.mkdir(parents=True, exist_ok=True)
