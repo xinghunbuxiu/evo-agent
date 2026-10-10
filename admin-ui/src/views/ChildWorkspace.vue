@@ -924,8 +924,7 @@ const selectedMember = computed<ChildMemberRuntimeProfile | null>(() => (
 
 const experienceCards = computed(() => {
   const cards = selectedMember.value?.experience_journal?.cards
-  if (!Array.isArray(cards)) return [] as Array<Record<string, unknown>>
-  return cards.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+  return Array.isArray(cards) ? cards : []
 })
 
 const workNodeDashboardTo = computed(() => {
