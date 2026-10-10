@@ -179,7 +179,7 @@ type MemberInput = {
   role?: string
   persona?: { role_label?: string }
   status?: string
-  growth_state?: { commercial_settled_count?: number; phase?: string; current_focus?: string; next_goal?: string; pending_git_export?: boolean; pending_git_export_reason?: string; last_git_export_at?: string | null; last_git_export_status?: string | null; last_git_export_path?: string | null }
+  growth_state?: { commercial_settled_count?: number; phase?: string; current_focus?: string; next_goal?: string; pending_git_export?: boolean; pending_git_export_reason?: string | null; last_git_export_at?: string | null; last_git_export_status?: string | null; last_git_export_path?: string | null }
   experience_journal?: {
     card_count?: number
     last_compiled_at?: string | null
