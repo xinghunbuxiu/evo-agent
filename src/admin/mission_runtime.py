@@ -3,6 +3,7 @@ Mission 运行态持久化、续跑与启动组装。
 """
 
 from admin.worker_route_runtime import worker_supports_mission_follow_up
+import copy
 import json
 from datetime import datetime
 from pathlib import Path
