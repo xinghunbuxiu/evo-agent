@@ -625,10 +625,20 @@ async def retry_local_work_node_archive(
             "integrity_verified": False,
         }
 
-    token = get_user_gitee_token(request) if request is not None else None
+    try:
+        token = get_user_gitee_token(request) if request is not None else None
+    except Exception as exc:
+        return {
+            "status": "local_only",
+            "reason": f"gitee_token_lookup_failed: {type(exc).__name__}: {exc}",
+            "gitee_path": prefix,
+            "local_root": str(base),
+            "next_action": "本地快照已通过校验，但读取 Gitee 凭据失败；检查登录态或令牌配置后重试",
+            "integrity_verified": True,
+        }
     token = token or os.getenv("GITEE_TOKEN")
     if not token or token == "your_real_token_here":
-        return {"status": "failed", "reason": "missing_gitee_token", "local_root": str(base),
+        return {"status": "local_only", "reason": "missing_gitee_token", "gitee_path": prefix, "local_root": str(base),
                 "next_action": "本地快照已通过校验；配置 GITEE_TOKEN 后重试", "integrity_verified": True}
     try:
         git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
@@ -642,13 +652,15 @@ async def retry_local_work_node_archive(
         if not target_repo:
             return {"status": "failed", "reason": "missing_git_repo", "local_root": str(base),
                     "next_action": "本地快照已通过校验；配置 experiences 仓库后重试", "integrity_verified": True}
+        uploaded: list[str] = []
         verified: list[str] = []
-        for rel_path, content in files.items():
+        for rel_path, file_content in files.items():
             full_path = f"{prefix}/{rel_path}"
             await provider.upsert_text_file(
                 token=token, repo_full_name=target_repo, file_path=full_path,
-                content=content, message=f"Retry archive work node {node.get('node_id')}", branch=branch,
+                content=file_content, message=f"Retry archive work node {node.get('node_id')}", branch=branch,
             )
+            uploaded.append(full_path)
         read_text_file = getattr(provider, "read_text_file", None)
         if not callable(read_text_file):
             raise RuntimeError("Git provider does not support remote archive verification")
@@ -657,7 +669,7 @@ async def retry_local_work_node_archive(
             actual = await read_text_file(
                 token=token, repo_full_name=target_repo, file_path=full_path, branch=branch,
             )
-            if actual != expected:
+            if actual is None or actual != expected:
                 raise RuntimeError(f"remote archive verification failed: {full_path}")
             verified.append(full_path)
         previous = task.get("work_node_archive") if isinstance(task.get("work_node_archive"), dict) else {}
@@ -672,8 +684,15 @@ async def retry_local_work_node_archive(
         }
     except Exception as exc:
         return {
-            "status": "local_only", "reason": f"{type(exc).__name__}: {exc}",
-            "gitee_path": prefix, "local_root": str(base),
+            "status": "local_only",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "gitee_path": prefix,
+            "local_root": str(base),
+            "target_repo": target_repo if "target_repo" in locals() else None,
+            "target_url": target_url if "target_url" in locals() else None,
+            "branch": branch if "branch" in locals() else None,
+            "remote_uploaded_files": uploaded if "uploaded" in locals() else [],
+            "remote_verified_files": verified if "verified" in locals() else [],
             "next_action": "远端同步或回读校验失败；本地快照已保留，可修复配置后重试",
             "integrity_verified": True,
         }
