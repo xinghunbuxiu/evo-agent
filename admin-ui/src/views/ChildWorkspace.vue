@@ -683,8 +683,8 @@
               <p class="mt-1 text-xs text-slate-500">补知识 / 商业结算等写回的可复用经验</p>
               <div v-if="experienceCards.length" class="mt-4 space-y-3">
                 <div
-                  v-for="card in experienceCards.slice(0, 8)"
-                  :key="card.card_id || card.signature || card.title"
+                  v-for="(card, index) in experienceCards.slice(0, 8)"
+                  :key="card.card_id || card.signature || card.title || index"
                   class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"
                 >
                   <div class="flex flex-wrap items-center gap-2">
