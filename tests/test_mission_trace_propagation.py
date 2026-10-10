@@ -7,6 +7,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin import mission_runtime  # noqa: E402
+from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
 
 
 class MissionTracePropagationTests(unittest.TestCase):
@@ -58,6 +59,30 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(latest["mission_run_id"], "trace-run")
         self.assertEqual(latest["plan"]["nodes"][0]["decision_trace"], trace)
         self.assertEqual(latest["plan"]["nodes"][0]["decision_trace"][0]["rule_id"], "mission.required_inputs.v1")
+
+    def test_planner_decision_trace_is_propagated_to_action(self):
+        trace = [{"step": "capability_match", "rule_id": "mission.capability.match.v1", "result": "matched"}]
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+            task_priority_cls=object,
+        )
+        state = bindings["build_mission_actions"](
+            task_queue=object(),
+            tenant_id="tenant-a",
+            mission_run_id="run-a",
+            plan={"nodes": [{
+                "id": "node-a",
+                "title": "Design",
+                "task_type": "design",
+                "status": "planned",
+                "decision_trace": trace,
+            }]},
+            context={},
+            work_type={},
+            work_type_summary={},
+        )
+        self.assertEqual(state["actions"][0]["node_id"], "node-a")
+        self.assertEqual(state["actions"][0]["decision_trace"], trace)
 
     def test_follow_up_context_preserves_run_lineage_without_mutating_source(self):
         source_context = {
