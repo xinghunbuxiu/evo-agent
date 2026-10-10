@@ -400,6 +400,7 @@ class MissionPlanner:
             acceptance=str(node_template.get("acceptance") or ""),
             status=status,
             reasoning=reasoning,
+            decision_trace=decision_trace,
             available_capability_ids=available_capability_ids,
             recommended_skill_ids=recommended_skill_ids,
             recommended_skills=recommended_skills,
