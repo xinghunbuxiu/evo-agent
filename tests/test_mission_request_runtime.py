@@ -138,7 +138,7 @@ class MissionStartOrchestrationTests(unittest.TestCase):
         )
         with (
             mock.patch.object(mission_runtime, "load_mission_runs", return_value={"items": []}),
-            unittest.mock.patch.object(mission_runtime, "save_mission_runs"),
+            mock.patch.object(mission_runtime, "save_mission_runs"),
         ):
             latest, error = start({
                 "goal": "  帮我看看户型图  ",
