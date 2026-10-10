@@ -134,6 +134,68 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertEqual(result["reason"], "missing_gitee_token")
         self.assertTrue(result["integrity_verified"])
 
+
+    def _retry_with_remote(self, *, upload_error=None, corrupt_readback=False):
+        import asyncio
+        import os
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from admin import work_nodes_runtime as archive_module
+
+        files = {"manifest.json": "{}", "skills.json": "[]"}
+        base = self._write_retry_snapshot(files)
+        remote_files = dict(files)
+        remote_files["archive.integrity.json"] = (base / "archive.integrity.json").read_text(encoding="utf-8")
+        provider = SimpleNamespace()
+        if upload_error:
+            provider.upsert_text_file = AsyncMock(side_effect=RuntimeError("simulated upload failure"))
+        else:
+            provider.upsert_text_file = AsyncMock()
+        async def read_back(*, file_path, **kwargs):
+            rel_path = file_path[len(self.prefix) + 1:]
+            if corrupt_readback and rel_path == "manifest.json":
+                return "different content"
+            return remote_files.get(rel_path)
+        provider.read_text_file = AsyncMock(side_effect=read_back)
+        config = SimpleNamespace(experiences=SimpleNamespace(full_name="owner/repo", url="https://gitee.com/owner/repo"))
+        runtime = {"task_center": {"items": [{"task_id": "task-1", "status": "approved"}]}}
+        node = {"task_id": "task-1", "node_id": "node:task-1", "work_type_id": "design", "member_id": "member-1"}
+        with patch.object(archive_module, "build_work_nodes_from_runtime", return_value=[node]), patch.dict(os.environ, {"GITEE_TOKEN": "test-token"}):
+            return asyncio.run(archive_module.retry_local_work_node_archive(
+                workspace=self.workspace,
+                tenant_id="tenant-a",
+                runtime=runtime,
+                task_id="task-1",
+                get_user_gitee_token=lambda request: None,
+                tenant_manager=SimpleNamespace(get_git_knowledge_config=lambda tenant_id: {}),
+                config=config,
+                get_git_provider_instance=lambda *args: provider,
+                get_tenant_git_repo=lambda *args: ("owner/repo", "https://gitee.com/owner/repo"),
+                request=object(),
+            )), provider
+
+    def test_retry_preserves_local_snapshot_when_remote_upload_fails(self):
+        result, provider = self._retry_with_remote(upload_error=True)
+        self.assertEqual(result["status"], "local_only")
+        self.assertIn("simulated upload failure", result["reason"])
+        self.assertTrue(result["integrity_verified"])
+        self.assertEqual(provider.upsert_text_file.await_count, 1)
+
+    def test_retry_rejects_remote_readback_mismatch(self):
+        result, provider = self._retry_with_remote(corrupt_readback=True)
+        self.assertEqual(result["status"], "local_only")
+        self.assertIn("remote archive verification failed", result["reason"])
+        self.assertTrue(result["integrity_verified"])
+        self.assertEqual(provider.read_text_file.await_count, 1)
+
+    def test_retry_reports_archived_only_after_all_files_read_back(self):
+        result, provider = self._retry_with_remote()
+        self.assertEqual(result["status"], "archived")
+        self.assertTrue(result["integrity_verified"])
+        self.assertEqual(set(result["verified_files"]), set(result["files"]))
+        self.assertEqual(provider.upsert_text_file.await_count, 3)
+        self.assertEqual(provider.read_text_file.await_count, 3)
+
     def test_integrity_manifest_uses_sha256_utf8_bytes(self):
         payload = "中文内容"
         expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()
