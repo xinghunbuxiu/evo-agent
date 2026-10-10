@@ -97,7 +97,7 @@ const runRetryArchive = async (node: WorkNode) => {
       tenant_id: consoleCtx?.tenantId.value || 'default',
     })
     archiveSuccess.value = result.data?.archive?.status === 'archived'
-    archiveMessage.value = result.message || result.archive?.next_action || '同步完成'
+    archiveMessage.value = result.message || result.data?.archive?.next_action || '同步完成'
     await consoleCtx?.refreshOverview()
   } catch (error) {
     archiveSuccess.value = false
@@ -114,8 +114,8 @@ const runArchive = async (node: WorkNode) => {
     const result = await archiveWorkNode(node.task_id, {
       tenant_id: consoleCtx?.tenantId.value || 'default',
     })
-    archiveSuccess.value = result.archive?.status === 'archived'
-    archiveMessage.value = result.message || result.archive?.next_action || '归档完成'
+    archiveSuccess.value = result.data?.archive?.status === 'archived'
+    archiveMessage.value = result.message || result.data?.archive?.next_action || '归档完成'
     await consoleCtx?.refreshOverview()
   } catch (error) {
     archiveSuccess.value = false
