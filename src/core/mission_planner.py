@@ -93,6 +93,7 @@ class MissionNode:
     acceptance: str
     status: str
     reasoning: List[str] = field(default_factory=list)
+    decision_trace: List[Dict[str, Any]] = field(default_factory=list)
     available_capability_ids: List[str] = field(default_factory=list)
     recommended_skill_ids: List[str] = field(default_factory=list)
     recommended_skills: List[Dict[str, Any]] = field(default_factory=list)
@@ -115,6 +116,7 @@ class MissionNode:
             "acceptance": self.acceptance,
             "status": self.status,
             "reasoning": self.reasoning,
+            "decision_trace": self.decision_trace,
             "available_capability_ids": self.available_capability_ids,
             "recommended_skill_ids": self.recommended_skill_ids,
             "recommended_skills": self.recommended_skills,
@@ -331,6 +333,63 @@ class MissionPlanner:
             status = "needs_learning"
             gap_type = "experience_gap"
             learning_objectives.append("当前经验不足，先用真实案例补首批可验证样本")
+
+        # Keep an auditable evidence trail, not hidden chain-of-thought: each record
+        # names the rule, observable evidence, and outcome used by the planner.
+        if blockers:
+            decision_rule = "mission.status.input_gap.v1"
+        elif available_capability_ids and (
+            knowledge_signals["experience_count"] > 0
+            or knowledge_signals["verified_skill_count"] > 0
+        ):
+            decision_rule = "mission.status.reuse_existing.v1"
+        elif available_capability_ids:
+            decision_rule = "mission.status.knowledge_gap.v1"
+        else:
+            decision_rule = "mission.status.capability_gap.v1"
+        if gap_type == "experience_gap":
+            decision_rule = "mission.status.experience_gap.v1"
+        decision_trace = [
+            {
+                "step": "input_validation",
+                "rule_id": "mission.required_inputs.v1",
+                "result": "blocked" if blockers else "passed",
+                "evidence": {"blocker_codes": list(blockers)},
+            },
+            {
+                "step": "capability_match",
+                "rule_id": "mission.capability_match.v1",
+                "result": "matched" if available_capability_ids else "missing",
+                "evidence": {
+                    "capability_type": capability_type,
+                    "capability_ids": list(available_capability_ids),
+                },
+            },
+            {
+                "step": "knowledge_check",
+                "rule_id": "mission.knowledge_signals.v1",
+                "result": "available" if (
+                    knowledge_signals["experience_count"] > 0
+                    or knowledge_signals["verified_skill_count"] > 0
+                ) else "insufficient",
+                "evidence": {
+                    "experience_count": knowledge_signals["experience_count"],
+                    "verified_skill_count": knowledge_signals["verified_skill_count"],
+                    "top_experience_ids": list(knowledge_signals.get("top_experience_ids", [])),
+                    "top_verified_skill_ids": list(knowledge_signals.get("top_verified_skill_ids", [])),
+                },
+            },
+            {
+                "step": "status_decision",
+                "rule_id": decision_rule,
+                "result": status,
+                "evidence": {
+                    "gap_type": gap_type,
+                    "reasoning_summary": list(reasoning),
+                    "blocker_codes": list(blockers),
+                },
+            },
+        ]
 
         return MissionNode(
             id=str(node_template.get("id") or "node"),
