@@ -2268,18 +2268,28 @@ def register_system_runtime_routes(
             )
             from admin.work_nodes_runtime import archive_work_node_to_storage, attach_archive_to_task
 
-            archive_result = await archive_work_node_to_storage(
-                workspace=workspace,
-                tenant_id=normalized_tenant_id,
-                runtime=runtime,
-                task_id=task_id,
-                get_user_gitee_token=get_user_gitee_token,
-                tenant_manager=tenant_manager,
-                config=config,
-                get_git_provider_instance=get_git_provider_instance,
-                get_tenant_git_repo=get_tenant_git_repo,
-                request=request,
-            )
+            try:
+                archive_result = await archive_work_node_to_storage(
+                    workspace=workspace,
+                    tenant_id=normalized_tenant_id,
+                    runtime=runtime,
+                    task_id=task_id,
+                    get_user_gitee_token=get_user_gitee_token,
+                    tenant_manager=tenant_manager,
+                    config=config,
+                    get_git_provider_instance=get_git_provider_instance,
+                    get_tenant_git_repo=get_tenant_git_repo,
+                    request=request,
+                )
+            except Exception as exc:
+                # Archiving is a follow-up to task approval, not a prerequisite
+                # for approval. Preserve the completed task and expose a retryable
+                # archive failure rather than aborting the whole approval flow.
+                archive_result = {
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "next_action": "任务已确认，但自动归档发生异常；可在工作节点面板中重试归档",
+                }
             if attach_archive_to_task(runtime, task_id, archive_result):
                 task["work_node_archive"] = archive_result
                 runtime["task_center"] = task_center
