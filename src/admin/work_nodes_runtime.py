@@ -458,23 +458,37 @@ async def archive_work_node_to_storage(
         },
     }, ensure_ascii=False, indent=2)
 
-    token = None
-    if request is not None:
-        token = get_user_gitee_token(request)
+    try:
+        token = get_user_gitee_token(request) if request is not None else None
+    except Exception as exc:
+        local = _write_local_node_archive(workspace, prefix, files)
+        return {
+            **local,
+            "reason": f"gitee_token_lookup_failed: {type(exc).__name__}: {exc}",
+            "next_action": "本地快照已保存；读取 Gitee 凭据失败，请检查登录态或令牌配置后重试",
+        }
     token = token or os.getenv("GITEE_TOKEN")
     if not token or token == "your_real_token_here":
         local = _write_local_node_archive(workspace, prefix, files)
         return {**local, "reason": "missing_gitee_token", "next_action": "已落盘本地，配置 GITEE_TOKEN 后可同步远端"}
 
-    git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
-    provider = get_git_provider_instance(config, git_knowledge)
-    target_repo, target_url = get_tenant_git_repo(
-        tenant_manager,
-        tenant_id,
-        "experiences",
-        config.experiences.full_name,
-        config.experiences.url,
-    )
+    try:
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        target_repo, target_url = get_tenant_git_repo(
+            tenant_manager,
+            tenant_id,
+            "experiences",
+            config.experiences.full_name,
+            config.experiences.url,
+        )
+    except Exception as exc:
+        local = _write_local_node_archive(workspace, prefix, files)
+        return {
+            **local,
+            "reason": f"gitee_provider_setup_failed: {type(exc).__name__}: {exc}",
+            "next_action": "本地快照已保存；Gitee 配置或服务初始化失败，修复后可重试归档",
+        }
     repos = git_knowledge.get("repos", {}) if isinstance(git_knowledge, dict) else {}
     branch = "master"
     if isinstance(repos, dict) and isinstance(repos.get("experiences"), dict):
