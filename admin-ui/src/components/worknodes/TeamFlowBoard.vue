@@ -25,7 +25,7 @@
         <div class="grid grid-cols-2 gap-3 border-t border-dashed border-slate-300 pt-4 sm:grid-cols-3 xl:grid-cols-4">
           <button
             v-for="member in visibleMembers"
-            :key="member.id"
+            :key="String(member.id)"
             type="button"
             class="team-member-card group min-w-0 rounded-2xl border border-slate-200 bg-white px-3 py-4 text-left transition hover:-translate-y-1 hover:border-teal-300 hover:shadow-lg"
             :aria-pressed="selectedMemberId === member.id"
