@@ -78,6 +78,20 @@
           <div class="text-xs text-slate-500">{{ action.action_type }} / {{ action.status }}</div>
         </div>
         <div class="mt-2">{{ action.detail || '--' }}</div>
+        <details v-if="action.decision_trace?.length" class="mt-2 rounded-lg border border-indigo-100 bg-white px-3 py-2">
+          <summary class="cursor-pointer text-xs font-medium text-indigo-700">规划决策追踪（{{ action.decision_trace.length }}）</summary>
+          <div class="mt-2 space-y-2">
+            <div
+              v-for="(trace, index) in action.decision_trace"
+              :key="`${run.mission_run_id}-${action.node_id}-trace-${index}`"
+              class="border-l-2 border-indigo-200 pl-2 text-xs"
+            >
+              <div class="font-medium text-slate-700">{{ trace.step || 'decision' }} <span v-if="trace.result">/ {{ trace.result }}</span></div>
+              <div v-if="trace.rule_id" class="mt-0.5 break-all text-indigo-600">{{ trace.rule_id }}</div>
+              <pre v-if="trace.evidence" class="mt-1 whitespace-pre-wrap break-words text-[11px] text-slate-500">{{ JSON.stringify(trace.evidence, null, 2) }}</pre>
+            </div>
+          </div>
+        </details>
         <div v-if="action.task_id" class="mt-2 text-xs text-teal-700">task {{ action.task_id }}</div>
         <div v-if="action.task_status" class="mt-1 text-xs text-slate-500">task status {{ action.task_status }}</div>
         <div v-if="action.task_outcome" class="mt-1 text-xs text-sky-700">outcome {{ action.task_outcome }}</div>
