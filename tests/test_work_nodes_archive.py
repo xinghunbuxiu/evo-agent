@@ -86,7 +86,7 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         )
         return base
 
-    def _retry(self):
+    def _retry(self, get_token=None):
         import asyncio
         import os
         from unittest.mock import patch
@@ -100,7 +100,7 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
                 tenant_id="tenant-a",
                 runtime=runtime,
                 task_id="task-1",
-                get_user_gitee_token=lambda request: None,
+                get_user_gitee_token=get_token or (lambda request: None),
                 tenant_manager=None,
                 config=None,
                 get_git_provider_instance=lambda *args: None,
@@ -146,6 +146,18 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("archive hash mismatch", result["reason"])
         self.assertFalse(result["integrity_verified"])
+
+    def test_retry_keeps_valid_snapshot_when_token_lookup_raises(self):
+        self._write_retry_snapshot({"manifest.json": "{}", "skills.json": "[]"})
+
+        def broken_token_lookup(request):
+            raise RuntimeError("credential store unavailable")
+
+        result = self._retry(get_token=broken_token_lookup)
+        self.assertEqual(result["status"], "local_only")
+        self.assertIn("gitee_token_lookup_failed", result["reason"])
+        self.assertIn("credential store unavailable", result["reason"])
+        self.assertTrue(result["integrity_verified"])
 
     def test_retry_keeps_valid_snapshot_when_gitee_token_is_missing(self):
         self._write_retry_snapshot({"manifest.json": "{}", "skills.json": "[]"})
