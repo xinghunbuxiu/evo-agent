@@ -56,6 +56,12 @@ export interface MissionPlanNode {
     accepted_tasks?: string[]
   }>
   next_actions: string[]
+  decision_trace?: Array<{
+    step?: string
+    rule_id?: string
+    result?: string
+    evidence?: Record<string, unknown>
+  }>
 }
 
 export interface MissionPlan {
