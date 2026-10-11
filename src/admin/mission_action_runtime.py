@@ -182,16 +182,11 @@ def create_mission_action_runtime_bindings(
         # Preserve planner evidence on the concrete action record so execution
         # and dispatch logs can be traced back to the planning decision.
         decision_trace_by_node = {
-            str(node.get("id") or "node"): node.get("decision_trace", [])
-            for node in plan.get("nodes", [])
-            if isinstance(node, dict)
+            str(node.get("id") or "node"): node["decision_trace"]
+            for node in plan["nodes"]
         }
         for action in actions:
-            if not isinstance(action, dict):
-                continue
-            trace = decision_trace_by_node.get(str(action.get("node_id") or ""), [])
-            if isinstance(trace, list) and trace and not action.get("decision_trace"):
-                action["decision_trace"] = trace
+            action["decision_trace"] = decision_trace_by_node[str(action["node_id"])]
 
         mission_skill_ids: list[str] = []
         for action in actions:
