@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from admin import mission_runtime, knowledge_runtime  # noqa: E402
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
 from admin.mission_app_runtime import create_mission_app_runtime_bindings  # noqa: E402
+from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
+from types import SimpleNamespace
 
 
 class MissionTracePropagationTests(unittest.TestCase):
@@ -374,6 +376,71 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(metadata["mission_node_id"], skill["parameters"]["mission_node_id"])
         self.assertEqual(metadata["decision_trace"], skill["parameters"]["decision_trace"])
         self.assertEqual(metadata["validation_evidence"], expected_evidence)
+
+
+    def test_failure_learning_task_persists_exact_mission_lineage_and_trace(self):
+        trace = [{
+            "step": "capability_match",
+            "rule_id": "mission.capability.match.v1",
+            "result": "matched",
+            "evidence": {"worker_id": "worker-a"},
+        }]
+        saved = {}
+        executed = {}
+
+        def execute_learning_task(**kwargs):
+            executed.update(kwargs)
+            return {"task_id": "learning-1", "status": "needs_learning"}
+
+        bindings = create_mission_execution_bindings(
+            load_learning_tasks=lambda workspace: {"tasks": {}},
+            save_learning_tasks=lambda workspace, payload: saved.update(payload),
+            collect_task_verified_skills=lambda tasks: [],
+            skill_ids_from_items=lambda items: [],
+            infer_framework_hint_from_delivery=lambda delivery: "",
+            create_mission_delivery_skill_candidate=lambda **kwargs: {},
+            safe_float=lambda value, default: default,
+            trim_candidate_text=lambda value: str(value),
+            record_growth_event=lambda *args, **kwargs: None,
+            build_snapshot_signature=lambda snapshot: {},
+            normalize_string_list=lambda value: value if isinstance(value, list) else [],
+            build_external_learning_plan=lambda **kwargs: {"steps": []},
+            execute_learning_task=execute_learning_task,
+            make_learning_task_id=lambda tenant_id, sample: "learning-1",
+            extract_task_snapshot=lambda task: {},
+            resolve_effective_growth_policy=lambda **kwargs: {},
+            growth_policy_decision_label=lambda *args, **kwargs: "",
+            effective_platform_promotion_status=lambda *args, **kwargs: "",
+        )
+        failed_task = SimpleNamespace(
+            id="task-failed-9",
+            type="reconstruct",
+            status=SimpleNamespace(value="failed"),
+            payload={"path": "/workspace/source"},
+            result={},
+            error="reconstruction failed",
+        )
+        learning_task_id = bindings["upsert_mission_failure_learning_task"](
+            workspace=Path("."),
+            tenant_manager=object(),
+            tenant_id="tenant-a",
+            mission_run={
+                "mission_run_id": "run-42",
+                "goal": "reconstruct the project",
+                "context": {},
+            },
+            action={"node_id": "reconstruct-node", "decision_trace": trace},
+            failed_task=failed_task,
+        )
+
+        self.assertEqual(learning_task_id, "learning-1")
+        learning_task = saved["tasks"]["learning-1"]
+        self.assertEqual(learning_task["source"], "mission_failure")
+        self.assertEqual(learning_task["source_task_id"], "task-failed-9")
+        self.assertEqual(learning_task["mission_run_id"], "run-42")
+        self.assertEqual(learning_task["mission_node_id"], "reconstruct-node")
+        self.assertEqual(learning_task["decision_trace"], trace)
+        self.assertEqual(executed["diagnosis"]["decision_trace"], trace)
 
 
 if __name__ == "__main__":
