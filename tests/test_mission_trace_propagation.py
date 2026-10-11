@@ -354,9 +354,10 @@ class MissionTracePropagationTests(unittest.TestCase):
                 build_snapshot_signature=lambda snapshot: {"signature": "snapshot-29"},
                 record_growth_event=lambda *args, **kwargs: growth_events.append(kwargs),
             )
+            self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
+            skill = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
 
         self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
-        skill = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
         expected_evidence = {
             "verdict": "pass",
             "evaluation_score": 0.94,
