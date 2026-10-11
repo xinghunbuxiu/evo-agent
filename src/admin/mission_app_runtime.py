@@ -161,6 +161,11 @@ def create_mission_app_runtime_bindings(
                 "title": str(item.get("title") or item.get("node_id") or "mission action"),
                 "detail": str(result.get("insight_summary") or result.get("message") or item.get("detail") or "").strip(),
                 "experience_id": growth.get("experience_id") or result.get("experience_id"),
+                "mission_run_id": item["mission_run_id"],
+                "node_id": item["node_id"],
+                "task_id": item["task_id"],
+                "decision_trace": item["decision_trace"],
+                "validation_summary": item["validation_summary"],
             })
         timeline.sort(key=lambda item: item["timestamp"], reverse=True)
         return timeline[:8]
