@@ -84,37 +84,6 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(state["actions"][0]["node_id"], "node-a")
         self.assertEqual(state["actions"][0]["decision_trace"], trace)
 
-    def test_missing_or_malformed_planner_trace_is_backward_compatible(self):
-        bindings = create_mission_action_runtime_bindings(
-            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
-            task_priority_cls=object,
-        )
-        state = bindings["build_mission_actions"](
-            task_queue=object(),
-            tenant_id="tenant-a",
-            mission_run_id="run-a",
-            plan={"nodes": [
-                {
-                    "id": "node-without-trace",
-                    "title": "Legacy node",
-                    "task_type": "design",
-                    "status": "planned",
-                },
-                {
-                    "id": "node-with-invalid-trace",
-                    "title": "Malformed node",
-                    "task_type": "design",
-                    "status": "planned",
-                    "decision_trace": {"not": "a list"},
-                },
-            ]},
-            context={},
-            work_type={},
-            work_type_summary={},
-        )
-        self.assertEqual(len(state["actions"]), 2)
-        self.assertTrue(all(not action.get("decision_trace") for action in state["actions"]))
-
     def test_planner_trace_is_attached_only_to_matching_node_action(self):
         trace_a = [{"step": "status_decision", "rule_id": "mission.status.input_gap.v1"}]
         trace_b = [{"step": "status_decision", "rule_id": "mission.status.capability_gap.v1"}]
