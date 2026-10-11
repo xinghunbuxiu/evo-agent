@@ -98,6 +98,7 @@ def create_mission_execution_bindings(
             "analyze": {},
             "reconstruct": {},
             "role_reflection_context": role_reflection_context,
+            "decision_trace": action["decision_trace"],
         }
         if role_summary:
             diagnosis["role_reflection_summary"] = role_summary
@@ -347,7 +348,7 @@ def create_mission_execution_bindings(
                                 *( [f"参考岗位最近反思: {role_summary}"] if role_summary else [] ),
                             ],
                             "role_reflection_context": role_reflection_context,
-                            "decision_trace": current.get("decision_trace", []),
+                            "decision_trace": current["decision_trace"],
                         })
                         existing_failure_learning.add(failure_key)
                 elif task_status == "running":
