@@ -1,12 +1,13 @@
 """Regression tests for trace propagation through mission startup."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from admin import mission_runtime  # noqa: E402
+from admin import mission_runtime, knowledge_runtime  # noqa: E402
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
 from admin.mission_app_runtime import create_mission_app_runtime_bindings  # noqa: E402
 
