@@ -84,6 +84,60 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(state["actions"][0]["node_id"], "node-a")
         self.assertEqual(state["actions"][0]["decision_trace"], trace)
 
+    def test_missing_or_malformed_planner_trace_is_backward_compatible(self):
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+            task_priority_cls=object,
+        )
+        state = bindings["build_mission_actions"](
+            task_queue=object(),
+            tenant_id="tenant-a",
+            mission_run_id="run-a",
+            plan={"nodes": [
+                {
+                    "id": "node-without-trace",
+                    "title": "Legacy node",
+                    "task_type": "design",
+                    "status": "planned",
+                },
+                {
+                    "id": "node-with-invalid-trace",
+                    "title": "Malformed node",
+                    "task_type": "design",
+                    "status": "planned",
+                    "decision_trace": {"not": "a list"},
+                },
+            ]},
+            context={},
+            work_type={},
+            work_type_summary={},
+        )
+        self.assertEqual(len(state["actions"]), 2)
+        self.assertTrue(all(not action.get("decision_trace") for action in state["actions"]))
+
+    def test_planner_trace_is_attached_only_to_matching_node_action(self):
+        trace_a = [{"step": "status_decision", "rule_id": "mission.status.input_gap.v1"}]
+        trace_b = [{"step": "status_decision", "rule_id": "mission.status.capability_gap.v1"}]
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+            task_priority_cls=object,
+        )
+        state = bindings["build_mission_actions"](
+            task_queue=object(),
+            tenant_id="tenant-a",
+            mission_run_id="run-a",
+            plan={"nodes": [
+                {"id": "node-a", "title": "A", "task_type": "design", "status": "planned", "decision_trace": trace_a},
+                {"id": "node-b", "title": "B", "task_type": "design", "status": "planned", "decision_trace": trace_b},
+            ]},
+            context={},
+            work_type={},
+            work_type_summary={},
+        )
+        actions = {action["node_id"]: action for action in state["actions"]}
+        self.assertEqual(actions["node-a"]["decision_trace"], trace_a)
+        self.assertEqual(actions["node-b"]["decision_trace"], trace_b)
+
     def test_follow_up_context_preserves_run_lineage_without_mutating_source(self):
         source_context = {
             "autonomy_cycle": 1,
