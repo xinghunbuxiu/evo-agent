@@ -439,11 +439,12 @@ def complete_javascript_reverse_promotion_action(
                 "mission_run_id": mission_run["mission_run_id"],
                 "mission_node_id": action["node_id"],
                 "decision_trace": action["decision_trace"],
-                "validation_summary": next(
-                    item["validation_summary"]
-                    for item in mission_run["actions"]
-                    if item["node_id"] == "validate_result" and "validation_summary" in item
-                ),
+                "validation_summary": {
+                    "verdict": reconstruct_snapshot["evaluation_verdict"],
+                    "evaluation_score": reconstruct_snapshot["evaluation_score"],
+                    "analyze_task_id": analyze_snapshot["task_id"],
+                    "reconstruct_task_id": reconstruct_snapshot["task_id"],
+                },
                 "goal": mission_run.get("goal"),
                 "context": mission_run.get("context"),
                 "analyze_task_id": analyze_snapshot.get("task_id"),
