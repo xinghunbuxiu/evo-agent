@@ -321,5 +321,59 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(timeline[0]["experience_id"], "experience-42")
 
 
+    def test_mission_delivery_skill_and_growth_event_share_exact_validation_lineage(self):
+        import json
+
+        trace = [{
+            "step": "validation",
+            "rule_id": "mission.delivery.quality_gate.v1",
+            "result": "passed",
+            "evidence": {"evaluation_score": 0.94},
+        }]
+        growth_events = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(knowledge_runtime, "maybe_auto_verify_skill_candidate", return_value=None):
+            result = knowledge_runtime.create_mission_delivery_skill_candidate(
+                workspace=Path(tmp),
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "run-42",
+                    "mission_kind": "javascript_reverse",
+                    "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": trace}]},
+                },
+                analyze_snapshot={"task_id": "analyze-17", "summary": "Vue application"},
+                reconstruct_snapshot={
+                    "task_id": "reconstruct-29",
+                    "summary": "Vue reconstructed project",
+                    "evaluation_verdict": "pass",
+                    "evaluation_score": 0.94,
+                    "evaluation_metrics": {"components": 8, "has_target_dir": True},
+                    "strategy_id": "strategy-5",
+                },
+                safe_float=lambda value, default: float(value) if value is not None else default,
+                build_snapshot_signature=lambda snapshot: {"signature": "snapshot-29"},
+                record_growth_event=lambda *args, **kwargs: growth_events.append(kwargs),
+            )
+
+        self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
+        skill = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
+        expected_evidence = {
+            "verdict": "pass",
+            "evaluation_score": 0.94,
+            "analyze_task_id": "analyze-17",
+            "reconstruct_task_id": "reconstruct-29",
+        }
+        self.assertEqual(skill["parameters"]["mission_run_id"], "run-42")
+        self.assertEqual(skill["parameters"]["mission_node_id"], "promote_knowledge")
+        self.assertEqual(skill["parameters"]["decision_trace"], trace)
+        self.assertEqual(skill["parameters"]["validation_evidence"], expected_evidence)
+        self.assertEqual(len(growth_events), 1)
+        metadata = growth_events[0]["metadata"]
+        self.assertEqual(metadata["mission_run_id"], skill["parameters"]["mission_run_id"])
+        self.assertEqual(metadata["mission_node_id"], skill["parameters"]["mission_node_id"])
+        self.assertEqual(metadata["decision_trace"], skill["parameters"]["decision_trace"])
+        self.assertEqual(metadata["validation_evidence"], expected_evidence)
+
+
 if __name__ == "__main__":
     unittest.main()
