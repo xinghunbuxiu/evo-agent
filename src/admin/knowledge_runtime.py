@@ -366,6 +366,17 @@ def create_mission_delivery_skill_candidate(
 ) -> dict:
     metrics = reconstruct_snapshot.get("evaluation_metrics", {}) if isinstance(reconstruct_snapshot.get("evaluation_metrics"), dict) else {}
     components = int(metrics.get("components", 0) or 0)
+    promotion_node = next(
+        node for node in mission_run["plan"]["nodes"]
+        if node["id"] == "promote_knowledge"
+    )
+    decision_trace = promotion_node["decision_trace"]
+    validation_evidence = {
+        "verdict": reconstruct_snapshot["evaluation_verdict"],
+        "evaluation_score": reconstruct_snapshot["evaluation_score"],
+        "analyze_task_id": analyze_snapshot["task_id"],
+        "reconstruct_task_id": reconstruct_snapshot["task_id"],
+    }
     framework_hint = "javascript"
     analyze_summary = str(analyze_snapshot.get("summary") or "").lower()
     reconstruct_summary = str(reconstruct_snapshot.get("summary") or "").lower()
@@ -392,6 +403,10 @@ def create_mission_delivery_skill_candidate(
         ),
         parameters={
             "mission_kind": mission_run.get("mission_kind"),
+            "mission_run_id": mission_run["mission_run_id"],
+            "mission_node_id": promotion_node["id"],
+            "decision_trace": decision_trace,
+            "validation_evidence": validation_evidence,
             "framework_hint": framework_hint,
             "components": components,
             "accepted_tasks": ["analyze", "reconstruct"],
@@ -430,7 +445,10 @@ def create_mission_delivery_skill_candidate(
         metadata={
             "skill_id": skill.id,
             "skill_name": skill.name,
-            "mission_run_id": mission_run.get("mission_run_id"),
+            "mission_run_id": mission_run["mission_run_id"],
+            "mission_node_id": promotion_node["id"],
+            "decision_trace": decision_trace,
+            "validation_evidence": validation_evidence,
             "source": "mission_delivery",
             "framework_hint": framework_hint,
             "verified": bool(verified_info),
