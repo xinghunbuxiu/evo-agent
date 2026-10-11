@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin import mission_runtime  # noqa: E402
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
+from admin.mission_app_runtime import create_mission_app_runtime_bindings  # noqa: E402
 
 
 class MissionTracePropagationTests(unittest.TestCase):
@@ -290,6 +291,33 @@ class MissionTracePropagationTests(unittest.TestCase):
         source_after = next(item for item in second["items"] if item["mission_run_id"] == "run-source")
         self.assertEqual(source_after["auto_continue_triggered_run_id"], "run-next")
         self.assertEqual(source_after["auto_continue_status"], "triggered")
+
+    def test_growth_timeline_keeps_node_decision_trace_and_experience_link(self):
+        trace = [{
+            "step": "capability_match",
+            "rule_id": "mission.capability.match.v1",
+            "result": "matched",
+        }]
+        bindings = create_mission_app_runtime_bindings(
+            extract_feedback_entries_from_result=lambda result: [],
+            trim_candidate_text=lambda value, limit: value[:limit],
+            normalize_string_list=lambda value: value if isinstance(value, list) else [],
+        )
+        timeline = bindings["build_mission_growth_timeline"]([{
+            "node_id": "promote_knowledge",
+            "task_type": "mission_delivery",
+            "status": "completed",
+            "decision_trace": trace,
+            "growth_update": {
+                "recorded_at": "2026-10-11T10:00:00",
+                "experience_id": "experience-42",
+            },
+            "task_result": {"insight_summary": "verified delivery"},
+        }])
+        self.assertEqual(len(timeline), 1)
+        self.assertEqual(timeline[0]["node_id"], "promote_knowledge")
+        self.assertEqual(timeline[0]["decision_trace"], trace)
+        self.assertEqual(timeline[0]["experience_id"], "experience-42")
 
 
 if __name__ == "__main__":
