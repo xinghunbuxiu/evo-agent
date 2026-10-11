@@ -125,7 +125,7 @@ def handle_javascript_reverse_mission_node(
         "domain_hint": "javascript",
         "_mission_run_id": mission_run_id,
         "_mission_node_id": node_id,
-        "_mission_decision_trace": node.get("decision_trace", []),
+        "_mission_decision_trace": node["decision_trace"],
         "_mission_kind": plan.get("mission_kind"),
         "_goal": plan.get("goal"),
         "_role_reflection_context": role_reflection_context,
@@ -436,7 +436,14 @@ def complete_javascript_reverse_promotion_action(
         capability_type="javascript_reverse",
         metadata={
             "mission_delivery": {
-                "mission_run_id": mission_run.get("mission_run_id"),
+                "mission_run_id": mission_run["mission_run_id"],
+                "mission_node_id": action["node_id"],
+                "decision_trace": action["decision_trace"],
+                "validation_summary": next(
+                    item["validation_summary"]
+                    for item in mission_run["actions"]
+                    if item["node_id"] == "validate_result" and "validation_summary" in item
+                ),
                 "goal": mission_run.get("goal"),
                 "context": mission_run.get("context"),
                 "analyze_task_id": analyze_snapshot.get("task_id"),
