@@ -335,6 +335,9 @@ def create_mission_execution_bindings(
                             "action_type": "failure_learning_ticket",
                             "status": "needs_learning",
                             "task_id": task_id,
+                            "mission_run_id": mission_run["mission_run_id"],
+                            "source_task_id": task_id,
+                            "mission_node_id": node_id,
                             "detail": (
                                 f"执行失败，优先沿岗位最近实验继续复盘: {role_next_experiment}"
                                 if role_next_experiment
