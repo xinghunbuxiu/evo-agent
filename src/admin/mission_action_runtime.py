@@ -97,8 +97,25 @@ def create_mission_action_runtime_bindings(
 
         brain_contract = plan.get("orchestration", {}) if isinstance(plan.get("orchestration"), dict) else {}
         brain_decisions = index_mission_brain_decisions(brain_contract)
-        coordination_plan = brain_contract.get("coordination_plan", {})
-        coordination_actions = coordination_plan.get("actions", []) if isinstance(coordination_plan, dict) else []
+        raw_coordination_plan = brain_contract.get("coordination_plan")
+        coordination_plan = raw_coordination_plan if isinstance(raw_coordination_plan, dict) else {}
+        raw_coordination_actions = coordination_plan.get("actions")
+        coordination_actions = raw_coordination_actions if isinstance(raw_coordination_actions, list) else []
+        coordination_ids = [
+            str(item.get("node_id") or "").strip()
+            for item in coordination_actions
+            if isinstance(item, dict)
+        ]
+        coordination_plan_valid = (
+            isinstance(raw_coordination_plan, dict)
+            and coordination_plan.get("schema_version") == "mission.coordination.v1"
+            and coordination_plan.get("decision_owner") == "mission"
+            and coordination_plan.get("dispatch_authorized") is False
+            and isinstance(raw_coordination_actions, list)
+            and len(coordination_ids) == len(coordination_actions)
+            and all(coordination_ids)
+            and len(coordination_ids) == len(set(coordination_ids))
+        )
         coordination_by_node = {
             str(item.get("node_id")): item
             for item in coordination_actions
@@ -149,13 +166,13 @@ def create_mission_action_runtime_bindings(
             authorized = True
 
             if (
-                coordination_plan.get("schema_version") != "mission.coordination.v1"
-                or coordination_plan.get("decision_owner") != "mission"
-                or coordination_plan.get("dispatch_authorized") is not False
+                not coordination_plan_valid
             ):
                 authorized, reason_code = False, "coordination_contract_invalid"
             elif coordination is None:
                 authorized, reason_code = False, "coordination_action_missing"
+            elif coordination.get("dispatch_authorized") is not False:
+                authorized, reason_code = False, "coordination_action_must_not_authorize_dispatch"
             elif action_name not in {
                 "prepare_for_authorized_dispatch",
                 "await_dispatch_authorization",
