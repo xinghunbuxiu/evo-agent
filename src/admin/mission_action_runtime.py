@@ -4,6 +4,7 @@ Mission 动作编排运行时。
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from core.mission_brain import index_mission_brain_decisions
@@ -104,17 +105,24 @@ def create_mission_action_runtime_bindings(
             if isinstance(item, dict) and str(item.get("node_id") or "").strip()
         }
 
+        authorization_by_node: dict[str, dict[str, Any]] = {}
+
         def append_action(**kwargs) -> None:
             node_key = str(kwargs.get("node_id") or "").strip()
             extra = dict(kwargs.get("extra") or {})
             decision = brain_decisions.get(node_key)
             coordination = coordination_by_node.get(node_key)
             extra["orchestration_owner"] = "mission"
-            if coordination:
-                extra["mission_coordination_action"] = coordination["action"]
-                extra["mission_coordination_reason_code"] = coordination["reason_code"]
-                extra["mission_coordination_dispatch_authorized"] = coordination["dispatch_authorized"]
             extra["dispatch_mode"] = str(brain_contract.get("dispatch_mode") or "centralized")
+            if coordination:
+                extra["mission_coordination_action"] = coordination.get("action")
+                extra["mission_coordination_reason_code"] = coordination.get("reason_code")
+                extra["mission_coordination_dispatch_authorized"] = bool(
+                    coordination.get("dispatch_authorized", False)
+                )
+            authorization = authorization_by_node.get(node_key)
+            if authorization:
+                extra["mission_runtime_authorization"] = authorization
             if decision:
                 extra["mission_brain_decision"] = decision.get("decision")
                 extra["decision_trace"] = decision.get("decision_trace", [])
@@ -122,11 +130,72 @@ def create_mission_action_runtime_bindings(
                 extra["verified_skill_ids"] = decision.get("verified_skill_ids", [])
                 workforce_decision = decision.get("workforce_decision")
                 if isinstance(workforce_decision, dict):
-                    # Audit the planner's recommendation, but do not mistake it for a dispatch.
+                    # A workforce recommendation is evidence, never dispatch authorization.
                     extra["workforce_decision"] = workforce_decision
                     extra["workforce_dispatch_authorized"] = False
             kwargs["extra"] = extra
             _append_base_action(**kwargs)
+
+        def authorize_node_dispatch(
+            node: dict,
+            coordination: dict | None,
+            decision: dict | None,
+        ) -> dict[str, Any]:
+            node_id = str(node.get("id") or "").strip()
+            blockers = node.get("blockers", []) if isinstance(node.get("blockers"), list) else []
+            status = str(node.get("status") or "planned")
+            action_name = str((coordination or {}).get("action") or "")
+            reason_code = "authorized"
+            authorized = True
+
+            if (
+                coordination_plan.get("schema_version") != "mission.coordination.v1"
+                or coordination_plan.get("decision_owner") != "mission"
+                or coordination_plan.get("dispatch_authorized") is not False
+            ):
+                authorized, reason_code = False, "coordination_contract_invalid"
+            elif coordination is None:
+                authorized, reason_code = False, "coordination_action_missing"
+            elif action_name not in {"prepare_for_authorized_dispatch", "await_dispatch_authorization"}:
+                authorized, reason_code = False, "coordination_action_not_dispatchable"
+            elif status != "ready":
+                authorized, reason_code = False, "node_not_ready"
+            elif blockers:
+                authorized, reason_code = False, "node_blockers_present"
+            else:
+                runtime_target = primary_worker_id or primary_package_id or primary_capability_id
+                if not runtime_target:
+                    authorized, reason_code = False, "runtime_target_missing"
+                else:
+                    workforce = decision.get("workforce_decision") if isinstance(decision, dict) else None
+                    if isinstance(workforce, dict):
+                        workforce_result = str(workforce.get("decision") or "")
+                        recommended_worker = str(workforce.get("recommended_worker_id") or "").strip()
+                        if workforce_result != "assign_existing_worker_recommended":
+                            authorized, reason_code = False, "workforce_recommendation_not_assignable"
+                        elif not primary_worker_id or recommended_worker != primary_worker_id:
+                            authorized, reason_code = False, "runtime_worker_does_not_match_recommendation"
+
+            workforce = decision.get("workforce_decision") if isinstance(decision, dict) else None
+            return {
+                "schema_version": "mission.dispatch.authorization.v1",
+                "mission_run_id": mission_run_id,
+                "node_id": node_id,
+                "decision_owner": "mission_runtime",
+                "authorized": authorized,
+                "policy_rule_id": "mission.dispatch.ready_route_gate.v1",
+                "reason_code": reason_code,
+                "evidence": {
+                    "node_status": status,
+                    "blocker_codes": [str(item) for item in blockers],
+                    "coordination_action": action_name or None,
+                    "runtime_target": primary_worker_id or primary_package_id or primary_capability_id,
+                    "recommended_worker_id": (
+                        workforce.get("recommended_worker_id") if isinstance(workforce, dict) else None
+                    ),
+                },
+                "authorized_at": datetime.now(timezone.utc).isoformat() if authorized else None,
+            }
 
         actions: list[dict] = []
         submitted_task_ids: list[str] = []
@@ -135,6 +204,7 @@ def create_mission_action_runtime_bindings(
             "needs_learning": 0,
             "needs_input": 0,
             "planned_only": 0,
+            "coordination_blocked": 0,
         }
 
         for node in plan.get("nodes", []):
@@ -149,13 +219,59 @@ def create_mission_action_runtime_bindings(
             if not isinstance(matched_skills, list):
                 matched_skills = []
 
+            coordination = coordination_by_node.get(node_id)
+            decision = brain_decisions.get(node_id)
+            authorization = authorize_node_dispatch(node, coordination, decision)
+            authorization_by_node[node_id] = authorization
+
+            if not authorization["authorized"]:
+                reason_code = authorization["reason_code"]
+                coordination_name = str((coordination or {}).get("action") or "")
+                if coordination_name == "request_missing_input":
+                    counts["needs_input"] += 1
+                    action_type, action_status = "needs_input", "blocked"
+                    detail = "Mission 主脑判定缺少必需输入，运行时拒绝派发"
+                elif coordination_name == "resolve_capability_or_learning_gap":
+                    counts["needs_learning"] += 1
+                    action_type, action_status = "learning_ticket", "needs_learning"
+                    detail = "Mission 主脑判定存在能力缺口，运行时拒绝派发"
+                elif coordination_name == "reuse_verified_knowledge_then_validate":
+                    counts["planned_only"] += 1
+                    action_type, action_status = "knowledge_reuse_pending", "planned"
+                    detail = "应先复用已验证知识并完成当前任务验证，暂不派发新执行"
+                else:
+                    counts["coordination_blocked"] += 1
+                    action_type, action_status = "dispatch_denied", "blocked"
+                    detail = f"Mission 运行时拒绝派发：{reason_code}"
+                append_action(
+                    actions=actions,
+                    node_id=node_id,
+                    title=node.get("title"),
+                    action_type=action_type,
+                    status=action_status,
+                    detail=detail,
+                    matched_skill_ids=matched_skill_ids,
+                    matched_skills=matched_skills,
+                    work_type=work_type,
+                    work_type_summary=work_type_summary,
+                    extra={
+                        "task_type": task_type,
+                        "capability_type": capability_type,
+                        "mission_runtime_authorization": authorization,
+                        "next_actions": node.get("next_actions", []),
+                    },
+                )
+                continue
+
+            dispatch_node = dict(node)
+            dispatch_node["mission_runtime_authorization"] = authorization
             if callable(worker_handler):
                 handled = worker_handler(
                     task_queue=task_queue,
                     tenant_id=tenant_id,
                     mission_run_id=mission_run_id,
                     plan=plan,
-                    node=node,
+                    node=dispatch_node,
                     resolved_context=resolved_context,
                     work_type=work_type,
                     work_type_summary=work_type_summary,
@@ -233,7 +349,7 @@ def create_mission_action_runtime_bindings(
                     mission_skill_ids.append(skill_id)
 
         overall_status = "submitted" if counts["submitted"] else "planning_only"
-        if counts["needs_input"] and not counts["submitted"]:
+        if (counts["needs_input"] or counts["coordination_blocked"]) and not counts["submitted"]:
             overall_status = "blocked"
         elif counts["needs_learning"] and not counts["submitted"]:
             overall_status = "needs_learning"
