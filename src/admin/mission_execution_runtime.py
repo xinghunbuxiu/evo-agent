@@ -549,10 +549,22 @@ def create_mission_execution_bindings(
                     resumed = resumed if isinstance(resumed, dict) else {}
                     resumed_actions = resumed.get("actions", []) if isinstance(resumed.get("actions"), list) else []
                     resumed_ids = {str(item.get("node_id") or "").strip() for item in resumed_actions if isinstance(item, dict)}
-                    if not resumed_actions or not resumed_ids.issubset(set(eligible_nodes)):
-                        raise ValueError("dependency resume returned no actions or an action outside the released node set")
+                    if (
+                        not resumed_actions
+                        or resumed_ids != set(eligible_nodes)
+                        or len(resumed_ids) != len(resumed_actions)
+                    ):
+                        raise ValueError("dependency resume must return exactly one action per released node")
                     if any(item.get("action_type") == "dependency_blocked" for item in resumed_actions if isinstance(item, dict)):
                         raise ValueError("dependency resume still reports unmet prerequisites")
+                    for resumed_action in resumed_actions:
+                        if (
+                            resumed_action.get("action_type") == "dispatch_denied"
+                            and resumed_action.get("status") == "blocked"
+                            and resumed_action.get("depends_on")
+                        ):
+                            resumed_action["replan_required"] = True
+                            resumed_action["replan_reason_code"] = "released_node_dispatch_denied"
                     refreshed_actions.extend(resumed_actions)
                     for task_id in resumed.get("submitted_task_ids", []) if isinstance(resumed.get("submitted_task_ids"), list) else []:
                         task_id = str(task_id).strip()
@@ -603,8 +615,11 @@ def create_mission_execution_bindings(
             str(item.get("node_id") or "").strip()
             for item in refreshed_actions
             if isinstance(item, dict)
-            and item.get("action_type") == "dependency_blocked"
             and item.get("replan_required") is True
+            and (
+                item.get("action_type") == "dependency_blocked"
+                or (item.get("action_type") == "dispatch_denied" and bool(item.get("depends_on")))
+            )
             and str(item.get("node_id") or "").strip()
         })
         waiting_dependency_nodes = sorted({
