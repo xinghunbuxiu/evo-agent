@@ -13,6 +13,7 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
     """Build an explicit, serializable central-coordination contract for a plan."""
     decisions: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    workforce_counts: dict[str, int] = {}
     for raw_node in nodes:
         if hasattr(raw_node, "to_dict") and callable(raw_node.to_dict):
             node = raw_node.to_dict()
@@ -39,6 +40,12 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
 
         counts[decision] = counts.get(decision, 0) + 1
         trace = node.get("decision_trace", [])
+        workforce_decision = node.get("workforce_decision")
+        if isinstance(workforce_decision, dict):
+            workforce_result = str(workforce_decision.get("decision") or "not_evaluated")
+            workforce_counts[workforce_result] = workforce_counts.get(workforce_result, 0) + 1
+        else:
+            workforce_decision = None
         decisions.append({
             "node_id": node_id,
             "status": status,
@@ -51,6 +58,7 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
             "validation_checks": [
                 str(item) for item in node.get("validation_checks", []) if str(item).strip()
             ],
+            "workforce_decision": workforce_decision,
             "decision_trace": trace if isinstance(trace, list) else [],
         })
 
@@ -62,6 +70,19 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
         "knowledge_policy": "verified_reuse_before_new_research",
         "validation_policy": "evidence_required_before_knowledge_promotion",
         "replanning_policy": "mission_reassesses_after_execution_result_or_blocker",
+        "workforce_policy": {
+            "decision_owner": "mission",
+            "catalog": "workspace/.organization",
+            "selection_mode": "capability_match_then_worker_availability",
+            "parallelism_policy": "explicit_parallel_safe_only",
+            "recommendation_only": True,
+            "dispatch_authorized": False,
+            "automatic_role_creation": False,
+            "automatic_worker_creation": False,
+            "automatic_worker_cloning": False,
+            "dynamic_dispatch_enabled": False,
+            "decision_counts": workforce_counts,
+        },
         "node_decisions": decisions,
         "decision_counts": counts,
     }
