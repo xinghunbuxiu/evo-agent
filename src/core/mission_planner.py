@@ -21,6 +21,7 @@ from .capability_types import capability_type_label, infer_capability_type
 from .learning import ExperienceStore, normalize_task_type
 from .skill_system import SkillRegistry
 from .mission_brain import build_mission_brain_contract
+from .organization_runtime import OrganizationRegistry, recommend_workforce_for_nodes
 
 try:
     from workers.registry import load_worker_mission_kind_templates
@@ -96,6 +97,8 @@ class MissionNode:
     reasoning: List[str] = field(default_factory=list)
     decision_trace: List[Dict[str, Any]] = field(default_factory=list)
     available_capability_ids: List[str] = field(default_factory=list)
+    required_capabilities: List[str] = field(default_factory=list)
+    parallel_safe: bool = False
     recommended_skill_ids: List[str] = field(default_factory=list)
     recommended_skills: List[Dict[str, Any]] = field(default_factory=list)
     knowledge_signals: Dict[str, Any] = field(default_factory=dict)
@@ -119,6 +122,8 @@ class MissionNode:
             "reasoning": self.reasoning,
             "decision_trace": self.decision_trace,
             "available_capability_ids": self.available_capability_ids,
+            "required_capabilities": self.required_capabilities,
+            "parallel_safe": self.parallel_safe,
             "recommended_skill_ids": self.recommended_skill_ids,
             "recommended_skills": self.recommended_skills,
             "knowledge_signals": self.knowledge_signals,
@@ -136,6 +141,18 @@ class MissionPlanner:
     def __init__(self, workspace: Path, registry: Optional[CapabilityRegistry] = None):
         self.workspace = workspace
         self.registry = registry or get_capability_registry()
+        organization_root = Path(workspace) / ".organization"
+        required_registry_files = (
+            organization_root / "roles.json",
+            organization_root / "workers.json",
+            organization_root / "knowledge_assets.json",
+        )
+        # Planning is read-only: do not initialize an empty organization registry as a side effect.
+        self.organization_registry = (
+            OrganizationRegistry(workspace)
+            if all(path.is_file() for path in required_registry_files)
+            else None
+        )
 
     def _mission_kind_templates(self) -> dict[str, dict[str, Any]]:
         templates = dict(MISSION_KIND_TEMPLATES)
@@ -216,6 +233,29 @@ class MissionPlanner:
             context=context,
             nodes=nodes,
         )
+        serialized_nodes = [node.to_dict() for node in nodes]
+        workforce_decisions = recommend_workforce_for_nodes(serialized_nodes, self.organization_registry)
+        workforce_by_node = {
+            str(item.get("node_id")): item
+            for item in workforce_decisions
+            if item.get("node_id")
+        }
+        for node_payload in serialized_nodes:
+            node_id = str(node_payload.get("id") or "")
+            workforce_decision = workforce_by_node.get(node_id)
+            if workforce_decision:
+                node_payload["workforce_decision"] = workforce_decision
+                node_payload["decision_trace"] = list(node_payload.get("decision_trace", [])) + [{
+                    "step": "workforce_catalog_match",
+                    "rule_id": "mission.workforce_recommendation.v1",
+                    "result": workforce_decision.get("decision"),
+                    "evidence": {
+                        "required_capabilities": workforce_decision.get("required_capabilities", []),
+                        "recommended_role_id": workforce_decision.get("recommended_role_id"),
+                        "recommended_worker_id": workforce_decision.get("recommended_worker_id"),
+                        "dispatch_state": workforce_decision.get("dispatch_state"),
+                    },
+                }]
         return {
             "plan_version": "mission.plan.v1",
             "decision_trace": mission_decision_trace,
@@ -232,8 +272,8 @@ class MissionPlanner:
             "status_summary": status_summary,
             "gap_summary": gap_summary,
             "learning_tasks": learning_tasks,
-            "nodes": [node.to_dict() for node in nodes],
-            "orchestration": build_mission_brain_contract(nodes),
+            "nodes": serialized_nodes,
+            "orchestration": build_mission_brain_contract(serialized_nodes),
             "recommended_next_actions": self._recommended_actions(nodes, gap_summary, learning_tasks),
         }
 
@@ -457,6 +497,12 @@ class MissionPlanner:
             validation_checks=validation_checks,
             priority=priority,
             next_actions=next_actions,
+            required_capabilities=self._unique_list(
+                node_template.get("required_capabilities")
+                if isinstance(node_template.get("required_capabilities"), list)
+                else [capability_type]
+            ),
+            parallel_safe=node_template.get("parallel_safe") is True,
         )
 
     def _node_blockers(self, *, goal: str, context: dict[str, Any], task_type: str) -> list[str]:
