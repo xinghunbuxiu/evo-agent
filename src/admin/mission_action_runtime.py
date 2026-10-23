@@ -290,6 +290,8 @@ def create_mission_action_runtime_bindings(
             "needs_learning": 0,
             "needs_input": 0,
             "planned_only": 0,
+            "dependency_waiting": 0,
+            "dependency_replan_required": 0,
         }
 
         nodes = plan.get("nodes")
@@ -345,6 +347,7 @@ def create_mission_action_runtime_bindings(
             unmet_dependencies = [dependency for dependency in dependencies if dependency not in completed_ids]
             if unmet_dependencies:
                 counts["planned_only"] += 1
+                counts["dependency_waiting"] += 1
                 dependency_authorization = {
                     "schema_version": "mission.dispatch.authorization.v1",
                     "mission_run_id": mission_run_id,
