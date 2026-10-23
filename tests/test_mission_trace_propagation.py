@@ -251,6 +251,24 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(resumed["actions"][0]["node_id"], "node-b")
         self.assertEqual(resumed["actions"][0]["action_type"], "task_submitted")
 
+    def test_runtime_rejects_dependency_cycles_before_any_worker_dispatch(self):
+        submitted_nodes = []
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+            task_priority_cls=object,
+            mission_action_handlers={"worker-a": lambda **kwargs: submitted_nodes.append(kwargs["node"]["id"]) or True},
+        )
+        with self.assertRaisesRegex(ValueError, "dependency cycle detected"):
+            bindings["build_mission_actions"](
+                task_queue=object(), tenant_id="tenant-a", mission_run_id="run-cycle",
+                plan={"nodes": [
+                    {"id": "node-a", "depends_on": ["node-b"]},
+                    {"id": "node-b", "depends_on": ["node-a"]},
+                ]},
+                context={"runtime_primary_worker_id": "worker-a"}, work_type={}, work_type_summary={},
+            )
+        self.assertEqual(submitted_nodes, [])
+
     def test_refresh_returns_completed_prerequisite_result_and_resumes_dependent_node(self):
         completed_task = SimpleNamespace(
             id="task-node-a", type="analyze", status=SimpleNamespace(value="completed"),
