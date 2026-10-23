@@ -75,3 +75,15 @@ python -m unittest tests.test_mission_planner_trace -v
 真实 Worker handler 收到节点时会同时收到授权证据，并将其写入 `task_queue.submit()` 的任务 payload（`_mission_dispatch_authorization`）。实际派发仍以任务队列返回的 task ID 和 Mission action 的 `task_submitted` 记录为准；刷新阶段按 task ID 读取真实任务状态/结果，拒绝派发和知识复用待办也会保留在运行状态统计中。协调合同节点必须包含明确的 `id`、`status`、`reasoning`、`blockers`、`recommended_skill_ids`、`validation_checks`、`decision_trace` 与布尔 `parallel_safe`；运行时节点也必须提供 `task_type` 等必要字段。缺失字段会明确报错，缺少或格式错误的协调合同则 fail closed，不回退到未受控派发。
 
 任务依赖图、跨 Mission 的员工原子预留/冲突锁、租约、取消、崩溃恢复和分布式 exactly-once 尚未接通。当前 `parallel_safe` 只作为显式安全意图与审计信号，不能单凭它启动并行执行；员工目录推荐也不是跨进程的原子锁。下一步应先补依赖图/循环检测和员工原子预留，再把等待依赖的节点纳入执行结果后的重规划闭环。
+
+
+## 运行时授权、执行回传与失败重规划
+
+Mission 的协调计划只是规划证据。实际任务进入 Worker 前，`mission_action_runtime` 必须重新校验 `mission.coordination.v1` 合同、节点状态、阻塞项、验证/技能证据以及员工推荐与运行时目标是否一致，再生成 `mission.dispatch.authorization.v1`。
+
+- `mission_runtime_authorization.authorized=true` 表示运行时已授权本次节点派发；`workforce_decision.dispatch_authorized=false` 仍保留“员工推荐本身没有授权”的事实。
+- Worker 将 `_mission_dispatch_authorization` 与 `_mission_decision_trace` 放进真实任务 payload，便于从任务记录追溯回 Mission run 和节点。自媒体的分析、评论采集任务也必须携带同一组证据。
+- `mission_execution_runtime` 通过实际 `task_queue.get_task(task_id)` 读取 completed/failed/running 状态；失败时创建关联原任务、Mission run、节点、决策轨迹和派发授权的 failure-learning ticket。
+- 失败任务不会因为 `next_cycle_plan.status=ready` 就直接自动重跑。只有学习/验证状态和 Mission run 总状态达到自动续跑策略要求时，`mission_runtime` 才会创建下一轮 Mission。
+
+CI 运行如果在 runner 分配前失败（无 runner、无步骤），不代表测试通过或测试失败；必须等待有实际步骤的运行，或在可执行环境中完成回归验证后才能标记验证通过。
