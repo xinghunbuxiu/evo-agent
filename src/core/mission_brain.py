@@ -59,6 +59,7 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
                 str(item) for item in node.get("validation_checks", []) if str(item).strip()
             ],
             "workforce_decision": workforce_decision,
+            "parallel_safe": bool(node.get("parallel_safe", False)),
             "decision_trace": trace if isinstance(trace, list) else [],
         })
 
@@ -90,14 +91,7 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
             "action": action,
             "reason_code": reason,
             "dispatch_authorized": False,
-            "parallel_safe": bool(next(
-                (
-                    raw.get("parallel_safe", False)
-                    for raw in nodes
-                    if isinstance(raw, dict) and str(raw.get("id") or "").strip() == node_id
-                ),
-                False,
-            )),
+            "parallel_safe": bool(decision.get("parallel_safe", False)),
         })
 
     ready_for_review = [
