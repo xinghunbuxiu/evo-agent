@@ -56,7 +56,7 @@ Evo 的 Mission 是组织级主脑，不是一个只负责把任务按名称转�
 
 当前代码已具备 Mission Planner、节点级能力/知识信号、verified Skill 推荐、decision_trace、任务运行持久化、失败学习关联和可插拔 Worker handler。新增的 mission.brain.contract.v1 将主脑决策所有权、集中分发策略、知识优先策略、验收门槛，以及每个节点的决策/验证信息写入计划，并把决策摘要关联到具体动作记录。
 
-新增的 OrganizationRegistry 将岗位、员工实例和知识资产分开持久化；Mission Planner 读取已初始化的目录后，按节点能力要求与员工状态生成可追溯的员工建议，并在计划内避免把同一名可用员工同时建议给多个节点。只有节点显式标记 parallel_safe: true 时，繁忙/已预留员工才会触发“建议复制”；缺岗位时只建议创建岗位与员工。复制配置时会剔除凭据和运行状态字段，验证资产必须带证据引用后才能归档到岗位。
+新增的 OrganizationRegistry 将岗位、员工实例和知识资产分开持久化；Mission Planner 读取已初始化的目录后，按节点能力要求与员工状态生成可追溯的员工建议，并在计划内避免把同一名可用员工同时建议给多个节点。只有节点显式标记 parallel_safe: true 时，繁忙/已预留员工才会触发“建议复制”；缺岗位时只建议创建岗位与员工。复制配置时会剔除凭据和运行状态字段；知识资产先登记为 candidate，必须通过 validate_knowledge_asset 提交证据引用才能变为 validated，升为组织 standard 还需要 approval_ref，员工退出时只能归档 validated/standard 资产。
 
 边界必须明确：这些是计划层建议，不是实际招聘、克隆或动态派发。动作记录显式标记 recommendation_only / dispatch_authorized: false；当前没有自动创建岗位、自动克隆员工、基于目录执行真实任务派发或租约/并发锁。未初始化的目录也不会被 Mission Planner 偷偷创建，而会明确返回 catalog_unavailable。
 
