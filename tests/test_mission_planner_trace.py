@@ -135,7 +135,7 @@ class MissionPlannerTraceTests(unittest.TestCase):
         node = result["nodes"][0]
         self.assertEqual(
             [item["step"] for item in node["decision_trace"]],
-            ["input_validation", "capability_match", "knowledge_check", "status_decision"],
+            ["input_validation", "capability_match", "knowledge_check", "status_decision", "workforce_catalog_match"],
         )
         for item in node["decision_trace"]:
             self.assertTrue(item["rule_id"])
