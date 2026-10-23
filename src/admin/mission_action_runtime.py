@@ -147,7 +147,7 @@ def create_mission_action_runtime_bindings(
                     submitted_task_ids=submitted_task_ids,
                     matched_skill_ids=matched_skill_ids,
                     matched_skills=matched_skills,
-                    append_action=_append_base_action,
+                    append_action=append_action,
                     task_priority_cls=task_priority_cls,
                 )
                 if handled:
