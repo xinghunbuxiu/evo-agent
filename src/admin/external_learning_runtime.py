@@ -607,6 +607,61 @@ def create_external_learning_runtime_bindings(
                 })
                 candidate_approaches.extend(candidates)
                 continue
+            if source in {"web_search", "official_docs"}:
+                try:
+                    from admin.research_connectors import search_official_docs, search_web
+
+                    search_result = (
+                        search_official_docs(queries)
+                        if source == "official_docs"
+                        else search_web(queries)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    search_result = {
+                        "status": "error",
+                        "results": [],
+                        "detail": f"{type(exc).__name__}: {str(exc)[:180]}",
+                    }
+                search_items = search_result.get("results", []) if isinstance(search_result, dict) else []
+                source_candidates = []
+                for result_item in search_items:
+                    if not isinstance(result_item, dict) or not result_item.get("url"):
+                        continue
+                    title = str(result_item.get("title") or result_item["url"]).strip()
+                    snippet = str(result_item.get("snippet") or "").strip()
+                    source_candidates.append({
+                        "source": source,
+                        "title": title[:200],
+                        "summary": trim_candidate_text(snippet or title, 500),
+                        "confidence": 0.55 if snippet else 0.4,
+                        "evidence": [
+                            f"url={result_item['url']}",
+                            f"query={str(result_item.get('query') or '')[:240]}",
+                            f"evidence_type={'official_documentation_search' if source == 'official_docs' else 'public_web_search'}",
+                        ],
+                        "next_steps": [
+                            "打开原始来源核对版本、适用范围与结论",
+                            "将候选方案用于当前样本的最小重放验证",
+                        ],
+                        "metadata": {
+                            "url": result_item["url"],
+                            "snippet": snippet[:1000],
+                            "query": str(result_item.get("query") or "")[:400],
+                        },
+                    })
+                source_runs.append({
+                    "source": source,
+                    "status": (
+                        search_result.get("status", "unknown")
+                        if isinstance(search_result, dict)
+                        else "error"
+                    ),
+                    "candidate_count": len(source_candidates),
+                    "detail": search_result.get("detail") if isinstance(search_result, dict) else "invalid_search_result",
+                })
+                candidate_approaches.extend(source_candidates)
+                continue
+
             if source == "ai_assist":
                 ai_result = None
                 try:
