@@ -143,12 +143,12 @@ class MissionBrainContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             organization = OrganizationRegistry(Path(tmp))
             organization.create_role(
-                role_id="automation-role", title="Automation Specialist",
+                role_id="android-role", title="Android Specialist",
                 responsibilities=["plan", "execute"],
-                required_capabilities=["automation"],
+                required_capabilities=["android", "kotlin"],
             )
             organization.create_worker(
-                worker_id="automation-a", role_id="automation-role",
+                worker_id="android-a", role_id="android-role",
                 profile={"skills": ["workflow"]},
             )
             planner = MissionPlanner(Path(tmp), registry=EmptyRegistry())
@@ -156,12 +156,12 @@ class MissionBrainContractTests(unittest.TestCase):
                 tenant_id="tenant-a",
                 goal="Build a reusable project workflow",
                 mission_kind="automation_operation",
-                context={},
+                context={"required_capabilities": ["android", "kotlin"]},
             )
 
         first = plan["nodes"][0]["workforce_decision"]
         self.assertEqual(first["decision"], "assign_existing_worker_recommended")
-        self.assertEqual(first["recommended_worker_id"], "automation-a")
+        self.assertEqual(first["recommended_worker_id"], "android-a")
         self.assertFalse(first["dispatch_authorized"])
         self.assertEqual(first["dispatch_state"], "recommendation_only")
         self.assertEqual(
