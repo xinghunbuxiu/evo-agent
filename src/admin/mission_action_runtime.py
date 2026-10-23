@@ -238,7 +238,6 @@ def create_mission_action_runtime_bindings(
             "needs_learning": 0,
             "needs_input": 0,
             "planned_only": 0,
-            "dispatch_denied": 0,
         }
 
         nodes = plan.get("nodes")
@@ -294,7 +293,6 @@ def create_mission_action_runtime_bindings(
                     action_type, action_status = "knowledge_reuse_pending", "planned"
                     detail = "应先复用已验证知识并完成当前任务验证，暂不派发新执行"
                 else:
-                    counts["dispatch_denied"] += 1
                     action_type, action_status = "dispatch_denied", "blocked"
                     detail = f"Mission 运行时拒绝派发：{reason_code}"
                 append_action(
@@ -403,7 +401,13 @@ def create_mission_action_runtime_bindings(
                     mission_skill_ids.append(skill_id)
 
         overall_status = "submitted" if counts["submitted"] else "planning_only"
-        if (counts["needs_input"] or counts["dispatch_denied"]) and not counts["submitted"]:
+        has_dispatch_denial = any(
+            isinstance(action, dict)
+            and action.get("action_type") == "dispatch_denied"
+            and action.get("status") == "blocked"
+            for action in actions
+        )
+        if (counts["needs_input"] or has_dispatch_denial) and not counts["submitted"]:
             overall_status = "blocked"
         elif counts["needs_learning"] and not counts["submitted"]:
             overall_status = "needs_learning"
