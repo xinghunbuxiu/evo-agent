@@ -79,6 +79,9 @@ class MissionTracePropagationTests(unittest.TestCase):
                     "task_type": "design",
                     "status": "planned",
                     "decision_trace": trace,
+                    "blockers": [],
+                    "recommended_skill_ids": [],
+                    "validation_checks": [],
                 }],
                 "orchestration": {
                     "dispatch_mode": "centralized",
