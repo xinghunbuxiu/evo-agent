@@ -70,8 +70,8 @@ python -m unittest tests.test_mission_planner_trace -v
 
 ## 已接通的最小运行时闭环
 
-`start_mission()` 将计划交给 `build_mission_run()`，再由 `build_mission_actions()` 逐节点读取协调计划。运行时只有在协调合同版本/所有者/授权位有效、节点状态为 `ready`、无 blocker、存在运行时目标，并且岗位目录明确推荐当前路由中的同一可用 Worker 时，才写入独立的 `mission.dispatch.authorization.v1` 授权证据。规划合同自身的 `dispatch_authorized` 必须保持 `false`；Worker 推荐字段也不会被改写为授权。
+`start_mission()` 将计划交给 `build_mission_run()`，再由 `build_mission_actions()` 逐节点读取协调计划。运行时只有在协调合同版本/所有者/授权位有效、节点状态符合对应动作、无 blocker、存在运行时目标，并且岗位目录明确推荐当前路由中的同一可用 Worker 时，才写入独立的 `mission.dispatch.authorization.v1` 授权证据。普通执行要求节点状态为 `ready`；已验证知识复用要求节点状态为 `reuse_existing`，并且至少有已验证 Skill ID 与当前任务验收检查。规划合同自身的 `dispatch_authorized` 必须保持 `false`；Worker 推荐字段也不会被改写为授权。
 
-真实 Worker handler 收到节点时会同时收到授权证据，并将其写入 `task_queue.submit()` 的任务 payload（`_mission_dispatch_authorization`）。实际派发仍以任务队列返回的 task ID 和 Mission action 的 `task_submitted` 记录为准；刷新阶段按 task ID 读取真实任务状态/结果，拒绝派发和知识复用待办也会保留在运行状态统计中。缺少或格式错误的协调合同会 fail closed，不回退到未受控派发。
+真实 Worker handler 收到节点时会同时收到授权证据，并将其写入 `task_queue.submit()` 的任务 payload（`_mission_dispatch_authorization`）。实际派发仍以任务队列返回的 task ID 和 Mission action 的 `task_submitted` 记录为准；刷新阶段按 task ID 读取真实任务状态/结果，拒绝派发和知识复用待办也会保留在运行状态统计中。协调合同节点必须包含明确的 `id`、`status`、`reasoning`、`blockers`、`recommended_skill_ids`、`validation_checks`、`decision_trace` 与布尔 `parallel_safe`；运行时节点也必须提供 `task_type` 等必要字段。缺失字段会明确报错，缺少或格式错误的协调合同则 fail closed，不回退到未受控派发。
 
-本闭环不等于已经实现跨 Worker 的并行锁、租约、取消、崩溃恢复或分布式 exactly-once。当前并行安全标记只用于审计，尚不能单凭它启动并行执行。
+任务依赖图、跨 Mission 的员工原子预留/冲突锁、租约、取消、崩溃恢复和分布式 exactly-once 尚未接通。当前 `parallel_safe` 只作为显式安全意图与审计信号，不能单凭它启动并行执行；员工目录推荐也不是跨进程的原子锁。下一步应先补依赖图/循环检测和员工原子预留，再把等待依赖的节点纳入执行结果后的重规划闭环。
