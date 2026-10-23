@@ -18,17 +18,34 @@ class MissionBrainContractTests(unittest.TestCase):
                 "id": "reuse",
                 "status": "reuse_existing",
                 "gap_type": "reuse_existing",
+                "reasoning": [],
+                "blockers": [],
                 "recommended_skill_ids": ["skill-verified"],
+                "validation_checks": [],
                 "decision_trace": [{"step": "knowledge_check", "result": "available"}],
+                "parallel_safe": False,
             },
             {
                 "id": "learn",
                 "status": "needs_learning",
                 "gap_type": "capability_gap",
+                "reasoning": [],
                 "blockers": [],
+                "recommended_skill_ids": [],
                 "validation_checks": ["run regression"],
+                "decision_trace": [],
+                "parallel_safe": False,
             },
-            {"id": "input", "status": "needs_input", "blockers": ["source_path"]},
+            {
+                "id": "input",
+                "status": "needs_input",
+                "reasoning": [],
+                "blockers": ["source_path"],
+                "recommended_skill_ids": [],
+                "validation_checks": [],
+                "decision_trace": [],
+                "parallel_safe": False,
+            },
         ])
 
         self.assertEqual(contract["decision_owner"], "mission")
@@ -42,13 +59,33 @@ class MissionBrainContractTests(unittest.TestCase):
         self.assertEqual(decisions["learn"]["decision"], "research_capability_gap")
         self.assertEqual(decisions["input"]["decision"], "request_missing_input")
 
-    def test_contract_ignores_invalid_nodes_and_preserves_decision_trace(self):
+    def test_contract_rejects_invalid_nodes_and_preserves_trace_for_valid_node(self):
+        with self.assertRaisesRegex(ValueError, "must be an object"):
+            build_mission_brain_contract([None])
+
+        with self.assertRaisesRegex(ValueError, "requires a non-empty id"):
+            build_mission_brain_contract([{
+                "status": "ready",
+                "reasoning": [],
+                "blockers": [],
+                "recommended_skill_ids": [],
+                "validation_checks": [],
+                "decision_trace": [],
+                "parallel_safe": False,
+            }])
+
         trace = [{"step": "capability_match", "result": "matched"}]
-        contract = build_mission_brain_contract([
-            None,
-            {"status": "ready"},
-            {"id": "node-a", "status": "ready", "gap_type": "knowledge_gap", "decision_trace": trace},
-        ])
+        contract = build_mission_brain_contract([{
+            "id": "node-a",
+            "status": "ready",
+            "gap_type": "knowledge_gap",
+            "reasoning": [],
+            "blockers": [],
+            "recommended_skill_ids": [],
+            "validation_checks": [],
+            "decision_trace": trace,
+            "parallel_safe": False,
+        }])
         self.assertEqual(len(contract["node_decisions"]), 1)
         self.assertEqual(contract["node_decisions"][0]["decision"], "run_minimal_validating_experiment")
         self.assertEqual(contract["node_decisions"][0]["decision_trace"], trace)
@@ -62,9 +99,12 @@ class MissionBrainContractTests(unittest.TestCase):
             "id": "node-reuse",
             "status": "reuse_existing",
             "gap_type": "reuse_existing",
+            "reasoning": [],
+            "blockers": [],
             "recommended_skill_ids": ["skill-a"],
             "validation_checks": ["run tests"],
             "decision_trace": trace,
+            "parallel_safe": False,
             "workforce_decision": {
                 "decision": "assign_existing_worker_recommended",
                 "recommended_worker_id": "worker-a",
