@@ -117,6 +117,9 @@ class MissionPlannerTraceTests(unittest.TestCase):
         }
         with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
             result = planner.plan(tenant_id="test-tenant", goal="dependency test", mission_kind="dependency_demo", context={})
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(trace["dependency_graph_validation"]["rule_id"], "mission.dependency_graph.validated.v1")
+        self.assertEqual(trace["dependency_graph_validation"]["evidence"]["dependency_edge_count"], 1)
         self.assertEqual(result["dependency_graph"], {"inspect": [], "build": ["inspect"]})
         self.assertEqual(next(item for item in result["nodes"] if item["id"] == "build")["depends_on"], ["inspect"])
 
