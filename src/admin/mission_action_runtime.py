@@ -41,6 +41,55 @@ def _append_base_action(
     actions.append(payload)
 
 
+def _validate_plan_dependencies(nodes: list[dict]) -> dict[str, list[str]]:
+    """Fail closed on malformed dependencies before any worker can be invoked."""
+    node_by_id: dict[str, dict] = {}
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise ValueError(f"Mission plan node at index {index} must be an object")
+        node_id = str(node.get("id") or "").strip()
+        if not node_id:
+            raise ValueError(f"Mission plan node at index {index} requires a non-empty id")
+        if node_id in node_by_id:
+            raise ValueError(f"Duplicate Mission plan node id: {node_id}")
+        node_by_id[node_id] = node
+
+    graph: dict[str, list[str]] = {}
+    for node_id, node in node_by_id.items():
+        raw_dependencies = node.get("depends_on", [])
+        if not isinstance(raw_dependencies, list):
+            raise ValueError(f"Mission plan node {node_id!r} requires list field 'depends_on'")
+        dependencies = [str(item).strip() for item in raw_dependencies]
+        if any(not item for item in dependencies):
+            raise ValueError(f"Mission plan node {node_id!r} has an empty dependency id")
+        if len(dependencies) != len(set(dependencies)):
+            raise ValueError(f"Mission plan node {node_id!r} has duplicate dependencies")
+        for dependency in dependencies:
+            if dependency == node_id:
+                raise ValueError(f"Mission plan node {node_id!r} cannot depend on itself")
+            if dependency not in node_by_id:
+                raise ValueError(f"Mission plan node {node_id!r} depends on unknown node {dependency!r}")
+        graph[node_id] = dependencies
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node_id: str) -> None:
+        if node_id in visiting:
+            raise ValueError(f"Mission plan dependency cycle detected at node {node_id!r}")
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        for dependency in graph[node_id]:
+            visit(dependency)
+        visiting.remove(node_id)
+        visited.add(node_id)
+
+    for node_id in graph:
+        visit(node_id)
+    return graph
+
+
 def create_mission_action_runtime_bindings(
     *,
     normalize_string_list: Callable[[object], list[str]],
@@ -57,6 +106,8 @@ def create_mission_action_runtime_bindings(
         context: dict,
         work_type: dict,
         work_type_summary: dict,
+        only_node_ids: list[str] | None = None,
+        completed_node_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         resolved_context = dict(context)
         runtime_route = plan.get("runtime_route", {}) if isinstance(plan.get("runtime_route"), dict) else {}
@@ -243,6 +294,21 @@ def create_mission_action_runtime_bindings(
         nodes = plan.get("nodes")
         if not isinstance(nodes, list):
             raise ValueError("Mission plan requires a nodes list")
+        dependency_graph = _validate_plan_dependencies(nodes)
+        selected_node_ids = None
+        if only_node_ids is not None:
+            selected_node_ids = [str(item).strip() for item in only_node_ids]
+            if any(not item for item in selected_node_ids) or len(selected_node_ids) != len(set(selected_node_ids)):
+                raise ValueError("only_node_ids must contain unique non-empty node ids")
+            unknown_selected = sorted(set(selected_node_ids) - set(dependency_graph))
+            if unknown_selected:
+                raise ValueError(f"Cannot resume unknown Mission nodes: {unknown_selected}")
+            selected_node_ids = set(selected_node_ids)
+        completed_ids = {
+            str(item).strip()
+            for item in (completed_node_ids or [])
+            if str(item).strip()
+        }
         for index, node in enumerate(nodes):
             if not isinstance(node, dict):
                 raise ValueError(f"Mission plan node at index {index} must be an object")
@@ -252,6 +318,8 @@ def create_mission_action_runtime_bindings(
             node_id = str(node["id"] or "").strip()
             if not node_id:
                 raise ValueError(f"Mission plan node at index {index} requires a non-empty id")
+            if selected_node_ids is not None and node_id not in selected_node_ids:
+                continue
             if not isinstance(node["status"], str) or not node["status"].strip():
                 raise ValueError(f"Mission plan node {node_id!r} requires a non-empty status")
             if not isinstance(node["task_type"], str) or not node["task_type"].strip():
@@ -271,6 +339,49 @@ def create_mission_action_runtime_bindings(
             matched_skills = node.get("recommended_skills", [])
             if not isinstance(matched_skills, list):
                 matched_skills = []
+
+            dependencies = dependency_graph[node_id]
+            unmet_dependencies = [dependency for dependency in dependencies if dependency not in completed_ids]
+            if unmet_dependencies:
+                counts["planned_only"] += 1
+                dependency_authorization = {
+                    "schema_version": "mission.dispatch.authorization.v1",
+                    "mission_run_id": mission_run_id,
+                    "node_id": node_id,
+                    "decision_owner": "mission_runtime",
+                    "authorized": False,
+                    "policy_rule_id": "mission.dispatch.dependency_gate.v1",
+                    "reason_code": "dependency_not_completed",
+                    "evidence": {
+                        "depends_on": list(dependencies),
+                        "unmet_dependency_ids": list(unmet_dependencies),
+                        "completed_node_ids": sorted(completed_ids),
+                    },
+                    "authorized_at": None,
+                }
+                append_action(
+                    actions=actions,
+                    node_id=node_id,
+                    title=node.get("title"),
+                    action_type="dependency_blocked",
+                    status="blocked",
+                    detail="前置节点尚未全部完成，Mission 暂停该节点派发",
+                    matched_skill_ids=matched_skill_ids,
+                    matched_skills=matched_skills,
+                    work_type=work_type,
+                    work_type_summary=work_type_summary,
+                    extra={
+                        "task_type": task_type,
+                        "capability_type": capability_type,
+                        "depends_on": list(dependencies),
+                        "dependency_state": "waiting",
+                        "dependency_blockers": list(unmet_dependencies),
+                        "replan_required": False,
+                        "mission_runtime_authorization": dependency_authorization,
+                        "next_actions": node.get("next_actions", []),
+                    },
+                )
+                continue
 
             coordination = coordination_by_node.get(node_id)
             decision = brain_decisions.get(node_id)
@@ -425,8 +536,40 @@ def create_mission_action_runtime_bindings(
             "primary_worker_id": primary_worker_id or None,
         }
 
+    def resume_dependency_nodes(
+        *,
+        task_queue,
+        mission_run: dict,
+        node_ids: list[str],
+        completed_node_ids: list[str],
+    ) -> dict[str, Any]:
+        """Re-evaluate only released nodes; upstream tasks are never resubmitted here."""
+        if not isinstance(mission_run, dict):
+            raise ValueError("Mission run is required to resume dependency-blocked nodes")
+        raw_plan = mission_run.get("plan")
+        if not isinstance(raw_plan, dict):
+            raise ValueError("Mission run has no persisted plan for dependency resumption")
+        plan = dict(raw_plan)
+        if not isinstance(plan.get("runtime_route"), dict):
+            plan["runtime_route"] = mission_run.get("runtime_route", {})
+        context = mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
+        work_type = mission_run.get("work_type", {}) if isinstance(mission_run.get("work_type"), dict) else {}
+        work_type_summary = mission_run.get("work_type_summary", {}) if isinstance(mission_run.get("work_type_summary"), dict) else {}
+        return build_mission_actions(
+            task_queue=task_queue,
+            tenant_id=str(mission_run.get("tenant_id") or "default"),
+            mission_run_id=str(mission_run.get("mission_run_id") or ""),
+            plan=plan,
+            context=context,
+            work_type=work_type,
+            work_type_summary=work_type_summary,
+            only_node_ids=node_ids,
+            completed_node_ids=completed_node_ids,
+        )
+
     return {
         "build_mission_actions": build_mission_actions,
+        "resume_dependency_nodes": resume_dependency_nodes,
     }
 
 
