@@ -347,6 +347,7 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(dependent["dependency_state"], "failed")
         self.assertTrue(dependent["replan_required"])
         self.assertEqual(dependent["replan_reason_code"], "dependency_failed")
+        self.assertEqual(refreshed["status"], "needs_learning")
         self.assertEqual(refreshed["summary"]["next_cycle_plan"]["status"], "ready")
         self.assertTrue(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["required"])
         self.assertFalse(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["automatic_dispatch"])
