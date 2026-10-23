@@ -96,6 +96,13 @@ def create_mission_action_runtime_bindings(
 
         brain_contract = plan.get("orchestration", {}) if isinstance(plan.get("orchestration"), dict) else {}
         brain_decisions = index_mission_brain_decisions(brain_contract)
+        coordination_plan = brain_contract.get("coordination_plan", {})
+        coordination_actions = coordination_plan.get("actions", []) if isinstance(coordination_plan, dict) else []
+        coordination_by_node = {
+            str(item.get("node_id")): item
+            for item in coordination_actions
+            if isinstance(item, dict) and str(item.get("node_id") or "").strip()
+        }
 
         def append_action(**kwargs) -> None:
             node_key = str(kwargs.get("node_id") or "").strip()
