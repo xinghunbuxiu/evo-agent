@@ -49,8 +49,11 @@ class OrganizationRegistryTests(unittest.TestCase):
         self.registry.register_knowledge_asset(
             asset_id="android-skill-v1", role_id="android-dev",
             title="Verified Android regression workflow", asset_type="skill",
-            status="validated", evidence_refs=["test-run:123"],
+            status="candidate", evidence_refs=[],
             content_ref="skills/android-regression/SKILL.md",
+        )
+        self.registry.validate_knowledge_asset(
+            asset_id="android-skill-v1", evidence_refs=["test-run:123"],
         )
         retired = self.registry.retire_worker(
             worker_id="android-a", validated_knowledge_asset_ids=["android-skill-v1"],
@@ -111,9 +114,46 @@ class OrganizationRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.registry.register_knowledge_asset(
                 asset_id="unsupported-claim", role_id="android-dev", title="No evidence",
-                asset_type="skill", status="validated", evidence_refs=[],
+                asset_type="skill", status="validated", evidence_refs=["claimed"],
                 content_ref="skills/no-evidence/SKILL.md",
             )
+        self.registry.register_knowledge_asset(
+            asset_id="candidate-no-evidence", role_id="android-dev", title="Candidate",
+            asset_type="skill", status="candidate", evidence_refs=[],
+            content_ref="skills/candidate/SKILL.md",
+        )
+        with self.assertRaises(ValueError):
+            self.registry.validate_knowledge_asset(
+                asset_id="candidate-no-evidence", evidence_refs=[],
+            )
+        validated = self.registry.validate_knowledge_asset(
+            asset_id="candidate-no-evidence", evidence_refs=["ci-run:456"],
+        )
+        self.assertEqual(validated["status"], "validated")
+        self.assertEqual(validated["evidence_refs"], ["ci-run:456"])
+
+    def test_standard_promotion_requires_validated_asset_and_approval(self):
+        self.registry.register_knowledge_asset(
+            asset_id="standard-candidate", role_id="android-dev", title="Candidate",
+            asset_type="skill", status="candidate", evidence_refs=[],
+            content_ref="skills/standard-candidate/SKILL.md",
+        )
+        with self.assertRaises(ValueError):
+            self.registry.promote_knowledge_asset_to_standard(
+                asset_id="standard-candidate", approval_ref="approval:1",
+            )
+        self.registry.validate_knowledge_asset(
+            asset_id="standard-candidate", evidence_refs=["ci-run:789"],
+        )
+        with self.assertRaises(ValueError):
+            self.registry.promote_knowledge_asset_to_standard(
+                asset_id="standard-candidate", approval_ref="",
+            )
+        standard = self.registry.promote_knowledge_asset_to_standard(
+            asset_id="standard-candidate", approval_ref="approval:1",
+        )
+        self.assertEqual(standard["status"], "standard")
+        self.assertEqual(standard["evidence_refs"], ["ci-run:789", "approval:1"])
 
     def test_workforce_recommends_available_worker_without_claiming_dispatch(self):
         decision = recommend_workforce_for_node(
