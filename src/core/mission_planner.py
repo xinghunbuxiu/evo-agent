@@ -152,26 +152,26 @@ class MissionPlanner:
     ) -> dict[str, Any]:
         context = context or {}
         templates = self._mission_kind_templates()
-        inferred_kind = self._infer_mission_kind(goal, context)
         requested_kind = str(mission_kind or context.get("mission_kind") or "").strip()
-        if mission_kind and mission_kind in templates:
+        if mission_kind:
+            if mission_kind not in templates:
+                raise ValueError(f"Unsupported mission_kind: {mission_kind}")
             resolved_kind = mission_kind
             resolution_source = "explicit_mission_kind"
-        elif context.get("mission_kind") and str(context.get("mission_kind")).strip() in templates:
-            resolved_kind = str(context.get("mission_kind")).strip()
+        elif context.get("mission_kind"):
+            context_kind = str(context.get("mission_kind")).strip()
+            if context_kind not in templates:
+                raise ValueError(f"Unsupported context mission_kind: {context_kind}")
+            resolved_kind = context_kind
             resolution_source = "context_mission_kind"
         elif context.get("work_type_id") and str(context.get("work_type_id")).strip() in templates:
             resolved_kind = str(context.get("work_type_id")).strip()
             resolution_source = "work_type_template_match"
         else:
-            resolved_kind = inferred_kind
-            resolution_source = (
-                "unsupported_explicit_kind_fell_back_to_default"
-                if requested_kind
-                else "default_template"
-            )
-        template = templates.get(resolved_kind, templates["automation_operation"])
-        resolved_template_kind = resolved_kind if resolved_kind in templates else "automation_operation"
+            resolved_kind = self._infer_mission_kind(goal, context)
+            resolution_source = "default_template" if resolved_kind == "automation_operation" else "inferred_template"
+        template = templates[resolved_kind]
+        resolved_template_kind = resolved_kind
         mission_decision_trace = [
             {
                 "step": "mission_kind_resolution",
