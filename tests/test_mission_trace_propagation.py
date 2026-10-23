@@ -491,6 +491,96 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertTrue(action["mission_runtime_authorization"]["authorized"])
         self.assertFalse(action["workforce_dispatch_authorized"])
 
+    def test_verified_skill_reuse_can_pass_runtime_authorization(self):
+        from types import SimpleNamespace
+        from workers.javascript_reverse.runtime import handle_javascript_reverse_mission_node
+
+        class Queue:
+            def __init__(self):
+                self.submissions = []
+
+            def submit(self, **kwargs):
+                self.submissions.append(kwargs)
+                return SimpleNamespace(id=f"task-{len(self.submissions)}")
+
+        class Priority:
+            HIGH = 1
+            NORMAL = 2
+
+        trace = [{"step": "knowledge_check", "rule_id": "mission.knowledge_signals.v1", "result": "available"}]
+        workforce = {
+            "decision": "assign_existing_worker_recommended",
+            "recommended_worker_id": "worker-a",
+            "dispatch_state": "recommendation_only",
+            "dispatch_authorized": False,
+        }
+        plan = {
+            "goal": "reuse verified JavaScript analysis skill",
+            "mission_kind": "javascript_reverse",
+            "runtime_route": {"primary_worker_id": "worker-a"},
+            "nodes": [{
+                "id": "analyze_bundle",
+                "title": "Analyze bundle",
+                "task_type": "analyze",
+                "status": "reuse_existing",
+                "blockers": [],
+                "decision_trace": trace,
+                "recommended_skill_ids": ["skill-verified"],
+                "recommended_skills": [{"skill_id": "skill-verified", "status": "local_verified"}],
+                "validation_checks": ["verify-output"],
+                "role_reflection_context": {},
+            }],
+            "orchestration": {
+                "dispatch_mode": "centralized",
+                "node_decisions": [{
+                    "node_id": "analyze_bundle",
+                    "decision": "reuse_verified_knowledge_first",
+                    "decision_trace": trace,
+                    "validation_checks": ["verify-output"],
+                    "verified_skill_ids": ["skill-verified"],
+                    "workforce_decision": workforce,
+                }],
+                "coordination_plan": {
+                    "schema_version": "mission.coordination.v1",
+                    "decision_owner": "mission",
+                    "dispatch_authorized": False,
+                    "actions": [{
+                        "node_id": "analyze_bundle",
+                        "action": "reuse_verified_knowledge_then_validate",
+                        "reason_code": "verified_reuse_precedes_new_research",
+                        "dispatch_authorized": False,
+                    }],
+                },
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle = Path(temp_dir) / "main.js"
+            bundle.write_text("window.app = {};\n", encoding="utf-8")
+            queue = Queue()
+            bindings = create_mission_action_runtime_bindings(
+                normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+                task_priority_cls=Priority,
+                mission_action_handlers={"worker-a": handle_javascript_reverse_mission_node},
+            )
+            state = bindings["build_mission_actions"](
+                task_queue=queue,
+                tenant_id="tenant-a",
+                mission_run_id="run-reuse",
+                plan=plan,
+                context={"source_path": str(bundle)},
+                work_type={"work_type_id": "javascript_reverse"},
+                work_type_summary={},
+            )
+
+        self.assertEqual(len(queue.submissions), 1)
+        self.assertEqual(queue.submissions[0]["payload"]["_mission_decision_trace"], trace)
+        authorization = queue.submissions[0]["payload"]["_mission_dispatch_authorization"]
+        self.assertTrue(authorization["authorized"])
+        self.assertEqual(authorization["reason_code"], "authorized")
+        self.assertEqual(state["actions"][0]["status"], "submitted")
+        self.assertEqual(state["actions"][0]["verified_skill_ids"], ["skill-verified"])
+
     def test_missing_input_is_blocked_before_worker_handler_can_submit(self):
         from workers.javascript_reverse.runtime import handle_javascript_reverse_mission_node
 
