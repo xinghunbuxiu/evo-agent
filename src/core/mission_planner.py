@@ -497,10 +497,10 @@ class MissionPlanner:
             validation_checks=validation_checks,
             priority=priority,
             next_actions=next_actions,
-            required_capabilities=self._unique_list(
-                node_template.get("required_capabilities")
-                if isinstance(node_template.get("required_capabilities"), list)
-                else [capability_type]
+            required_capabilities=self._node_required_capabilities(
+                node_template=node_template,
+                context=context,
+                capability_type=capability_type,
             ),
             parallel_safe=node_template.get("parallel_safe") is True,
         )
@@ -829,6 +829,22 @@ class MissionPlanner:
                 "next_actions": node.next_actions,
             })
         return tasks
+
+    def _node_required_capabilities(
+        self,
+        *,
+        node_template: dict[str, Any],
+        context: dict[str, Any],
+        capability_type: str,
+    ) -> list[str]:
+        """Prefer task-specific requirements, then explicit mission requirements, then category."""
+        template_requirements = node_template.get("required_capabilities")
+        if isinstance(template_requirements, list) and template_requirements:
+            return self._unique_list(template_requirements)
+        mission_requirements = context.get("required_capabilities") if isinstance(context, dict) else None
+        if isinstance(mission_requirements, list) and mission_requirements:
+            return self._unique_list(mission_requirements)
+        return self._unique_list([capability_type]) if capability_type else []
 
     def _unique_list(self, items: list[str]) -> list[str]:
         seen: set[str] = set()
