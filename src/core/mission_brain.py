@@ -62,6 +62,53 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
             "decision_trace": trace if isinstance(trace, list) else [],
         })
 
+    coordination_actions: list[dict[str, Any]] = []
+    for decision in decisions:
+        node_id = decision["node_id"]
+        status = decision["status"]
+        workforce = decision.get("workforce_decision")
+        if status == "needs_input":
+            action = "request_missing_input"
+            reason = "required_inputs_missing"
+        elif status == "needs_learning" or decision.get("decision") == "research_capability_gap":
+            action = "resolve_capability_or_learning_gap"
+            reason = "capability_or_experience_gap"
+        elif decision.get("decision") == "reuse_verified_knowledge_first":
+            action = "reuse_verified_knowledge_then_validate"
+            reason = "verified_reuse_precedes_new_research"
+        elif isinstance(workforce, dict) and workforce.get("dispatch_state") == "recommendation_only":
+            action = "await_dispatch_authorization"
+            reason = "workforce_selection_is_recommendation_only"
+        elif status == "ready":
+            action = "prepare_for_authorized_dispatch"
+            reason = "node_ready_but_dispatch_not_authorized_by_planner"
+        else:
+            action = "inspect_evidence_and_reassess"
+            reason = "no_safe_dispatch_decision"
+        coordination_actions.append({
+            "node_id": node_id,
+            "action": action,
+            "reason_code": reason,
+            "dispatch_authorized": False,
+            "parallel_safe": bool(next(
+                (
+                    raw.get("parallel_safe", False)
+                    for raw in nodes
+                    if isinstance(raw, dict) and str(raw.get("id") or "").strip() == node_id
+                ),
+                False,
+            )),
+        })
+
+    ready_for_review = [
+        item["node_id"] for item in coordination_actions
+        if item["action"] in {"prepare_for_authorized_dispatch", "reuse_verified_knowledge_then_validate"}
+    ]
+    blocked_nodes = [
+        item["node_id"] for item in coordination_actions
+        if item["action"] in {"request_missing_input", "resolve_capability_or_learning_gap"}
+    ]
+
     return {
         "schema_version": "mission.brain.contract.v1",
         "decision_owner": "mission",
@@ -84,6 +131,19 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
             "decision_counts": workforce_counts,
         },
         "node_decisions": decisions,
+        "coordination_plan": {
+            "schema_version": "mission.coordination.v1",
+            "decision_owner": "mission",
+            "dispatch_authorized": False,
+            "dispatch_authorization_owner": "mission_runtime",
+            "actions": coordination_actions,
+            "ready_for_review_node_ids": ready_for_review,
+            "blocked_node_ids": blocked_nodes,
+            "parallel_safe_node_ids": [
+                item["node_id"] for item in coordination_actions if item["parallel_safe"]
+            ],
+            "policy": "never_dispatch_from_plan_recommendation_alone",
+        },
         "decision_counts": counts,
     }
 
