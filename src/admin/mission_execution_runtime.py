@@ -665,12 +665,12 @@ def create_mission_execution_bindings(
             overall_status = "running"
         elif counts["submitted"]:
             overall_status = "submitted"
+        elif counts["failed"]:
+            overall_status = "needs_learning"
         elif dependency_replan_nodes or waiting_dependency_nodes:
             overall_status = "blocked"
         elif counts["success"] and counts["needs_learning"] == 0 and counts["needs_input"] == 0:
             overall_status = "completed"
-        elif counts["failed"]:
-            overall_status = "needs_learning"
         elif counts["needs_input"] or any(
             isinstance(item, dict)
             and item.get("action_type") == "dispatch_denied"
