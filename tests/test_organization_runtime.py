@@ -30,6 +30,13 @@ class OrganizationRegistryTests(unittest.TestCase):
         self.assertEqual(clone["profile"], self.registry.get_worker("android-a")["profile"])
         self.assertEqual(clone["status"], "available")
         self.assertEqual(clone["active_task_ids"], [])
+        self.registry.set_worker_status(
+            worker_id="android-b", status="busy", active_task_ids=["task-2"],
+        )
+        self.assertEqual(self.registry.get_worker("android-a")["active_task_ids"], ["task-1"])
+        self.assertEqual(self.registry.get_worker("android-b")["active_task_ids"], ["task-2"])
+        self.assertEqual(self.registry.get_worker("android-a")["status"], "busy")
+        self.assertEqual(self.registry.get_worker("android-b")["status"], "busy")
         self.assertEqual(len(self.registry.list_workers(role_id="android-dev")), 2)
 
     def test_new_work_can_create_a_persistent_role(self):
