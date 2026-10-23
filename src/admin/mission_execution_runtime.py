@@ -150,8 +150,8 @@ def create_mission_execution_bindings(
         )
         learning_task["source"] = "mission_failure"
         learning_task["source_task_id"] = failed_task.id
-        learning_task["mission_run_id"] = mission_run.get("mission_run_id")
-        learning_task["mission_node_id"] = action.get("node_id")
+        learning_task["mission_run_id"] = mission_run["mission_run_id"]
+        learning_task["mission_node_id"] = action["node_id"]
         learning_task["decision_trace"] = action["decision_trace"]
         learning_task["goal"] = mission_run.get("goal")
         learning_task["updated_at"] = datetime.now().isoformat()
