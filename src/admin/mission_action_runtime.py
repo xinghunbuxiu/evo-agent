@@ -141,9 +141,9 @@ def create_mission_action_runtime_bindings(
             coordination: dict | None,
             decision: dict | None,
         ) -> dict[str, Any]:
-            node_id = str(node.get("id") or "").strip()
-            blockers = node.get("blockers", []) if isinstance(node.get("blockers"), list) else []
-            status = str(node.get("status") or "planned")
+            node_id = str(node["id"]).strip()
+            blockers = node["blockers"]
+            status = node["status"].strip()
             action_name = str((coordination or {}).get("action") or "")
             reason_code = "authorized"
             authorized = True
@@ -156,12 +156,22 @@ def create_mission_action_runtime_bindings(
                 authorized, reason_code = False, "coordination_contract_invalid"
             elif coordination is None:
                 authorized, reason_code = False, "coordination_action_missing"
-            elif action_name not in {"prepare_for_authorized_dispatch", "await_dispatch_authorization"}:
+            elif action_name not in {
+                "prepare_for_authorized_dispatch",
+                "await_dispatch_authorization",
+                "reuse_verified_knowledge_then_validate",
+            }:
                 authorized, reason_code = False, "coordination_action_not_dispatchable"
-            elif status != "ready":
+            elif action_name == "reuse_verified_knowledge_then_validate" and status != "reuse_existing":
+                authorized, reason_code = False, "verified_reuse_status_mismatch"
+            elif action_name != "reuse_verified_knowledge_then_validate" and status != "ready":
                 authorized, reason_code = False, "node_not_ready"
             elif blockers:
                 authorized, reason_code = False, "node_blockers_present"
+            elif action_name == "reuse_verified_knowledge_then_validate" and not (
+                node["recommended_skill_ids"] and node["validation_checks"]
+            ):
+                authorized, reason_code = False, "verified_skill_or_validation_evidence_missing"
             else:
                 runtime_target = primary_worker_id or primary_package_id or primary_capability_id
                 if not runtime_target:
@@ -170,6 +180,11 @@ def create_mission_action_runtime_bindings(
                     workforce = decision.get("workforce_decision") if isinstance(decision, dict) else None
                     if not isinstance(workforce, dict):
                         authorized, reason_code = False, "workforce_decision_missing"
+                    elif (
+                        workforce.get("dispatch_state") != "recommendation_only"
+                        or workforce.get("dispatch_authorized") is not False
+                    ):
+                        authorized, reason_code = False, "workforce_contract_invalid"
                     else:
                         workforce_result = str(workforce.get("decision") or "")
                         recommended_worker = str(workforce.get("recommended_worker_id") or "").strip()
@@ -209,14 +224,34 @@ def create_mission_action_runtime_bindings(
             "coordination_blocked": 0,
         }
 
-        for node in plan.get("nodes", []):
+        nodes = plan.get("nodes")
+        if not isinstance(nodes, list):
+            raise ValueError("Mission plan requires a nodes list")
+        for index, node in enumerate(nodes):
             if not isinstance(node, dict):
-                continue
-            node_id = str(node.get("id") or "node")
-            task_type = str(node.get("task_type") or "plan")
-            node_status = str(node.get("status") or "planned")
+                raise ValueError(f"Mission plan node at index {index} must be an object")
+            for field_name in ("id", "status", "task_type", "decision_trace", "blockers", "recommended_skill_ids", "validation_checks"):
+                if field_name not in node:
+                    raise ValueError(f"Mission plan node at index {index} requires field {field_name!r}")
+            node_id = str(node["id"] or "").strip()
+            if not node_id:
+                raise ValueError(f"Mission plan node at index {index} requires a non-empty id")
+            if not isinstance(node["status"], str) or not node["status"].strip():
+                raise ValueError(f"Mission plan node {node_id!r} requires a non-empty status")
+            if not isinstance(node["task_type"], str) or not node["task_type"].strip():
+                raise ValueError(f"Mission plan node {node_id!r} requires a non-empty task_type")
+            if not isinstance(node["decision_trace"], list):
+                raise ValueError(f"Mission plan node {node_id!r} requires list field 'decision_trace'")
+            if not isinstance(node["blockers"], list):
+                raise ValueError(f"Mission plan node {node_id!r} requires list field 'blockers'")
+            if not isinstance(node["recommended_skill_ids"], list):
+                raise ValueError(f"Mission plan node {node_id!r} requires list field 'recommended_skill_ids'")
+            if not isinstance(node["validation_checks"], list):
+                raise ValueError(f"Mission plan node {node_id!r} requires list field 'validation_checks'")
+            task_type = node["task_type"].strip()
+            node_status = node["status"].strip()
             capability_type = str(node.get("capability_type") or "")
-            matched_skill_ids = normalize_string_list(node.get("recommended_skill_ids"))
+            matched_skill_ids = normalize_string_list(node["recommended_skill_ids"])
             matched_skills = node.get("recommended_skills", [])
             if not isinstance(matched_skills, list):
                 matched_skills = []
