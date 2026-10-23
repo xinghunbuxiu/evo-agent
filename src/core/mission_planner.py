@@ -260,6 +260,16 @@ class MissionPlanner:
                 },
             },
             {
+                "step": "dependency_graph_validation",
+                "rule_id": "mission.dependency_graph.validated.v1",
+                "result": "validated",
+                "evidence": {
+                    "node_count": len(dependency_graph),
+                    "dependency_edge_count": sum(len(items) for items in dependency_graph.values()),
+                    "topological_validation": "passed",
+                },
+            },
+            {
                 "step": "plan_assembly",
                 "rule_id": "mission.plan_assembly.v1",
                 "result": "assembled",
