@@ -395,5 +395,175 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(metadata["validation_evidence"], expected_evidence)
 
 
+    def test_runtime_authorizes_matching_ready_worker_and_binds_evidence_to_real_task(self):
+        from types import SimpleNamespace
+        from workers.javascript_reverse.runtime import handle_javascript_reverse_mission_node
+
+        class Queue:
+            def __init__(self):
+                self.submissions = []
+
+            def submit(self, **kwargs):
+                self.submissions.append(kwargs)
+                return SimpleNamespace(id=f"task-{len(self.submissions)}")
+
+        class Priority:
+            HIGH = 1
+            NORMAL = 2
+
+        trace = [{"step": "status_decision", "rule_id": "mission.status.ready.v1", "result": "ready"}]
+        workforce = {
+            "decision": "assign_existing_worker_recommended",
+            "recommended_worker_id": "worker-a",
+            "dispatch_state": "recommendation_only",
+            "dispatch_authorized": False,
+        }
+        plan = {
+            "goal": "analyze local JavaScript bundle",
+            "mission_kind": "javascript_reverse",
+            "runtime_route": {"primary_worker_id": "worker-a"},
+            "nodes": [{
+                "id": "analyze_bundle",
+                "title": "Analyze bundle",
+                "task_type": "analyze",
+                "status": "ready",
+                "blockers": [],
+                "decision_trace": trace,
+                "recommended_skill_ids": [],
+                "recommended_skills": [],
+                "role_reflection_context": {},
+            }],
+            "orchestration": {
+                "dispatch_mode": "centralized",
+                "node_decisions": [{
+                    "node_id": "analyze_bundle",
+                    "decision": "run_minimal_validating_experiment",
+                    "decision_trace": trace,
+                    "validation_checks": ["verify-output"],
+                    "verified_skill_ids": [],
+                    "workforce_decision": workforce,
+                }],
+                "coordination_plan": {
+                    "schema_version": "mission.coordination.v1",
+                    "decision_owner": "mission",
+                    "dispatch_authorized": False,
+                    "actions": [{
+                        "node_id": "analyze_bundle",
+                        "action": "await_dispatch_authorization",
+                        "reason_code": "workforce_selection_is_recommendation_only",
+                        "dispatch_authorized": False,
+                    }],
+                },
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle = Path(temp_dir) / "main.js"
+            bundle.write_text("window.app = {};\n", encoding="utf-8")
+            queue = Queue()
+            bindings = create_mission_action_runtime_bindings(
+                normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+                task_priority_cls=Priority,
+                mission_action_handlers={"worker-a": handle_javascript_reverse_mission_node},
+            )
+            state = bindings["build_mission_actions"](
+                task_queue=queue,
+                tenant_id="tenant-a",
+                mission_run_id="run-a",
+                plan=plan,
+                context={"source_path": str(bundle)},
+                work_type={"work_type_id": "javascript_reverse"},
+                work_type_summary={},
+            )
+
+        self.assertEqual(len(queue.submissions), 1)
+        payload = queue.submissions[0]["payload"]
+        authorization = payload["_mission_dispatch_authorization"]
+        self.assertTrue(authorization["authorized"])
+        self.assertEqual(authorization["decision_owner"], "mission_runtime")
+        self.assertEqual(authorization["policy_rule_id"], "mission.dispatch.ready_route_gate.v1")
+        self.assertEqual(authorization["evidence"]["recommended_worker_id"], "worker-a")
+        self.assertEqual(state["submitted_task_ids"], ["task-1"])
+        action = state["actions"][0]
+        self.assertEqual(action["status"], "submitted")
+        self.assertEqual(action["task_id"], "task-1")
+        self.assertTrue(action["mission_runtime_authorization"]["authorized"])
+        self.assertFalse(action["workforce_dispatch_authorized"])
+
+    def test_missing_input_is_blocked_before_worker_handler_can_submit(self):
+        from workers.javascript_reverse.runtime import handle_javascript_reverse_mission_node
+
+        class Queue:
+            def __init__(self):
+                self.submissions = []
+
+            def submit(self, **kwargs):
+                self.submissions.append(kwargs)
+                raise AssertionError("blocked Mission node must not reach task_queue.submit")
+
+        class Priority:
+            HIGH = 1
+            NORMAL = 2
+
+        trace = [{"step": "input_validation", "rule_id": "mission.required_inputs.v1", "result": "blocked"}]
+        plan = {
+            "runtime_route": {"primary_worker_id": "worker-a"},
+            "nodes": [{
+                "id": "analyze_bundle",
+                "title": "Analyze bundle",
+                "task_type": "analyze",
+                "status": "needs_input",
+                "blockers": ["source_path_or_source_dir"],
+                "decision_trace": trace,
+                "recommended_skill_ids": [],
+                "recommended_skills": [],
+            }],
+            "orchestration": {
+                "dispatch_mode": "centralized",
+                "node_decisions": [{
+                    "node_id": "analyze_bundle",
+                    "decision": "request_missing_input",
+                    "decision_trace": trace,
+                    "validation_checks": [],
+                    "verified_skill_ids": [],
+                }],
+                "coordination_plan": {
+                    "schema_version": "mission.coordination.v1",
+                    "decision_owner": "mission",
+                    "dispatch_authorized": False,
+                    "actions": [{
+                        "node_id": "analyze_bundle",
+                        "action": "request_missing_input",
+                        "reason_code": "required_inputs_missing",
+                        "dispatch_authorized": False,
+                    }],
+                },
+            },
+        }
+        queue = Queue()
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+            task_priority_cls=Priority,
+            mission_action_handlers={"worker-a": handle_javascript_reverse_mission_node},
+        )
+        state = bindings["build_mission_actions"](
+            task_queue=queue,
+            tenant_id="tenant-a",
+            mission_run_id="run-blocked",
+            plan=plan,
+            context={},
+            work_type={"work_type_id": "javascript_reverse"},
+            work_type_summary={},
+        )
+
+        self.assertEqual(queue.submissions, [])
+        self.assertEqual(state["counts"]["needs_input"], 1)
+        self.assertEqual(state["status"], "blocked")
+        action = state["actions"][0]
+        self.assertEqual(action["action_type"], "needs_input")
+        self.assertFalse(action["mission_runtime_authorization"]["authorized"])
+        self.assertEqual(action["mission_runtime_authorization"]["reason_code"], "coordination_action_not_dispatchable")
+
+
 if __name__ == "__main__":
     unittest.main()
