@@ -53,3 +53,19 @@ python -m unittest tests.test_mission_planner_trace -v
 ```
 
 测试覆盖缺少输入、能力缺口，以及决策轨迹的稳定结构。测试应与真实 CI 运行结果一起判定；仅新增测试文件不代表测试已经通过。
+
+
+## 主脑协调计划
+
+`build_mission_brain_contract()` 还会生成 `coordination_plan`（`mission.coordination.v1`），把节点状态转换成可审计的下一步动作：
+
+- `request_missing_input`：缺少必需输入，先向任务发起方请求补充。
+- `resolve_capability_or_learning_gap`：先补足能力或经验缺口，不直接派发执行。
+- `reuse_verified_knowledge_then_validate`：优先复用已验证知识，再按当前项目验收。
+- `await_dispatch_authorization`：已经推荐员工，但推荐本身不构成派发授权。
+- `prepare_for_authorized_dispatch`：节点具备进入派发审核的条件，仍需运行时完成授权。
+- `inspect_evidence_and_reassess`：证据不足或状态不明确，交由主脑重新评估。
+
+协调计划明确输出 `dispatch_authorized=false`，并声明运行时是派发授权责任方。`parallel_safe` 只表达节点是否允许并行，不自动授权并行执行。这样可以区分“主脑建议”“运行时授权”和“实际执行”，避免将员工推荐误记成已派发。
+
+当前这一步只建立可测试的协调决策合同，并不声称已经实现跨 Worker 的真实执行调度、锁或任务恢复；这些仍需要在运行时继续接通。
