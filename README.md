@@ -164,6 +164,7 @@ PYTHONPATH=src python3 scripts/m1_ops_check.py --with-worker-smoke
 | [docs/EVO_MAINLINE_STATUS_CN.md](docs/EVO_MAINLINE_STATUS_CN.md) | 主线进度与完成度 |
 | [ADMIN_README.md](ADMIN_README.md) | OAuth、部署、API |
 | [docs/evo-autonomy-mainline.md](docs/evo-autonomy-mainline.md) | 自治与成长闭环 |
+| [docs/MISSION_BRAIN_ARCHITECTURE_CN.md](docs/MISSION_BRAIN_ARCHITECTURE_CN.md) | **Mission 主脑、员工协调、知识复用与云端执行架构** |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 技术分层（开发参考） |
 
 ## 非产品主线（默认关闭）
