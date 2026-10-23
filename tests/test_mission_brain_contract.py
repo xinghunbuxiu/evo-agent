@@ -65,6 +65,12 @@ class MissionBrainContractTests(unittest.TestCase):
             "recommended_skill_ids": ["skill-a"],
             "validation_checks": ["run tests"],
             "decision_trace": trace,
+            "workforce_decision": {
+                "decision": "assign_existing_worker_recommended",
+                "recommended_worker_id": "worker-a",
+                "dispatch_authorized": False,
+                "dispatch_state": "recommendation_only",
+            },
         }])
         bindings = create_mission_action_runtime_bindings(
             normalize_string_list=lambda value: value if isinstance(value, list) else [],
@@ -98,6 +104,8 @@ class MissionBrainContractTests(unittest.TestCase):
         self.assertEqual(action["mission_brain_decision"], "reuse_verified_knowledge_first")
         self.assertEqual(action["verified_skill_ids"], ["skill-a"])
         self.assertEqual(action["decision_trace"], trace)
+        self.assertEqual(action["workforce_decision"]["recommended_worker_id"], "worker-a")
+        self.assertFalse(action["workforce_dispatch_authorized"])
 
     def test_mission_planner_embeds_central_brain_contract(self):
         class EmptyRegistry:
