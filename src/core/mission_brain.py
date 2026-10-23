@@ -11,21 +11,42 @@ from typing import Any
 
 def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
     """Build an explicit, serializable central-coordination contract for a plan."""
+    if not isinstance(nodes, list):
+        raise ValueError("Mission plan nodes must be a list")
+
     decisions: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
     workforce_counts: dict[str, int] = {}
-    for raw_node in nodes:
+    required_list_fields = (
+        "reasoning",
+        "blockers",
+        "recommended_skill_ids",
+        "validation_checks",
+        "decision_trace",
+    )
+    for index, raw_node in enumerate(nodes):
         if hasattr(raw_node, "to_dict") and callable(raw_node.to_dict):
             node = raw_node.to_dict()
         elif isinstance(raw_node, dict):
             node = raw_node
         else:
-            continue
+            raise ValueError(f"Mission plan node at index {index} must be an object")
 
+        if not isinstance(node, dict):
+            raise ValueError(f"Mission plan node at index {index} did not serialize to an object")
         node_id = str(node.get("id") or "").strip()
         if not node_id:
-            continue
-        status = str(node.get("status") or "planned").strip()
+            raise ValueError(f"Mission plan node at index {index} requires a non-empty id")
+        status_value = node.get("status")
+        if not isinstance(status_value, str) or not status_value.strip():
+            raise ValueError(f"Mission plan node {node_id!r} requires a non-empty status")
+        for field_name in required_list_fields:
+            if not isinstance(node.get(field_name), list):
+                raise ValueError(f"Mission plan node {node_id!r} requires list field {field_name!r}")
+        if not isinstance(node.get("parallel_safe"), bool):
+            raise ValueError(f"Mission plan node {node_id!r} requires boolean field 'parallel_safe'")
+
+        status = status_value.strip()
         gap_type = str(node.get("gap_type") or "").strip()
         if status == "needs_input":
             decision = "request_missing_input"
