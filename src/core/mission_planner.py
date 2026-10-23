@@ -151,9 +151,50 @@ class MissionPlanner:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         context = context or {}
-        resolved_kind = mission_kind or self._infer_mission_kind(goal, context)
         templates = self._mission_kind_templates()
+        inferred_kind = self._infer_mission_kind(goal, context)
+        requested_kind = str(mission_kind or context.get("mission_kind") or "").strip()
+        if mission_kind and mission_kind in templates:
+            resolved_kind = mission_kind
+            resolution_source = "explicit_mission_kind"
+        elif context.get("mission_kind") and str(context.get("mission_kind")).strip() in templates:
+            resolved_kind = str(context.get("mission_kind")).strip()
+            resolution_source = "context_mission_kind"
+        elif context.get("work_type_id") and str(context.get("work_type_id")).strip() in templates:
+            resolved_kind = str(context.get("work_type_id")).strip()
+            resolution_source = "work_type_template_match"
+        else:
+            resolved_kind = inferred_kind
+            resolution_source = (
+                "unsupported_explicit_kind_fell_back_to_default"
+                if requested_kind
+                else "default_template"
+            )
         template = templates.get(resolved_kind, templates["automation_operation"])
+        resolved_template_kind = resolved_kind if resolved_kind in templates else "automation_operation"
+        mission_decision_trace = [
+            {
+                "step": "mission_kind_resolution",
+                "rule_id": "mission.kind_resolution.v1",
+                "result": resolved_template_kind,
+                "evidence": {
+                    "resolution_source": resolution_source,
+                    "requested_kind": requested_kind or None,
+                    "selected_template": resolved_template_kind,
+                    "available_template_count": len(templates),
+                },
+            },
+            {
+                "step": "plan_assembly",
+                "rule_id": "mission.plan_assembly.v1",
+                "result": "assembled",
+                "evidence": {
+                    "node_count": sum(1 for item in template.get("tasks", []) if isinstance(item, dict)),
+                    "uses_registered_template": resolved_template_kind in templates,
+                    "work_type_id": str(context.get("work_type_id") or "").strip() or None,
+                },
+            },
+        ]
         nodes = [
             self._build_node(
                 tenant_id=tenant_id,
@@ -175,9 +216,11 @@ class MissionPlanner:
             nodes=nodes,
         )
         return {
+            "plan_version": "mission.plan.v1",
+            "decision_trace": mission_decision_trace,
             "tenant_id": tenant_id,
             "goal": goal,
-            "mission_kind": resolved_kind,
+            "mission_kind": resolved_template_kind,
             "title": template.get("title"),
             "description": template.get("description"),
             "primary_capability_type": template.get("primary_capability_type"),
