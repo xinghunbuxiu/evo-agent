@@ -57,7 +57,7 @@ def create_external_learning_runtime_bindings(
         for source in policy.get("source_priority", []):
             if source == "enterprise_repo" and not policy.get("allow_enterprise_sources", True):
                 continue
-            if source == "web_search" and not policy.get("allow_web_research", True):
+            if source in {"web_search", "official_docs"} and not policy.get("allow_web_research", True):
                 continue
             if source == "ai_assist" and not policy.get("allow_ai_assist", True):
                 continue
