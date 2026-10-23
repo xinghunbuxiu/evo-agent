@@ -154,6 +154,13 @@ class OrganizationRegistryTests(unittest.TestCase):
         )
         self.assertEqual(standard["status"], "standard")
         self.assertEqual(standard["evidence_refs"], ["ci-run:789", "approval:1"])
+        self.registry.retire_worker(
+            worker_id="android-a", validated_knowledge_asset_ids=["standard-candidate"],
+        )
+        self.assertIn(
+            "standard-candidate",
+            self.registry.get_role("android-dev")["knowledge_asset_ids"],
+        )
 
     def test_workforce_recommends_available_worker_without_claiming_dispatch(self):
         decision = recommend_workforce_for_node(
