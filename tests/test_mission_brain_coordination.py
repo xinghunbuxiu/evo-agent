@@ -18,6 +18,7 @@ class MissionBrainCoordinationTests(unittest.TestCase):
                 "reasoning": [],
                 "recommended_skill_ids": [],
                 "validation_checks": [],
+                "decision_trace": [],
                 "parallel_safe": False,
             },
             {
@@ -27,6 +28,7 @@ class MissionBrainCoordinationTests(unittest.TestCase):
                 "reasoning": [],
                 "recommended_skill_ids": [],
                 "validation_checks": ["run-tests"],
+                "decision_trace": [],
                 "parallel_safe": True,
                 "workforce_decision": {
                     "decision": "assign_existing_worker_recommended",
@@ -42,6 +44,7 @@ class MissionBrainCoordinationTests(unittest.TestCase):
                 "reasoning": [],
                 "recommended_skill_ids": [],
                 "validation_checks": [],
+                "decision_trace": [],
                 "parallel_safe": False,
             },
             {
@@ -52,6 +55,7 @@ class MissionBrainCoordinationTests(unittest.TestCase):
                 "reasoning": [],
                 "recommended_skill_ids": [],
                 "validation_checks": [],
+                "decision_trace": [],
                 "parallel_safe": False,
             },
         ])
