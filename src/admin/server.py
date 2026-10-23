@@ -1104,12 +1104,12 @@ def create_app() -> FastAPI:
     workspace.mkdir(parents=True, exist_ok=True)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
-    _mission_action_runtime_ref["build_mission_actions"] = create_mission_action_runtime_bindings(
+    _mission_action_runtime_ref.update(create_mission_action_runtime_bindings(
         normalize_string_list=lambda value: [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else [],
         task_priority_cls=TaskPriority,
         mission_action_handlers=register_builtin_worker_mission_action_handlers(workspace=workspace),
         context_resolvers=build_mission_context_resolvers(workspace),
-    )["build_mission_actions"]
+    ))
     _load_sessions()
     
     # 自动初始化 MySQL 表（如果不存在）
@@ -1727,6 +1727,7 @@ def create_app() -> FastAPI:
         effective_platform_promotion_status=_effective_platform_promotion_status,
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
+        resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
 
