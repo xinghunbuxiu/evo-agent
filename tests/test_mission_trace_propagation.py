@@ -663,5 +663,79 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(action["mission_runtime_authorization"]["reason_code"], "coordination_action_not_dispatchable")
 
 
+    def test_runtime_rejects_workforce_route_mismatch_without_calling_worker(self):
+        calls = []
+
+        def worker_handler(**kwargs):
+            calls.append(kwargs)
+            return True
+
+        trace = [{"step": "status_decision", "rule_id": "mission.status.ready.v1", "result": "ready"}]
+        plan = {
+            "runtime_route": {"primary_worker_id": "worker-a"},
+            "nodes": [{
+                "id": "execute",
+                "title": "Execute",
+                "task_type": "analyze",
+                "status": "ready",
+                "blockers": [],
+                "recommended_skill_ids": [],
+                "recommended_skills": [],
+                "validation_checks": ["verify-output"],
+                "decision_trace": trace,
+            }],
+            "orchestration": {
+                "dispatch_mode": "centralized",
+                "node_decisions": [{
+                    "node_id": "execute",
+                    "decision": "run_minimal_validating_experiment",
+                    "decision_trace": trace,
+                    "validation_checks": ["verify-output"],
+                    "verified_skill_ids": [],
+                    "workforce_decision": {
+                        "decision": "assign_existing_worker_recommended",
+                        "recommended_worker_id": "worker-b",
+                        "dispatch_state": "recommendation_only",
+                        "dispatch_authorized": False,
+                    },
+                }],
+                "coordination_plan": {
+                    "schema_version": "mission.coordination.v1",
+                    "decision_owner": "mission",
+                    "dispatch_authorized": False,
+                    "actions": [{
+                        "node_id": "execute",
+                        "action": "await_dispatch_authorization",
+                        "reason_code": "workforce_selection_is_recommendation_only",
+                        "dispatch_authorized": False,
+                    }],
+                },
+            },
+        }
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: value if isinstance(value, list) else [],
+            task_priority_cls=object,
+            mission_action_handlers={"worker-a": worker_handler},
+        )
+
+        state = bindings["build_mission_actions"](
+            task_queue=object(),
+            tenant_id="tenant-a",
+            mission_run_id="run-mismatch",
+            plan=plan,
+            context={},
+            work_type={},
+            work_type_summary={},
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(state["status"], "blocked")
+        self.assertEqual(state["actions"][0]["action_type"], "dispatch_denied")
+        authorization = state["actions"][0]["mission_runtime_authorization"]
+        self.assertFalse(authorization["authorized"])
+        self.assertEqual(authorization["reason_code"], "runtime_worker_does_not_match_recommendation")
+        self.assertEqual(authorization["evidence"]["recommended_worker_id"], "worker-b")
+
+
 if __name__ == "__main__":
     unittest.main()
