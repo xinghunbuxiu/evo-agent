@@ -51,5 +51,51 @@ class MissionBrainContractTests(unittest.TestCase):
         self.assertEqual(contract["node_decisions"][0]["decision_trace"], trace)
 
 
+    def test_action_runtime_carries_brain_decision_into_execution_record(self):
+        from admin.mission_action_runtime import create_mission_action_runtime_bindings
+
+        trace = [{"step": "knowledge_check", "result": "available"}]
+        contract = build_mission_brain_contract([{
+            "id": "node-reuse",
+            "status": "reuse_existing",
+            "gap_type": "reuse_existing",
+            "recommended_skill_ids": ["skill-a"],
+            "validation_checks": ["run tests"],
+            "decision_trace": trace,
+        }])
+        bindings = create_mission_action_runtime_bindings(
+            normalize_string_list=lambda value: value if isinstance(value, list) else [],
+            task_priority_cls=object,
+        )
+        result = bindings["build_mission_actions"](
+            task_queue=None,
+            tenant_id="tenant-a",
+            mission_run_id="mission-a",
+            plan={
+                "orchestration": contract,
+                "nodes": [{
+                    "id": "node-reuse",
+                    "title": "Reuse verified skill",
+                    "task_type": "plan",
+                    "status": "reuse_existing",
+                    "capability_type": "automation",
+                    "recommended_skill_ids": ["skill-a"],
+                    "recommended_skills": [],
+                    "decision_trace": trace,
+                    "next_actions": ["reuse skill"],
+                }],
+            },
+            context={},
+            work_type={},
+            work_type_summary={},
+        )
+        action = result["actions"][0]
+        self.assertEqual(action["orchestration_owner"], "mission")
+        self.assertEqual(action["dispatch_mode"], "centralized")
+        self.assertEqual(action["mission_brain_decision"], "reuse_verified_knowledge_first")
+        self.assertEqual(action["verified_skill_ids"], ["skill-a"])
+        self.assertEqual(action["decision_trace"], trace)
+
+
 if __name__ == "__main__":
     unittest.main()
