@@ -102,6 +102,41 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(trace["plan_assembly"]["rule_id"], "mission.plan_assembly.v1")
         self.assertGreater(trace["plan_assembly"]["evidence"]["node_count"], 0)
 
+    def test_template_dependency_graph_is_preserved_and_validated(self):
+        planner = self._planner()
+        custom_templates = {
+            "dependency_demo": {
+                "title": "Dependency demo",
+                "description": "Validates dependency order",
+                "primary_capability_type": "design",
+                "tasks": [
+                    {"id": "inspect", "title": "Inspect", "objective": "Inspect", "task_type": "analyze", "capability_type": "design", "acceptance": "Findings"},
+                    {"id": "build", "title": "Build", "objective": "Build", "task_type": "execute", "capability_type": "design", "acceptance": "Output", "depends_on": ["inspect"]},
+                ],
+            }
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+            result = planner.plan(tenant_id="test-tenant", goal="dependency test", mission_kind="dependency_demo", context={})
+        self.assertEqual(result["dependency_graph"], {"inspect": [], "build": ["inspect"]})
+        self.assertEqual(next(item for item in result["nodes"] if item["id"] == "build")["depends_on"], ["inspect"])
+
+    def test_template_dependency_cycle_fails_before_plan_is_built(self):
+        planner = self._planner()
+        custom_templates = {
+            "dependency_cycle": {
+                "title": "Dependency cycle",
+                "description": "Invalid dependency cycle",
+                "primary_capability_type": "design",
+                "tasks": [
+                    {"id": "a", "title": "A", "objective": "A", "task_type": "analyze", "capability_type": "design", "acceptance": "A", "depends_on": ["b"]},
+                    {"id": "b", "title": "B", "objective": "B", "task_type": "execute", "capability_type": "design", "acceptance": "B", "depends_on": ["a"]},
+                ],
+            }
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+            with self.assertRaisesRegex(ValueError, "dependency cycle detected"):
+                planner.plan(tenant_id="test-tenant", goal="dependency test", mission_kind="dependency_cycle", context={})
+
     def test_unknown_requested_kind_fails_explicitly_instead_of_falling_back(self):
         planner = self._planner()
         with self.assertRaisesRegex(ValueError, "Unsupported mission_kind: unregistered_kind"):
