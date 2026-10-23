@@ -108,7 +108,12 @@ def create_mission_action_runtime_bindings(
             node_key = str(kwargs.get("node_id") or "").strip()
             extra = dict(kwargs.get("extra") or {})
             decision = brain_decisions.get(node_key)
+            coordination = coordination_by_node.get(node_key)
             extra["orchestration_owner"] = "mission"
+            if coordination:
+                extra["mission_coordination_action"] = coordination["action"]
+                extra["mission_coordination_reason_code"] = coordination["reason_code"]
+                extra["mission_coordination_dispatch_authorized"] = coordination["dispatch_authorized"]
             extra["dispatch_mode"] = str(brain_contract.get("dispatch_mode") or "centralized")
             if decision:
                 extra["mission_brain_decision"] = decision.get("decision")
