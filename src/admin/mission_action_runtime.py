@@ -168,7 +168,9 @@ def create_mission_action_runtime_bindings(
                     authorized, reason_code = False, "runtime_target_missing"
                 else:
                     workforce = decision.get("workforce_decision") if isinstance(decision, dict) else None
-                    if isinstance(workforce, dict):
+                    if not isinstance(workforce, dict):
+                        authorized, reason_code = False, "workforce_decision_missing"
+                    else:
                         workforce_result = str(workforce.get("decision") or "")
                         recommended_worker = str(workforce.get("recommended_worker_id") or "").strip()
                         if workforce_result != "assign_existing_worker_recommended":
