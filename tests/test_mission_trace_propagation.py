@@ -72,19 +72,38 @@ class MissionTracePropagationTests(unittest.TestCase):
             task_queue=object(),
             tenant_id="tenant-a",
             mission_run_id="run-a",
-            plan={"nodes": [{
-                "id": "node-a",
-                "title": "Design",
-                "task_type": "design",
-                "status": "planned",
-                "decision_trace": trace,
-            }]},
+            plan={
+                "nodes": [{
+                    "id": "node-a",
+                    "title": "Design",
+                    "task_type": "design",
+                    "status": "planned",
+                    "decision_trace": trace,
+                }],
+                "orchestration": {
+                    "dispatch_mode": "centralized",
+                    "coordination_plan": {
+                        "actions": [{
+                            "node_id": "node-a",
+                            "action": "await_dispatch_authorization",
+                            "reason_code": "workforce_selection_is_recommendation_only",
+                            "dispatch_authorized": False,
+                        }],
+                    },
+                },
+            },
             context={},
             work_type={},
             work_type_summary={},
         )
         self.assertEqual(state["actions"][0]["node_id"], "node-a")
         self.assertEqual(state["actions"][0]["decision_trace"], trace)
+        self.assertEqual(state["actions"][0]["mission_coordination_action"], "await_dispatch_authorization")
+        self.assertEqual(
+            state["actions"][0]["mission_coordination_reason_code"],
+            "workforce_selection_is_recommendation_only",
+        )
+        self.assertFalse(state["actions"][0]["mission_coordination_dispatch_authorized"])
 
     def test_planner_trace_is_attached_only_to_matching_node_action(self):
         trace_a = [{"step": "status_decision", "rule_id": "mission.status.input_gap.v1"}]
