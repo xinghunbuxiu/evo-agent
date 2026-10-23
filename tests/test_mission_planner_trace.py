@@ -86,6 +86,42 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(trace["status_decision"]["rule_id"], "mission.status.capability_gap.v1")
         self.assertEqual(trace["status_decision"]["evidence"]["gap_type"], "capability_gap")
 
+    def test_plan_level_trace_explains_template_selection_and_version(self):
+        planner = self._planner()
+        result = planner.plan(
+            tenant_id="test-tenant",
+            goal="automation task",
+            context={"channel": "test-channel", "deliverable_goal": "test output"},
+        )
+
+        self.assertEqual(result["plan_version"], "mission.plan.v1")
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(trace["mission_kind_resolution"]["rule_id"], "mission.kind_resolution.v1")
+        self.assertEqual(trace["mission_kind_resolution"]["result"], "automation_operation")
+        self.assertEqual(trace["mission_kind_resolution"]["evidence"]["resolution_source"], "default_template")
+        self.assertEqual(trace["plan_assembly"]["rule_id"], "mission.plan_assembly.v1")
+        self.assertGreater(trace["plan_assembly"]["evidence"]["node_count"], 0)
+
+    def test_unknown_requested_kind_is_visible_in_plan_trace(self):
+        planner = self._planner()
+        result = planner.plan(
+            tenant_id="test-tenant",
+            goal="automation task",
+            mission_kind="unregistered_kind",
+            context={"channel": "test-channel", "deliverable_goal": "test output"},
+        )
+
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(result["mission_kind"], "automation_operation")
+        self.assertEqual(
+            trace["mission_kind_resolution"]["evidence"]["resolution_source"],
+            "unsupported_explicit_kind_fell_back_to_default",
+        )
+        self.assertEqual(
+            trace["mission_kind_resolution"]["evidence"]["requested_kind"],
+            "unregistered_kind",
+        )
+
     def test_trace_has_stable_steps_and_machine_readable_evidence(self):
         planner = self._planner()
         result = planner.plan(
