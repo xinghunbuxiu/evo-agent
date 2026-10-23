@@ -568,7 +568,10 @@ def create_mission_execution_bindings(
                             resumed_action["replan_required"] = True
                             resumed_action["replan_reason_code"] = "released_node_dispatch_denied"
                     refreshed_actions.extend(resumed_actions)
-                    for task_id in resumed.get("submitted_task_ids", []) if isinstance(resumed.get("submitted_task_ids"), list) else []:
+                    resumed_task_ids = resumed.get("submitted_task_ids", [])
+                    if not isinstance(resumed_task_ids, list):
+                        resumed_task_ids = []
+                    for task_id in resumed_task_ids:
                         task_id = str(task_id).strip()
                         if task_id and task_id not in submitted_task_ids:
                             submitted_task_ids.append(task_id)
