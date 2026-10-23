@@ -235,16 +235,14 @@ class OrganizationRegistry:
         role_id = _validate_id(role_id, "role_id")
         if self.get_role(role_id) is None:
             raise KeyError(f"Role not found: {role_id}")
-        if status not in {"candidate", "validated", "standard", "rejected", "deprecated"}:
-            raise ValueError(f"Unsupported knowledge asset status: {status}")
+        if status not in {"candidate", "rejected", "deprecated"}:
+            raise ValueError("New knowledge assets must be candidate/rejected/deprecated; use validation and promotion APIs")
         if not str(title or "").strip() or not str(content_ref or "").strip():
             raise ValueError("Knowledge asset title and content_ref are required")
         assets = self._read(self.assets_path)
         if asset_id in assets:
             raise ValueError(f"Knowledge asset already exists: {asset_id}")
         evidence = self._clean_strings(evidence_refs)
-        if status in {"validated", "standard"} and not evidence:
-            raise ValueError("Validated knowledge assets require evidence_refs")
 
         asset = {
             "asset_id": asset_id,
@@ -257,6 +255,56 @@ class OrganizationRegistry:
             "created_at": _now(),
             "updated_at": _now(),
         }
+        assets[asset_id] = asset
+        self._write(self.assets_path, assets)
+        return asset
+
+    def validate_knowledge_asset(
+        self,
+        *,
+        asset_id: str,
+        evidence_refs: list[str],
+    ) -> dict[str, Any]:
+        """Promote a candidate only when explicit, reviewable evidence references are supplied."""
+        asset_id = _validate_id(asset_id, "asset_id")
+        evidence = self._clean_strings(evidence_refs)
+        if not evidence:
+            raise ValueError("Knowledge asset validation requires evidence_refs")
+        assets = self._read(self.assets_path)
+        asset = assets.get(asset_id)
+        if asset is None:
+            raise KeyError(f"Knowledge asset not found: {asset_id}")
+        if asset.get("status") != "candidate":
+            raise ValueError("Only candidate knowledge assets can be validated")
+        asset["status"] = "validated"
+        asset["evidence_refs"] = list(dict.fromkeys(asset.get("evidence_refs", []) + evidence))
+        asset["validated_at"] = _now()
+        asset["updated_at"] = _now()
+        assets[asset_id] = asset
+        self._write(self.assets_path, assets)
+        return asset
+
+    def promote_knowledge_asset_to_standard(
+        self,
+        *,
+        asset_id: str,
+        approval_ref: str,
+    ) -> dict[str, Any]:
+        """Promote a validated asset to an organizational standard with an approval reference."""
+        asset_id = _validate_id(asset_id, "asset_id")
+        approval_ref = str(approval_ref or "").strip()
+        if not approval_ref:
+            raise ValueError("Standard promotion requires approval_ref")
+        assets = self._read(self.assets_path)
+        asset = assets.get(asset_id)
+        if asset is None:
+            raise KeyError(f"Knowledge asset not found: {asset_id}")
+        if asset.get("status") != "validated":
+            raise ValueError("Only validated knowledge assets can become standard")
+        asset["status"] = "standard"
+        asset["evidence_refs"] = list(dict.fromkeys(asset.get("evidence_refs", []) + [approval_ref]))
+        asset["standard_approved_at"] = _now()
+        asset["updated_at"] = _now()
         assets[asset_id] = asset
         self._write(self.assets_path, assets)
         return asset
