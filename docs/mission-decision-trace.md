@@ -68,4 +68,10 @@ python -m unittest tests.test_mission_planner_trace -v
 
 协调计划明确输出 `dispatch_authorized=false`，并声明运行时是派发授权责任方。`parallel_safe` 只表达节点是否允许并行，不自动授权并行执行。这样可以区分“主脑建议”“运行时授权”和“实际执行”，避免将员工推荐误记成已派发。
 
-当前这一步只建立可测试的协调决策合同，并不声称已经实现跨 Worker 的真实执行调度、锁或任务恢复；这些仍需要在运行时继续接通。
+## 已接通的最小运行时闭环
+
+`start_mission()` 将计划交给 `build_mission_run()`，再由 `build_mission_actions()` 逐节点读取协调计划。运行时只有在协调合同版本/所有者/授权位有效、节点状态为 `ready`、无 blocker、存在运行时目标，并且岗位目录明确推荐当前路由中的同一可用 Worker 时，才写入独立的 `mission.dispatch.authorization.v1` 授权证据。规划合同自身的 `dispatch_authorized` 必须保持 `false`；Worker 推荐字段也不会被改写为授权。
+
+真实 Worker handler 收到节点时会同时收到授权证据，并将其写入 `task_queue.submit()` 的任务 payload（`_mission_dispatch_authorization`）。实际派发仍以任务队列返回的 task ID 和 Mission action 的 `task_submitted` 记录为准；刷新阶段按 task ID 读取真实任务状态/结果，拒绝派发和知识复用待办也会保留在运行状态统计中。缺少或格式错误的协调合同会 fail closed，不回退到未受控派发。
+
+本闭环不等于已经实现跨 Worker 的并行锁、租约、取消、崩溃恢复或分布式 exactly-once。当前并行安全标记只用于审计，尚不能单凭它启动并行执行。
