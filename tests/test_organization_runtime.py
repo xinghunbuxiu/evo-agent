@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from core.organization_runtime import OrganizationRegistry
+from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes
 
 
 class OrganizationRegistryTests(unittest.TestCase):
@@ -85,6 +85,86 @@ class OrganizationRegistryTests(unittest.TestCase):
             self.registry.create_role(role_id="../bad", title="bad", responsibilities=[], required_capabilities=[])
         with self.assertRaises(ValueError):
             self.registry.create_worker(worker_id="android-a", role_id="android-dev", profile={})
+
+
+    def test_clone_drops_credentials_and_live_runtime_fields(self):
+        self.registry.create_worker(
+            worker_id="android-secret",
+            role_id="android-dev",
+            profile={
+                "model": "configured-model",
+                "skills": ["android-build"],
+                "api_key": "do-not-copy",
+                "nested": {"access_token": "do-not-copy", "runtime_state": {"pid": 42}, "region": "local"},
+            },
+        )
+        clone = self.registry.clone_worker(source_worker_id="android-secret", new_worker_id="android-safe")
+        self.assertEqual(clone["profile"]["model"], "configured-model")
+        self.assertEqual(clone["profile"]["skills"], ["android-build"])
+        self.assertNotIn("api_key", clone["profile"])
+        self.assertNotIn("access_token", clone["profile"]["nested"])
+        self.assertNotIn("runtime_state", clone["profile"]["nested"])
+        self.assertEqual(clone["profile"]["nested"]["region"], "local")
+
+    def test_validated_asset_requires_evidence_reference(self):
+        with self.assertRaises(ValueError):
+            self.registry.register_knowledge_asset(
+                asset_id="unsupported-claim", role_id="android-dev", title="No evidence",
+                asset_type="skill", status="validated", evidence_refs=[],
+                content_ref="skills/no-evidence/SKILL.md",
+            )
+
+    def test_workforce_recommends_available_worker_without_claiming_dispatch(self):
+        decision = recommend_workforce_for_node(
+            {"id": "node-a", "status": "ready", "required_capabilities": ["android", "kotlin"]},
+            self.registry,
+        )
+        self.assertEqual(decision["decision"], "assign_existing_worker_recommended")
+        self.assertEqual(decision["recommended_worker_id"], "android-a")
+        self.assertFalse(decision["dispatch_authorized"])
+        self.assertEqual(decision["dispatch_state"], "recommendation_only")
+
+    def test_busy_worker_is_cloned_only_when_node_is_explicitly_parallel_safe(self):
+        self.registry.set_worker_status(worker_id="android-a", status="busy", active_task_ids=["task-1"])
+        safe = recommend_workforce_for_node(
+            {"id": "node-safe", "status": "ready", "required_capabilities": ["android", "kotlin"], "parallel_safe": True},
+            self.registry,
+        )
+        unsafe = recommend_workforce_for_node(
+            {"id": "node-unsafe", "status": "ready", "required_capabilities": ["android", "kotlin"], "parallel_safe": False},
+            self.registry,
+        )
+        self.assertEqual(safe["decision"], "clone_worker_recommended")
+        self.assertEqual(safe["recommended_source_worker_id"], "android-a")
+        self.assertEqual(unsafe["decision"], "wait_for_worker_recommended")
+        self.assertIsNone(safe["recommended_worker_id"])
+
+    def test_workforce_recommends_new_role_when_capabilities_are_missing(self):
+        decision = recommend_workforce_for_node(
+            {"id": "node-toutiao", "status": "ready", "required_capabilities": ["content_strategy", "analytics"]},
+            self.registry,
+        )
+        self.assertEqual(decision["decision"], "create_role_and_worker_recommended")
+        self.assertFalse(decision["dispatch_authorized"])
+
+    def test_workforce_catalog_absence_is_explicit(self):
+        decision = recommend_workforce_for_node(
+            {"id": "node-a", "status": "ready", "required_capabilities": ["android"]},
+            None,
+        )
+        self.assertEqual(decision["decision"], "catalog_unavailable")
+        self.assertFalse(decision["dispatch_authorized"])
+
+    def test_plan_does_not_recommend_same_available_worker_twice(self):
+        decisions = recommend_workforce_for_nodes(
+            [
+                {"id": "node-a", "status": "ready", "required_capabilities": ["android", "kotlin"]},
+                {"id": "node-b", "status": "ready", "required_capabilities": ["android", "kotlin"]},
+            ],
+            self.registry,
+        )
+        self.assertEqual(decisions[0]["recommended_worker_id"], "android-a")
+        self.assertEqual(decisions[1]["decision"], "wait_for_worker_recommended")
 
 
 if __name__ == "__main__":
