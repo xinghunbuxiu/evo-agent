@@ -58,7 +58,20 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
             "goal": "complete the task",
             "context": {"source_path": "/tmp/sample"},
         }
-        action = {"node_id": "node-a", "task_type": "analyze", "decision_trace": trace}
+        authorization = {
+            "schema_version": "mission.dispatch.authorization.v1",
+            "mission_run_id": "mission-run-1",
+            "node_id": "node-a",
+            "decision_owner": "mission_runtime",
+            "authorized": True,
+            "reason_code": "authorized",
+        }
+        action = {
+            "node_id": "node-a",
+            "task_type": "analyze",
+            "decision_trace": trace,
+            "mission_runtime_authorization": authorization,
+        }
 
         with tempfile.TemporaryDirectory() as tmp:
             task_id = bindings["upsert_mission_failure_learning_task"](
@@ -75,6 +88,7 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
         self.assertEqual(learning_task["source_task_id"], "source-task-1")
         self.assertEqual(learning_task["mission_node_id"], "node-a")
         self.assertEqual(learning_task["decision_trace"], trace)
+        self.assertEqual(learning_task["dispatch_authorization"], authorization)
 
 
     def test_missing_required_lineage_fields_fail_instead_of_saving_incomplete_task(self):
