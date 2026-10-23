@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.mission_brain import build_mission_brain_contract, index_mission_brain_decisions  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
+from core.organization_runtime import OrganizationRegistry  # noqa: E402
 
 
 class MissionBrainContractTests(unittest.TestCase):
@@ -119,6 +120,51 @@ class MissionBrainContractTests(unittest.TestCase):
             [item["node_id"] for item in contract["node_decisions"]],
             [item["id"] for item in plan["nodes"]],
         )
+        self.assertFalse(contract["workforce_policy"]["dynamic_dispatch_enabled"])
+        self.assertFalse(contract["workforce_policy"]["automatic_worker_creation"])
+        self.assertTrue(all(
+            item["workforce_decision"]["decision"] == "catalog_unavailable"
+            for item in plan["nodes"]
+        ))
+
+    def test_planner_uses_organization_catalog_but_only_recommends_dispatch(self):
+        class EmptyRegistry:
+            def list_descriptors(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            organization = OrganizationRegistry(Path(tmp))
+            organization.create_role(
+                role_id="automation-role", title="Automation Specialist",
+                responsibilities=["plan", "execute"],
+                required_capabilities=["automation"],
+            )
+            organization.create_worker(
+                worker_id="automation-a", role_id="automation-role",
+                profile={"skills": ["workflow"]},
+            )
+            planner = MissionPlanner(Path(tmp), registry=EmptyRegistry())
+            plan = planner.plan(
+                tenant_id="tenant-a",
+                goal="Build a reusable project workflow",
+                mission_kind="automation_operation",
+                context={},
+            )
+
+        first = plan["nodes"][0]["workforce_decision"]
+        self.assertEqual(first["decision"], "assign_existing_worker_recommended")
+        self.assertEqual(first["recommended_worker_id"], "automation-a")
+        self.assertFalse(first["dispatch_authorized"])
+        self.assertEqual(first["dispatch_state"], "recommendation_only")
+        self.assertEqual(
+            plan["orchestration"]["node_decisions"][0]["workforce_decision"],
+            first,
+        )
+        self.assertEqual(
+            plan["orchestration"]["workforce_policy"]["decision_counts"]["assign_existing_worker_recommended"],
+            1,
+        )
+        self.assertFalse(plan["orchestration"]["workforce_policy"]["dynamic_dispatch_enabled"])
 
 
 if __name__ == "__main__":
