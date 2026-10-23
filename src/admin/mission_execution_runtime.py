@@ -268,7 +268,6 @@ def create_mission_execution_bindings(
             "needs_learning": 0,
             "needs_input": 0,
             "planned_only": 0,
-            "dispatch_denied": 0,
             "success": 0,
             "failed": 0,
             "running": 0,
@@ -456,8 +455,6 @@ def create_mission_execution_bindings(
                 counts["needs_learning"] += 1
             elif action_type == "needs_input":
                 counts["needs_input"] += 1
-            elif action_type == "dispatch_denied":
-                counts["dispatch_denied"] += 1
             elif action_type in {"planned_only", "knowledge_reuse_pending"}:
                 counts["planned_only"] += 1
 
@@ -485,7 +482,12 @@ def create_mission_execution_bindings(
             overall_status = "completed"
         elif counts["failed"]:
             overall_status = "needs_learning"
-        elif counts["needs_input"] or counts["dispatch_denied"]:
+        elif counts["needs_input"] or any(
+            isinstance(item, dict)
+            and item.get("action_type") == "dispatch_denied"
+            and item.get("status") == "blocked"
+            for item in refreshed_actions
+        ):
             overall_status = "blocked"
         elif counts["success"]:
             overall_status = "partially_completed"
