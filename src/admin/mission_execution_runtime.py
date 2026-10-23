@@ -99,6 +99,7 @@ def create_mission_execution_bindings(
             "reconstruct": {},
             "role_reflection_context": role_reflection_context,
             "decision_trace": action["decision_trace"],
+            "dispatch_authorization": action.get("mission_runtime_authorization"),
         }
         if role_summary:
             diagnosis["role_reflection_summary"] = role_summary
@@ -153,6 +154,7 @@ def create_mission_execution_bindings(
         learning_task["mission_run_id"] = mission_run["mission_run_id"]
         learning_task["mission_node_id"] = action["node_id"]
         learning_task["decision_trace"] = action["decision_trace"]
+        learning_task["dispatch_authorization"] = action.get("mission_runtime_authorization")
         learning_task["goal"] = mission_run.get("goal")
         learning_task["updated_at"] = datetime.now().isoformat()
 
@@ -354,6 +356,7 @@ def create_mission_execution_bindings(
                             ],
                             "role_reflection_context": role_reflection_context,
                             "decision_trace": current["decision_trace"],
+                            "dispatch_authorization": current.get("mission_runtime_authorization"),
                         })
                         existing_failure_learning.add(failure_key)
                 elif task_status == "running":
