@@ -264,10 +264,16 @@ class OrganizationRegistry:
     @staticmethod
     def _clone_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
         """Copy reusable configuration while excluding credentials and live runtime state."""
-        forbidden_fragments = (
-            "secret", "token", "password", "credential", "api_key", "apikey",
+        forbidden_exact = {
+            "secret", "token", "access_token", "refresh_token", "api_token",
+            "password", "credential", "credentials", "api_key", "apikey",
             "access_key", "private_key", "authorization", "cookie", "session",
-            "runtime", "active_task", "process_id", "pid",
+            "session_id", "pid", "process_id", "runtime", "runtime_state",
+        }
+        forbidden_fragments = (
+            "client_secret", "password", "credential", "api_key", "apikey",
+            "access_key", "private_key", "authorization", "cookie",
+            "active_task", "runtime_state",
         )
 
         def clean(value: Any) -> Any:
@@ -275,7 +281,9 @@ class OrganizationRegistry:
                 result: dict[str, Any] = {}
                 for key, item in value.items():
                     normalized_key = str(key).strip().lower().replace("-", "_")
-                    if any(fragment in normalized_key for fragment in forbidden_fragments):
+                    if normalized_key in forbidden_exact or any(
+                        fragment in normalized_key for fragment in forbidden_fragments
+                    ):
                         continue
                     result[str(key)] = clean(item)
                 return result
