@@ -266,6 +266,7 @@ def create_mission_execution_bindings(
             "needs_learning": 0,
             "needs_input": 0,
             "planned_only": 0,
+            "dispatch_denied": 0,
             "success": 0,
             "failed": 0,
             "running": 0,
@@ -448,11 +449,13 @@ def create_mission_execution_bindings(
                 continue
 
             refreshed_actions.append(current)
-            if action_type == "failure_learning_ticket":
+            if action_type in {"failure_learning_ticket", "learning_ticket"}:
                 counts["needs_learning"] += 1
             elif action_type == "needs_input":
                 counts["needs_input"] += 1
-            elif action_type == "planned_only":
+            elif action_type == "dispatch_denied":
+                counts["dispatch_denied"] += 1
+            elif action_type in {"planned_only", "knowledge_reuse_pending"}:
                 counts["planned_only"] += 1
 
         mission_run["actions"] = refreshed_actions
@@ -479,7 +482,7 @@ def create_mission_execution_bindings(
             overall_status = "completed"
         elif counts["failed"]:
             overall_status = "needs_learning"
-        elif counts["needs_input"]:
+        elif counts["needs_input"] or counts["dispatch_denied"]:
             overall_status = "blocked"
         elif counts["success"]:
             overall_status = "partially_completed"
