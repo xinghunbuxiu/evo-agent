@@ -74,7 +74,7 @@ python -m unittest tests.test_mission_planner_trace -v
 
 真实 Worker handler 收到节点时会同时收到授权证据，并将其写入 `task_queue.submit()` 的任务 payload（`_mission_dispatch_authorization`）。实际派发仍以任务队列返回的 task ID 和 Mission action 的 `task_submitted` 记录为准；刷新阶段按 task ID 读取真实任务状态/结果，拒绝派发和知识复用待办也会保留在运行状态统计中。协调合同节点必须包含明确的 `id`、`status`、`reasoning`、`blockers`、`recommended_skill_ids`、`validation_checks`、`decision_trace` 与布尔 `parallel_safe`；运行时节点也必须提供 `task_type` 等必要字段。缺失字段会明确报错，缺少或格式错误的协调合同则 fail closed，不回退到未受控派发。
 
-规划层现在会输出 `dependency_graph`，并在生成计划前校验依赖 ID 是否存在、是否重复、自依赖以及是否形成环；每个节点也会保留 `depends_on`。非法依赖会明确抛出 `ValueError`，不生成不完整计划。**这只是依赖图的建模与校验，尚不代表运行时已经按依赖顺序派发。** 运行时依赖阻断/完成后恢复派发、跨 Mission 员工原子预留/冲突锁、租约、取消、崩溃恢复和分布式 exactly-once 仍未接通。当前 `parallel_safe` 只作为显式安全意图与审计信号，不能单凭它启动并行执行；员工目录推荐也不是跨进程的原子锁。下一步应将依赖状态接入 Mission 执行刷新循环，未完成前禁止派发下游节点，依赖完成后由主脑重新评估并授权。
+规划层会输出 `dependency_graph`，并在生成计划前校验依赖 ID、重复依赖、自依赖和循环；节点保留 `depends_on`。动作运行时再次校验图，防止绕过 Planner 的无效计划进入派发。下游节点在所有前置节点实际成功前会生成 `dependency_blocked` 记录并拒绝派发；刷新运行记录时读取任务队列的真实结果，前置节点成功后仅重新评估并派发被释放的下游节点，失败时保持阻塞并将 `dependency_replan` 标为 `required`。失败后的自动执行仍关闭：下一轮计划只提供主脑重规划决策，不把员工推荐当作授权，也不自动绕过失败依赖。跨 Mission 员工原子预留/冲突锁、租约、取消、崩溃恢复和分布式 exactly-once 仍未接通；`parallel_safe` 仍只是安全意图与审计信号，不能单凭它启动并行执行。
 
 
 ## 运行时授权、执行回传与失败重规划
