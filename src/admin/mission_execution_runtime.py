@@ -276,6 +276,8 @@ def create_mission_execution_bindings(
             "learning_improved": 0,
             "learning_regressed": 0,
             "learning_completed": 0,
+            "dependency_waiting": 0,
+            "dependency_replan_required": 0,
         }
 
         goal = str(mission_run.get("goal") or "")
@@ -632,6 +634,8 @@ def create_mission_execution_bindings(
             and str(item.get("node_id") or "").strip()
         })
         dependency_history.extend(dependency_decisions)
+        counts["dependency_waiting"] = len(waiting_dependency_nodes)
+        counts["dependency_replan_required"] = len(dependency_replan_nodes)
         mission_run["dependency_runtime"] = {
             "schema_version": "mission.dependency.runtime.v1",
             "completed_node_ids": completed_node_ids,
@@ -661,6 +665,8 @@ def create_mission_execution_bindings(
             overall_status = "running"
         elif counts["submitted"]:
             overall_status = "submitted"
+        elif dependency_replan_nodes or waiting_dependency_nodes:
+            overall_status = "blocked"
         elif counts["success"] and counts["needs_learning"] == 0 and counts["needs_input"] == 0:
             overall_status = "completed"
         elif counts["failed"]:
