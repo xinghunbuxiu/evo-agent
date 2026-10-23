@@ -117,8 +117,8 @@ class MissionTracePropagationTests(unittest.TestCase):
             tenant_id="tenant-a",
             mission_run_id="run-a",
             plan={"nodes": [
-                {"id": "node-a", "title": "A", "task_type": "design", "status": "planned", "decision_trace": trace_a},
-                {"id": "node-b", "title": "B", "task_type": "design", "status": "planned", "decision_trace": trace_b},
+                {"id": "node-a", "title": "A", "task_type": "design", "status": "planned", "decision_trace": trace_a, "blockers": [], "recommended_skill_ids": [], "validation_checks": []},
+                {"id": "node-b", "title": "B", "task_type": "design", "status": "planned", "decision_trace": trace_b, "blockers": [], "recommended_skill_ids": [], "validation_checks": []},
             ]},
             context={},
             work_type={},
@@ -431,6 +431,7 @@ class MissionTracePropagationTests(unittest.TestCase):
                 "decision_trace": trace,
                 "recommended_skill_ids": [],
                 "recommended_skills": [],
+                "validation_checks": ["verify-output"],
                 "role_reflection_context": {},
             }],
             "orchestration": {
@@ -517,6 +518,7 @@ class MissionTracePropagationTests(unittest.TestCase):
                 "decision_trace": trace,
                 "recommended_skill_ids": [],
                 "recommended_skills": [],
+                "validation_checks": [],
             }],
             "orchestration": {
                 "dispatch_mode": "centralized",
