@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from core.mission_brain import index_mission_brain_decisions
+
 
 def _append_base_action(
     *,
@@ -92,6 +94,23 @@ def create_mission_action_runtime_bindings(
             if node_key and task_key:
                 plan_learning_task_map[node_key] = task_key
 
+        brain_contract = plan.get("orchestration", {}) if isinstance(plan.get("orchestration"), dict) else {}
+        brain_decisions = index_mission_brain_decisions(brain_contract)
+
+        def append_action(**kwargs) -> None:
+            node_key = str(kwargs.get("node_id") or "").strip()
+            extra = dict(kwargs.get("extra") or {})
+            decision = brain_decisions.get(node_key)
+            extra["orchestration_owner"] = "mission"
+            extra["dispatch_mode"] = str(brain_contract.get("dispatch_mode") or "centralized")
+            if decision:
+                extra["mission_brain_decision"] = decision.get("decision")
+                extra["decision_trace"] = decision.get("decision_trace", [])
+                extra["validation_checks"] = decision.get("validation_checks", [])
+                extra["verified_skill_ids"] = decision.get("verified_skill_ids", [])
+            kwargs["extra"] = extra
+            _append_base_action(**kwargs)
+
         actions: list[dict] = []
         submitted_task_ids: list[str] = []
         counts = {
@@ -136,7 +155,7 @@ def create_mission_action_runtime_bindings(
 
             if node_status == "needs_learning" or task_type in {"learn", "promote", "validate", "plan", "collect", "execute"}:
                 counts["needs_learning"] += 1
-                _append_base_action(
+                append_action(
                     actions=actions,
                     node_id=node_id,
                     title=node.get("title"),
@@ -160,7 +179,7 @@ def create_mission_action_runtime_bindings(
                 continue
 
             counts["planned_only"] += 1
-            _append_base_action(
+            append_action(
                 actions=actions,
                 node_id=node_id,
                 title=node.get("title"),
