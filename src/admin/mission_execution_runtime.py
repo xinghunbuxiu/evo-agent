@@ -32,6 +32,7 @@ def create_mission_execution_bindings(
     effective_platform_promotion_status: Callable,
     mission_post_action_handlers: dict[str, Callable] | None = None,
     mission_summary_handlers: dict[str, Callable] | None = None,
+    resume_mission_dependency_nodes: Callable | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -458,6 +459,173 @@ def create_mission_execution_bindings(
             elif action_type in {"planned_only", "knowledge_reuse_pending"}:
                 counts["planned_only"] += 1
 
+        # Reconcile persisted dependency-blocked actions against real execution outcomes.
+        # Only successful prerequisite actions release downstream work; recommendations alone never do.
+        dependency_decisions: list[dict] = []
+        previous_dependency_runtime = mission_run.get("dependency_runtime", {})
+        previous_dependency_decisions = (
+            previous_dependency_runtime.get("decisions", [])
+            if isinstance(previous_dependency_runtime, dict)
+            and isinstance(previous_dependency_runtime.get("decisions"), list)
+            else []
+        )
+        dependency_history = list(previous_dependency_decisions)
+        node_status_by_id: dict[str, str] = {}
+        for item in refreshed_actions:
+            if not isinstance(item, dict):
+                continue
+            if item.get("action_type") == "failure_learning_ticket" or item.get("status") == "superseded":
+                continue
+            item_node_id = str(item.get("node_id") or "").strip()
+            if item_node_id:
+                node_status_by_id[item_node_id] = str(item.get("status") or "").strip()
+
+        completed_node_ids = sorted(
+            node_id for node_id, node_status in node_status_by_id.items()
+            if node_status in {"completed", "improved"}
+        )
+        failed_node_ids = sorted(
+            node_id for node_id, node_status in node_status_by_id.items()
+            if node_status in {"failed", "regressed"}
+        )
+        completed_node_set = set(completed_node_ids)
+        failed_node_set = set(failed_node_ids)
+        eligible_nodes: list[str] = []
+        eligible_action_indexes: dict[str, int] = {}
+
+        for action_index, item in enumerate(refreshed_actions):
+            if not isinstance(item, dict) or item.get("action_type") != "dependency_blocked":
+                continue
+            if item.get("status") != "blocked":
+                continue
+            node_id = str(item.get("node_id") or "").strip()
+            dependencies = item.get("depends_on", []) if isinstance(item.get("depends_on"), list) else []
+            dependencies = [str(value).strip() for value in dependencies if str(value).strip()]
+            prior_state = str(item.get("dependency_state") or "waiting")
+            failed_dependencies = [dependency for dependency in dependencies if dependency in failed_node_set]
+            if failed_dependencies:
+                item["dependency_state"] = "failed"
+                item["dependency_blockers"] = failed_dependencies
+                item["replan_required"] = True
+                item["replan_reason_code"] = "dependency_failed"
+                item["detail"] = "前置节点执行失败；下游节点保持阻塞，等待 Mission 主脑重新规划，不自动绕过依赖"
+                if prior_state != "failed":
+                    dependency_decisions.append({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.failure_replan.v1",
+                        "result": "replan_required",
+                        "evidence": {
+                            "failed_dependency_ids": failed_dependencies,
+                            "completed_node_ids": completed_node_ids,
+                        },
+                    })
+                continue
+
+            if dependencies and all(dependency in completed_node_set for dependency in dependencies):
+                if prior_state in {"resume_failed", "ready_for_replan", "failed"}:
+                    continue
+                eligible_nodes.append(node_id)
+                eligible_action_indexes[node_id] = action_index
+            else:
+                item["dependency_state"] = "waiting"
+                item["dependency_blockers"] = [dependency for dependency in dependencies if dependency not in completed_node_set]
+                item["replan_required"] = False
+
+        if eligible_nodes:
+            if callable(resume_mission_dependency_nodes):
+                for node_id in eligible_nodes:
+                    blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                    blocked_action["status"] = "superseded"
+                    blocked_action["dependency_state"] = "released"
+                    blocked_action["replan_required"] = False
+                    blocked_action["detail"] = "所有前置节点已成功完成；此阻塞记录已被后续派发动作取代"
+                try:
+                    resumed = resume_mission_dependency_nodes(
+                        task_queue=task_queue,
+                        mission_run=mission_run,
+                        node_ids=eligible_nodes,
+                        completed_node_ids=completed_node_ids,
+                    )
+                    resumed = resumed if isinstance(resumed, dict) else {}
+                    resumed_actions = resumed.get("actions", []) if isinstance(resumed.get("actions"), list) else []
+                    resumed_ids = {str(item.get("node_id") or "").strip() for item in resumed_actions if isinstance(item, dict)}
+                    if not resumed_actions or not resumed_ids.issubset(set(eligible_nodes)):
+                        raise ValueError("dependency resume returned no actions or an action outside the released node set")
+                    if any(item.get("action_type") == "dependency_blocked" for item in resumed_actions if isinstance(item, dict)):
+                        raise ValueError("dependency resume still reports unmet prerequisites")
+                    refreshed_actions.extend(resumed_actions)
+                    for task_id in resumed.get("submitted_task_ids", []) if isinstance(resumed.get("submitted_task_ids"), list) else []:
+                        task_id = str(task_id).strip()
+                        if task_id and task_id not in submitted_task_ids:
+                            submitted_task_ids.append(task_id)
+                    resumed_counts = resumed.get("counts", {}) if isinstance(resumed.get("counts"), dict) else {}
+                    for key in ("submitted", "needs_learning", "needs_input", "planned_only"):
+                        counts[key] = counts.get(key, 0) + int(resumed_counts.get(key, 0) or 0)
+                    dependency_decisions.extend({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.release_after_success.v1",
+                        "result": "released_for_mission_reevaluation",
+                        "evidence": {"completed_dependency_ids": [
+                            dependency for dependency in (refreshed_actions[eligible_action_indexes[node_id]].get("depends_on", []))
+                            if dependency in completed_node_set
+                        ]},
+                    } for node_id in eligible_nodes)
+                except Exception as exc:  # fail closed; preserve an auditable manual-replan state
+                    for node_id in eligible_nodes:
+                        blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                        blocked_action["status"] = "blocked"
+                        blocked_action["dependency_state"] = "resume_failed"
+                        blocked_action["replan_required"] = True
+                        blocked_action["replan_reason_code"] = "dependency_resume_failed"
+                        blocked_action["resume_error"] = str(exc)[:240]
+                        blocked_action["detail"] = "前置节点已完成，但下游重新派发失败；保留阻塞并要求 Mission 主脑重规划"
+                        dependency_decisions.append({
+                            "node_id": node_id,
+                            "rule_id": "mission.dependency.resume_failure.v1",
+                            "result": "replan_required",
+                            "evidence": {"error": str(exc)[:240]},
+                        })
+            else:
+                for node_id in eligible_nodes:
+                    blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                    blocked_action["dependency_state"] = "ready_for_replan"
+                    blocked_action["replan_required"] = True
+                    blocked_action["replan_reason_code"] = "dependency_resume_handler_missing"
+                    blocked_action["detail"] = "前置节点已完成，但当前运行时未注册下游派发回调；需要 Mission 主脑重规划"
+                    dependency_decisions.append({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.resume_handler_missing.v1",
+                        "result": "replan_required",
+                        "evidence": {"completed_dependency_ids": completed_node_ids},
+                    })
+
+        dependency_replan_nodes = sorted({
+            str(item.get("node_id") or "").strip()
+            for item in refreshed_actions
+            if isinstance(item, dict)
+            and item.get("action_type") == "dependency_blocked"
+            and item.get("replan_required") is True
+            and str(item.get("node_id") or "").strip()
+        })
+        waiting_dependency_nodes = sorted({
+            str(item.get("node_id") or "").strip()
+            for item in refreshed_actions
+            if isinstance(item, dict)
+            and item.get("action_type") == "dependency_blocked"
+            and item.get("status") == "blocked"
+            and item.get("dependency_state") == "waiting"
+            and str(item.get("node_id") or "").strip()
+        })
+        dependency_history.extend(dependency_decisions)
+        mission_run["dependency_runtime"] = {
+            "schema_version": "mission.dependency.runtime.v1",
+            "completed_node_ids": completed_node_ids,
+            "failed_node_ids": failed_node_ids,
+            "waiting_node_ids": waiting_dependency_nodes,
+            "replan_required_node_ids": dependency_replan_nodes,
+            "decisions": dependency_history[-100:],
+        }
+        mission_run["submitted_task_ids"] = submitted_task_ids
         mission_run["actions"] = refreshed_actions
         mission_run["counts"] = counts
 
@@ -497,6 +665,32 @@ def create_mission_execution_bindings(
         mission_run["status"] = overall_status
         mission_run["updated_at"] = datetime.now().isoformat()
         next_cycle_plan = build_mission_next_cycle_plan(mission_run, refreshed_actions)
+        if dependency_replan_nodes:
+            next_cycle_plan = dict(next_cycle_plan) if isinstance(next_cycle_plan, dict) else {}
+            next_steps = next_cycle_plan.get("next_steps", []) if isinstance(next_cycle_plan.get("next_steps"), list) else []
+            focus_points = next_cycle_plan.get("focus_points", []) if isinstance(next_cycle_plan.get("focus_points"), list) else []
+            replan_step = (
+                "Mission 主脑重新评估依赖失败节点 "
+                + ", ".join(dependency_replan_nodes)
+                + "：检查失败学习结果，选择修复、替代路径或停止；未重新授权前不得派发下游节点"
+            )
+            if replan_step not in next_steps:
+                next_steps.insert(0, replan_step)
+            replan_focus = "依赖失败已阻断下游任务，需要基于执行证据重新规划"
+            if replan_focus not in focus_points:
+                focus_points.insert(0, replan_focus)
+            next_cycle_plan.update({
+                "title": next_cycle_plan.get("title") or "Mission 依赖失败重规划",
+                "status": "ready",
+                "next_steps": next_steps[:6],
+                "focus_points": focus_points[:4],
+                "dependency_replan": {
+                    "required": True,
+                    "decision_owner": "mission",
+                    "node_ids": dependency_replan_nodes,
+                    "automatic_dispatch": False,
+                },
+            })
         mission_growth_timeline = build_mission_growth_timeline(refreshed_actions)
         mission_run["summary"] = {
             "goal": goal,
@@ -538,6 +732,7 @@ def create_mission_execution_bindings(
                 ),
             ),
             "next_cycle_plan": next_cycle_plan,
+            "dependency_runtime": mission_run.get("dependency_runtime", {}),
             "growth_timeline": mission_growth_timeline,
         }
         runtime_route = mission_run.get("runtime_route", {}) if isinstance(mission_run.get("runtime_route"), dict) else {}
