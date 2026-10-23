@@ -86,6 +86,9 @@ class MissionTracePropagationTests(unittest.TestCase):
                 "orchestration": {
                     "dispatch_mode": "centralized",
                     "coordination_plan": {
+                        "schema_version": "mission.coordination.v1",
+                        "decision_owner": "mission",
+                        "dispatch_authorized": False,
                         "actions": [{
                             "node_id": "node-a",
                             "action": "await_dispatch_authorization",
