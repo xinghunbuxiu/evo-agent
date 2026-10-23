@@ -160,7 +160,10 @@ class MissionBrainContractTests(unittest.TestCase):
                 tenant_id="tenant-a",
                 goal="Build a reusable project workflow",
                 mission_kind="automation_operation",
-                context={},
+                context={
+                    "channel": "internal",
+                    "deliverable_goal": "build and verify a reusable project workflow",
+                },
             )
 
         contract = plan["orchestration"]
@@ -198,7 +201,11 @@ class MissionBrainContractTests(unittest.TestCase):
                 tenant_id="tenant-a",
                 goal="Build a reusable project workflow",
                 mission_kind="automation_operation",
-                context={"required_capabilities": ["android", "kotlin"]},
+                context={
+                    "required_capabilities": ["android", "kotlin"],
+                    "channel": "internal",
+                    "deliverable_goal": "build and verify a reusable project workflow",
+                },
             )
 
         first = plan["nodes"][0]["workforce_decision"]
