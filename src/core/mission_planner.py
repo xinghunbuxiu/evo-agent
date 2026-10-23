@@ -20,6 +20,7 @@ from .capabilities import CapabilityRegistry, get_capability_registry
 from .capability_types import capability_type_label, infer_capability_type
 from .learning import ExperienceStore, normalize_task_type
 from .skill_system import SkillRegistry
+from .mission_brain import build_mission_brain_contract
 
 try:
     from workers.registry import load_worker_mission_kind_templates
@@ -232,6 +233,7 @@ class MissionPlanner:
             "gap_summary": gap_summary,
             "learning_tasks": learning_tasks,
             "nodes": [node.to_dict() for node in nodes],
+            "orchestration": build_mission_brain_contract(nodes),
             "recommended_next_actions": self._recommended_actions(nodes, gap_summary, learning_tasks),
         }
 
