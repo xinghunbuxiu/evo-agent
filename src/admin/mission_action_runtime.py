@@ -108,6 +108,11 @@ def create_mission_action_runtime_bindings(
                 extra["decision_trace"] = decision.get("decision_trace", [])
                 extra["validation_checks"] = decision.get("validation_checks", [])
                 extra["verified_skill_ids"] = decision.get("verified_skill_ids", [])
+                workforce_decision = decision.get("workforce_decision")
+                if isinstance(workforce_decision, dict):
+                    # Audit the planner's recommendation, but do not mistake it for a dispatch.
+                    extra["workforce_decision"] = workforce_decision
+                    extra["workforce_dispatch_authorized"] = False
             kwargs["extra"] = extra
             _append_base_action(**kwargs)
 
