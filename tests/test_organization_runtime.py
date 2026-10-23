@@ -95,7 +95,7 @@ class OrganizationRegistryTests(unittest.TestCase):
                 "model": "configured-model",
                 "skills": ["android-build"],
                 "api_key": "do-not-copy",
-                "nested": {"access_token": "do-not-copy", "runtime_state": {"pid": 42}, "region": "local"},
+                "nested": {"access_token": "do-not-copy", "runtime_state": {"pid": 42}, "region": "local", "rapid_mode": True},
             },
         )
         clone = self.registry.clone_worker(source_worker_id="android-secret", new_worker_id="android-safe")
@@ -105,6 +105,7 @@ class OrganizationRegistryTests(unittest.TestCase):
         self.assertNotIn("access_token", clone["profile"]["nested"])
         self.assertNotIn("runtime_state", clone["profile"]["nested"])
         self.assertEqual(clone["profile"]["nested"]["region"], "local")
+        self.assertTrue(clone["profile"]["nested"]["rapid_mode"])
 
     def test_validated_asset_requires_evidence_reference(self):
         with self.assertRaises(ValueError):
