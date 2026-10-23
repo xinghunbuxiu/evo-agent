@@ -89,5 +89,30 @@ class MissionBrainCoordinationTests(unittest.TestCase):
         self.assertTrue(plan["actions"][0]["parallel_safe"])
 
 
+    def test_contract_rejects_missing_node_id_instead_of_silently_skipping(self):
+        with self.assertRaisesRegex(ValueError, "requires a non-empty id"):
+            build_mission_brain_contract([{
+                "status": "ready",
+                "reasoning": [],
+                "blockers": [],
+                "recommended_skill_ids": [],
+                "validation_checks": [],
+                "decision_trace": [],
+                "parallel_safe": False,
+            }])
+
+    def test_contract_rejects_missing_decision_evidence(self):
+        with self.assertRaisesRegex(ValueError, "requires list field 'decision_trace'"):
+            build_mission_brain_contract([{
+                "id": "missing-trace",
+                "status": "ready",
+                "reasoning": [],
+                "blockers": [],
+                "recommended_skill_ids": [],
+                "validation_checks": [],
+                "parallel_safe": False,
+            }])
+
+
 if __name__ == "__main__":
     unittest.main()
