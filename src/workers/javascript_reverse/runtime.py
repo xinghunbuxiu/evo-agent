@@ -126,6 +126,7 @@ def handle_javascript_reverse_mission_node(
         "_mission_run_id": mission_run_id,
         "_mission_node_id": node_id,
         "_mission_decision_trace": node["decision_trace"],
+            "_mission_dispatch_authorization": node["mission_runtime_authorization"],
         "_mission_kind": plan.get("mission_kind"),
         "_goal": plan.get("goal"),
         "_role_reflection_context": role_reflection_context,
