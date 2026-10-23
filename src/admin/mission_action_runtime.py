@@ -178,6 +178,7 @@ def create_mission_action_runtime_bindings(
         def append_action(**kwargs) -> None:
             node_key = str(kwargs.get("node_id") or "").strip()
             extra = dict(kwargs.get("extra") or {})
+            extra.setdefault("depends_on", list(dependency_graph.get(node_key, [])))
             decision = brain_decisions.get(node_key)
             coordination = coordination_by_node.get(node_key)
             extra["orchestration_owner"] = "mission"
