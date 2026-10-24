@@ -262,6 +262,29 @@ class OrganizationRegistryTests(unittest.TestCase):
         self.assertEqual(fresh.get_worker("android")["profile"]["handler_id"], "android")
         self.assertIsNone(fresh.get_worker("toutiao"))
 
+    def test_workforce_recommendation_respects_resolved_handler_route(self):
+        self.registry.create_role(
+            role_id="android-alt", title="Alternate Android Handler",
+            responsibilities=["analyze"],
+            required_capabilities=["android"],
+        )
+        self.registry.create_worker(
+            worker_id="android-b", role_id="android-alt",
+            profile={"handler_id": "android-b", "capability_type": "android"},
+        )
+        decision = recommend_workforce_for_node(
+            {
+                "id": "route-specific-node",
+                "status": "ready",
+                "required_capabilities": ["android"],
+                "preferred_handler_id": "android-b",
+            },
+            self.registry,
+        )
+        self.assertEqual(decision["decision"], "assign_existing_worker_recommended")
+        self.assertEqual(decision["recommended_worker_id"], "android-b")
+        self.assertEqual(decision["recommended_role_id"], "android-alt")
+
     def test_workforce_recommends_available_worker_without_claiming_dispatch(self):
         decision = recommend_workforce_for_node(
             {"id": "node-a", "status": "ready", "required_capabilities": ["android", "kotlin"]},
