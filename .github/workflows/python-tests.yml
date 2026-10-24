@@ -2,17 +2,23 @@ name: Python regression tests
 
 on:
   push:
-    branches: [main, "automation/**"]
+    branches: [main, "automation/**", "infra/**"]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: python-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Requires the repository-level Linux VPS runner to be Online with these labels.
+    # Setup instructions: docs/SELF_HOSTED_CI_CN.md
+    runs-on: [self-hosted, linux, x64, evo-agent]
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
