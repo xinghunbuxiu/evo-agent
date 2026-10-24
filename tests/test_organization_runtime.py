@@ -129,6 +129,27 @@ class OrganizationRegistryTests(unittest.TestCase):
                 worker_id="android-a", task_id="mission-node-1",
             )
 
+    def test_concurrent_claims_for_one_worker_allow_exactly_one_task(self):
+        import concurrent.futures
+        import threading
+
+        barrier = threading.Barrier(2)
+        def claim(task_id):
+            barrier.wait(timeout=2)
+            try:
+                self.registry.claim_worker_task(worker_id="android-a", task_id=task_id)
+                return "claimed"
+            except ValueError:
+                return "rejected"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(claim, ["parallel-task-a", "parallel-task-b"]))
+        self.assertEqual(outcomes.count("claimed"), 1)
+        self.assertEqual(outcomes.count("rejected"), 1)
+        worker = self.registry.get_worker("android-a")
+        self.assertEqual(worker["status"], "busy")
+        self.assertEqual(len(worker["active_task_ids"]), 1)
+
     def test_worker_with_multiple_active_tasks_stays_busy_until_all_released(self):
         self.registry.set_worker_status(
             worker_id="android-a", status="busy",
