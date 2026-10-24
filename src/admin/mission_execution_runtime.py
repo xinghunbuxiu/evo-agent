@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from core.tenant import TenantManager
+from core.organization_runtime import OrganizationRegistry
 
 
 def create_mission_execution_bindings(
@@ -33,6 +34,7 @@ def create_mission_execution_bindings(
     mission_post_action_handlers: dict[str, Callable] | None = None,
     mission_summary_handlers: dict[str, Callable] | None = None,
     resume_mission_dependency_nodes: Callable | None = None,
+    organization_registry: OrganizationRegistry | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -272,6 +274,7 @@ def create_mission_execution_bindings(
             "success": 0,
             "failed": 0,
             "running": 0,
+            "cancelled": 0,
             "learning_validating": 0,
             "learning_improved": 0,
             "learning_regressed": 0,
@@ -313,7 +316,7 @@ def create_mission_execution_bindings(
                     continue
 
                 task_status = str(task.status.value or "")
-                if task_status == "completed":
+                if task_status in {"success", "completed"}:
                     current["status"] = "completed"
                     current["detail"] = trim_candidate_text(
                         (task.result or {}).get("summary") or current.get("detail") or f"{current.get('task_type') or 'task'} 已完成"
@@ -364,6 +367,10 @@ def create_mission_execution_bindings(
                 elif task_status == "running":
                     current["status"] = "running"
                     counts["running"] += 1
+                elif task_status == "cancelled":
+                    current["status"] = "cancelled"
+                    current["detail"] = "任务已取消，员工占用将在确认所有关联任务终止后释放"
+                    counts["cancelled"] += 1
                 else:
                     current["status"] = "submitted"
                     counts["submitted"] += 1
@@ -460,6 +467,63 @@ def create_mission_execution_bindings(
                 counts["needs_input"] += 1
             elif action_type in {"planned_only", "knowledge_reuse_pending"}:
                 counts["planned_only"] += 1
+
+        # Release a worker only after every queue task attached to its claim is terminal.
+        # Claims are durable leases, not plan recommendations; missing task records keep the lease.
+        if organization_registry is not None:
+            claims: dict[str, dict] = {}
+            for action_index, item in enumerate(refreshed_actions):
+                if not isinstance(item, dict):
+                    continue
+                claim = item.get("worker_claim")
+                if not isinstance(claim, dict) or claim.get("state") != "claimed":
+                    continue
+                claim_id = str(claim.get("claim_id") or "").strip()
+                worker_id = str(claim.get("worker_id") or "").strip()
+                task_id = str(item.get("task_id") or "").strip()
+                if not claim_id or not worker_id or not task_id:
+                    continue
+                group = claims.setdefault(claim_id, {
+                    "worker_id": worker_id,
+                    "task_ids": set(),
+                    "action_indexes": [],
+                })
+                if group["worker_id"] != worker_id:
+                    continue
+                group["task_ids"].add(task_id)
+                group["action_indexes"].append(action_index)
+
+            for claim_id, group in claims.items():
+                task_ids = sorted(group["task_ids"])
+                if not task_ids:
+                    continue
+                all_terminal = True
+                for task_id in task_ids:
+                    task = task_queue.get_task(task_id)
+                    if task is None or str(getattr(getattr(task, "status", None), "value", "")) not in {
+                        "success", "completed", "failed", "cancelled",
+                    }:
+                        all_terminal = False
+                        break
+                if not all_terminal:
+                    continue
+                try:
+                    organization_registry.release_worker_task(
+                        worker_id=group["worker_id"],
+                        task_id=claim_id,
+                    )
+                except Exception as exc:  # keep the mission visible if durable release fails
+                    for action_index in group["action_indexes"]:
+                        claim = dict(refreshed_actions[action_index].get("worker_claim", {}))
+                        claim["release_error_type"] = type(exc).__name__
+                        refreshed_actions[action_index]["worker_claim"] = claim
+                    continue
+                released_at = datetime.now().astimezone().isoformat()
+                for action_index in group["action_indexes"]:
+                    claim = dict(refreshed_actions[action_index].get("worker_claim", {}))
+                    claim["state"] = "released"
+                    claim["released_at"] = released_at
+                    refreshed_actions[action_index]["worker_claim"] = claim
 
         # Reconcile persisted dependency-blocked actions against real execution outcomes.
         # Only successful prerequisite actions release downstream work; recommendations alone never do.
