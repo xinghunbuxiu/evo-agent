@@ -97,6 +97,49 @@ class OrganizationRegistryTests(unittest.TestCase):
             self.registry.create_worker(worker_id="android-a", role_id="android-dev", profile={})
 
 
+    def test_worker_task_claim_is_exclusive_and_release_reopens_worker(self):
+        claimed = self.registry.claim_worker_task(
+            worker_id="android-a", task_id="mission-node-1",
+        )
+        self.assertEqual(claimed["status"], "busy")
+        self.assertEqual(claimed["active_task_ids"], ["mission-node-1"])
+
+        # Retrying the same claim is idempotent; a different task cannot steal the worker.
+        same_claim = self.registry.claim_worker_task(
+            worker_id="android-a", task_id="mission-node-1",
+        )
+        self.assertEqual(same_claim["active_task_ids"], ["mission-node-1"])
+        with self.assertRaises(ValueError):
+            self.registry.claim_worker_task(
+                worker_id="android-a", task_id="mission-node-2",
+            )
+
+        released = self.registry.release_worker_task(
+            worker_id="android-a", task_id="mission-node-1",
+        )
+        self.assertEqual(released["status"], "available")
+        self.assertEqual(released["active_task_ids"], [])
+        with self.assertRaises(ValueError):
+            self.registry.release_worker_task(
+                worker_id="android-a", task_id="mission-node-1",
+            )
+
+    def test_worker_with_multiple_active_tasks_stays_busy_until_all_released(self):
+        self.registry.set_worker_status(
+            worker_id="android-a", status="busy",
+            active_task_ids=["task-1", "task-2"],
+        )
+        released = self.registry.release_worker_task(
+            worker_id="android-a", task_id="task-1",
+        )
+        self.assertEqual(released["status"], "busy")
+        self.assertEqual(released["active_task_ids"], ["task-2"])
+        released = self.registry.release_worker_task(
+            worker_id="android-a", task_id="task-2",
+        )
+        self.assertEqual(released["status"], "available")
+        self.assertEqual(released["active_task_ids"], [])
+
     def test_clone_drops_credentials_and_live_runtime_fields(self):
         self.registry.create_worker(
             worker_id="android-secret",
