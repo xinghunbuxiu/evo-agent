@@ -346,6 +346,13 @@ def create_start_mission(
         goal = str(prepared.get("goal") or "").strip()
         mission_kind = prepared.get("mission_kind")
         context = prepared.get("context", {})
+        if not isinstance(context, dict):
+            context = {}
+        prepared_route = prepared.get("runtime_route", {})
+        if isinstance(prepared_route, dict):
+            route_worker_id = str(prepared_route.get("primary_worker_id") or "").strip()
+            if route_worker_id:
+                context.setdefault("runtime_primary_worker_id", route_worker_id)
         validation = prepared.get("work_type_validation", {})
         if not goal:
             return None, error_response("goal 不能为空", 400)
