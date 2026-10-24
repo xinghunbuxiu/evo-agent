@@ -626,7 +626,48 @@ def create_mission_action_runtime_bindings(
                     append_action=append_action,
                     task_priority_cls=task_priority_cls,
                 ) if callable(worker_handler) else False
-            except Exception:
+            except Exception as exc:
+                partial_task_ids = [
+                    str(item).strip()
+                    for item in submitted_task_ids[before_task_count:]
+                    if str(item).strip()
+                ]
+                if claim and organization_registry is not None and partial_task_ids:
+                    # Some handlers submit work before raising. Preserve the lease and
+                    # materialize every submitted task so refresh can release it later.
+                    claim = {**claim, "handler_error_type": type(exc).__name__}
+                    attached: set[str] = set()
+                    for action in actions[before_action_count:]:
+                        if not isinstance(action, dict) or str(action.get("node_id") or "") != node_id:
+                            continue
+                        task_id = str(action.get("task_id") or "").strip()
+                        if task_id and task_id in partial_task_ids:
+                            action["worker_claim"] = dict(claim)
+                            action["organization_worker_id"] = claim["worker_id"]
+                            action["handler_error_type"] = type(exc).__name__
+                            attached.add(task_id)
+                    for task_id in partial_task_ids:
+                        if task_id in attached:
+                            continue
+                        task = task_queue.get_task(task_id) if hasattr(task_queue, "get_task") else None
+                        actions.append({
+                            "node_id": node_id,
+                            "title": node.get("title"),
+                            "action_type": "task_submitted",
+                            "status": "submitted",
+                            "detail": f"任务已提交；handler 随后异常（{type(exc).__name__}），员工占用继续保留",
+                            "task_id": task_id,
+                            "task_type": getattr(task, "type", task_type),
+                            "worker_claim": dict(claim),
+                            "organization_worker_id": claim["worker_id"],
+                            "handler_error_type": type(exc).__name__,
+                            "matched_verified_skill_ids": matched_skill_ids,
+                            "matched_verified_skills": matched_skills[:3],
+                            "work_type_id": work_type.get("work_type_id"),
+                            "work_type_title": work_type.get("title"),
+                            "delivery_targets": work_type_summary.get("deliverables", []),
+                        })
+                    continue
                 if claim and organization_registry is not None:
                     organization_registry.release_worker_task(
                         worker_id=claim["worker_id"], task_id=claim["claim_id"],
