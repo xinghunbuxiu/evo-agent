@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import json
 import os
-import fcntl
 import re
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,34 @@ from typing import Any
 
 _ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$")
 _TERMINAL_WORKER_STATES = {"retired"}
+
+
+@contextmanager
+def _exclusive_worker_lock(lock_path: Path):
+    """Cross-platform exclusive lock for worker claims in a shared workspace."""
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _now() -> str:
@@ -319,8 +347,7 @@ class OrganizationRegistry:
         worker_id = _validate_id(worker_id, "worker_id")
         task_id = _validate_id(task_id, "task_id")
         lock_path = self.root / ".workers.lock"
-        with lock_path.open("a+", encoding="utf-8") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        with _exclusive_worker_lock(lock_path):
             try:
                 workers = self._read(self.workers_path)
                 worker = workers.get(worker_id)
@@ -340,15 +367,14 @@ class OrganizationRegistry:
                 self._write(self.workers_path, workers)
                 return worker
             finally:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                pass
 
     def release_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
         """Release a claimed task; keep the worker busy until all its tasks are closed."""
         worker_id = _validate_id(worker_id, "worker_id")
         task_id = _validate_id(task_id, "task_id")
         lock_path = self.root / ".workers.lock"
-        with lock_path.open("a+", encoding="utf-8") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        with _exclusive_worker_lock(lock_path):
             try:
                 workers = self._read(self.workers_path)
                 worker = workers.get(worker_id)
@@ -365,7 +391,7 @@ class OrganizationRegistry:
                 self._write(self.workers_path, workers)
                 return worker
             finally:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                pass
 
     @staticmethod
     def _clone_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
