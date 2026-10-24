@@ -144,39 +144,62 @@ class OrganizationRegistry:
         roles = self._read(self.roles_path)
         if role_id not in roles or roles[role_id].get("status") != "active":
             raise ValueError(f"Active role required: {role_id}")
-        workers = self._read(self.workers_path)
-        if worker_id in workers:
-            raise ValueError(f"Worker already exists: {worker_id}")
         if not isinstance(profile, dict):
             raise ValueError("Worker profile must be an object")
-        worker = {
-            "worker_id": worker_id,
-            "role_id": role_id,
-            "profile": dict(profile),
-            "status": "available",
-            "created_from_worker_id": created_from_worker_id,
-            "active_task_ids": [],
-            "knowledge_asset_ids": [],
-            "created_at": _now(),
-            "updated_at": _now(),
-        }
-        workers[worker_id] = worker
-        self._write(self.workers_path, workers)
-        return worker
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            roles = self._read(self.roles_path)
+            if role_id not in roles or roles[role_id].get("status") != "active":
+                raise ValueError(f"Active role required: {role_id}")
+            workers = self._read(self.workers_path)
+            if worker_id in workers:
+                raise ValueError(f"Worker already exists: {worker_id}")
+            worker = {
+                "worker_id": worker_id,
+                "role_id": role_id,
+                "profile": self._clone_safe_profile(profile),
+                "status": "available",
+                "created_from_worker_id": created_from_worker_id,
+                "active_task_ids": [],
+                "released_task_ids": [],
+                "knowledge_asset_ids": [],
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+            workers[worker_id] = worker
+            self._write(self.workers_path, workers)
+            return worker
 
     def clone_worker(self, *, source_worker_id: str, new_worker_id: str) -> dict[str, Any]:
         source_worker_id = _validate_id(source_worker_id, "source_worker_id")
-        source = self.get_worker(source_worker_id)
-        if source is None:
-            raise KeyError(f"Worker not found: {source_worker_id}")
-        if source.get("status") in _TERMINAL_WORKER_STATES:
-            raise ValueError("Cannot clone a retired worker")
-        return self.create_worker(
-            worker_id=new_worker_id,
-            role_id=source["role_id"],
-            profile=self._clone_safe_profile(source["profile"]),
-            created_from_worker_id=source_worker_id,
-        )
+        new_worker_id = _validate_id(new_worker_id, "new_worker_id")
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            source = workers.get(source_worker_id)
+            if source is None:
+                raise KeyError(f"Worker not found: {source_worker_id}")
+            if source.get("status") in _TERMINAL_WORKER_STATES:
+                raise ValueError("Cannot clone a retired worker")
+            roles = self._read(self.roles_path)
+            role_id = str(source.get("role_id") or "")
+            if role_id not in roles or roles[role_id].get("status") != "active":
+                raise ValueError(f"Active role required: {role_id}")
+            if new_worker_id in workers:
+                raise ValueError(f"Worker already exists: {new_worker_id}")
+            clone = {
+                "worker_id": new_worker_id,
+                "role_id": role_id,
+                "profile": self._clone_safe_profile(source.get("profile", {})),
+                "status": "available",
+                "created_from_worker_id": source_worker_id,
+                "active_task_ids": [],
+                "released_task_ids": [],
+                "knowledge_asset_ids": [],
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+            workers[new_worker_id] = clone
+            self._write(self.workers_path, workers)
+            return clone
 
     def get_worker(self, worker_id: str) -> dict[str, Any] | None:
         return self._read(self.workers_path).get(_validate_id(worker_id, "worker_id"))
@@ -195,20 +218,29 @@ class OrganizationRegistry:
         allowed = {"available", "busy", "offline", "retired"}
         if status not in allowed:
             raise ValueError(f"Unsupported worker status: {status}")
-        workers = self._read(self.workers_path)
-        worker = workers.get(worker_id)
-        if worker is None:
-            raise KeyError(f"Worker not found: {worker_id}")
-        if worker.get("status") == "retired" and status != "retired":
-            raise ValueError("Retired worker cannot be reactivated")
         task_ids = self._clean_strings(active_task_ids or [])
-        if status == "retired" and task_ids:
-            raise ValueError("Worker with active tasks cannot be retired")
-        worker["status"] = status
-        worker["active_task_ids"] = task_ids
-        worker["updated_at"] = _now()
-        self._write(self.workers_path, workers)
-        return worker
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            if worker.get("status") == "retired" and status != "retired":
+                raise ValueError("Retired worker cannot be reactivated")
+            current_tasks = list(worker.get("active_task_ids", []))
+            if current_tasks and task_ids != current_tasks:
+                raise ValueError("Active tasks must be released individually before status changes")
+            if status == "retired" and task_ids:
+                raise ValueError("Worker with active tasks cannot be retired")
+            if status == "available" and task_ids:
+                raise ValueError("Available worker cannot retain active tasks")
+            if status == "busy" and not task_ids:
+                raise ValueError("Busy worker must have at least one active task")
+            worker["status"] = status
+            worker["active_task_ids"] = task_ids
+            worker.setdefault("released_task_ids", [])
+            worker["updated_at"] = _now()
+            self._write(self.workers_path, workers)
+            return worker
 
     def retire_worker(
         self,
@@ -229,25 +261,28 @@ class OrganizationRegistry:
         if invalid:
             raise ValueError(f"Knowledge assets are not validated: {invalid}")
 
-        workers = self._read(self.workers_path)
-        worker = workers.get(worker_id)
-        if worker is None:
-            raise KeyError(f"Worker not found: {worker_id}")
-        if worker.get("active_task_ids"):
-            raise ValueError("Cannot retire a worker with active tasks")
-        worker["status"] = "retired"
-        worker["knowledge_asset_ids"] = sorted(set(worker.get("knowledge_asset_ids", []) + asset_ids))
-        worker["retired_at"] = _now()
-        worker["updated_at"] = _now()
-        workers[worker_id] = worker
-        self._write(self.workers_path, workers)
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            if worker.get("active_task_ids"):
+                raise ValueError("Cannot retire a worker with active tasks")
+            if worker.get("status") == "retired":
+                raise ValueError("Worker is already retired")
+            worker["status"] = "retired"
+            worker["knowledge_asset_ids"] = sorted(set(worker.get("knowledge_asset_ids", []) + asset_ids))
+            worker["retired_at"] = _now()
+            worker["updated_at"] = _now()
+            workers[worker_id] = worker
+            self._write(self.workers_path, workers)
 
-        roles = self._read(self.roles_path)
-        role = roles[worker["role_id"]]
-        role["knowledge_asset_ids"] = sorted(set(role.get("knowledge_asset_ids", []) + asset_ids))
-        role["updated_at"] = _now()
-        self._write(self.roles_path, roles)
-        return worker
+            roles = self._read(self.roles_path)
+            role = roles[worker["role_id"]]
+            role["knowledge_asset_ids"] = sorted(set(role.get("knowledge_asset_ids", []) + asset_ids))
+            role["updated_at"] = _now()
+            self._write(self.roles_path, roles)
+            return worker
 
     def register_knowledge_asset(
         self,
@@ -346,8 +381,7 @@ class OrganizationRegistry:
         """
         worker_id = _validate_id(worker_id, "worker_id")
         task_id = _validate_id(task_id, "task_id")
-        lock_path = self.root / ".workers.lock"
-        with _exclusive_worker_lock(lock_path):
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
             workers = self._read(self.workers_path)
             worker = workers.get(worker_id)
             if worker is None:
@@ -357,6 +391,8 @@ class OrganizationRegistry:
             active = list(worker.get("active_task_ids", []))
             if task_id in active:
                 return worker
+            if task_id in worker.get("released_task_ids", []):
+                raise ValueError("A released task claim cannot be reopened")
             if worker.get("status") != "available" or active:
                 raise ValueError(f"Worker is not available for a new task: {worker_id}")
             worker["status"] = "busy"
@@ -370,17 +406,21 @@ class OrganizationRegistry:
         """Release a claimed task; keep the worker busy until all its tasks are closed."""
         worker_id = _validate_id(worker_id, "worker_id")
         task_id = _validate_id(task_id, "task_id")
-        lock_path = self.root / ".workers.lock"
-        with _exclusive_worker_lock(lock_path):
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
             workers = self._read(self.workers_path)
             worker = workers.get(worker_id)
             if worker is None:
                 raise KeyError(f"Worker not found: {worker_id}")
             active = list(worker.get("active_task_ids", []))
             if task_id not in active:
+                if task_id in worker.get("released_task_ids", []):
+                    return worker
                 raise ValueError(f"Task is not claimed by worker {worker_id}: {task_id}")
             worker["active_task_ids"] = [item for item in active if item != task_id]
-            if worker.get("status") != "retired":
+            released = list(worker.get("released_task_ids", []))
+            released.append(task_id)
+            worker["released_task_ids"] = released[-100:]
+            if worker.get("status") == "busy":
                 worker["status"] = "busy" if worker["active_task_ids"] else "available"
             worker["updated_at"] = _now()
             workers[worker_id] = worker
