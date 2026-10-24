@@ -473,6 +473,62 @@ class OrganizationRegistry:
         return result
 
 
+
+def sync_worker_catalog(
+    registry: OrganizationRegistry,
+    manifests: dict[str, dict[str, Any]],
+    enabled_worker_ids: set[str],
+) -> dict[str, int]:
+    """Seed durable role definitions and enabled built-in worker instances.
+
+    Existing user-authored roles, workers, and knowledge links are never overwritten.
+    A worker is only seeded when a concrete runtime handler is enabled.
+    """
+    roles_created = 0
+    workers_created = 0
+    for raw_worker_id, manifest in sorted(manifests.items()):
+        worker_id = _validate_id(raw_worker_id, "worker_id")
+        if not isinstance(manifest, dict):
+            continue
+        capability_type = str(manifest.get("capability_type") or "").strip()
+        if not capability_type:
+            continue
+        role = registry.get_role(worker_id)
+        if role is None:
+            registry.create_role(
+                role_id=worker_id,
+                title=str(manifest.get("title") or worker_id),
+                responsibilities=(
+                    manifest.get("owned_modules")
+                    if isinstance(manifest.get("owned_modules"), list)
+                    else manifest.get("task_types", [])
+                ),
+                required_capabilities=[capability_type],
+                standards=["runtime-handler-required", "validated-knowledge-only"],
+            )
+            roles_created += 1
+
+        if worker_id not in enabled_worker_ids:
+            continue
+        existing = registry.get_worker(worker_id)
+        if existing is not None:
+            continue
+        registry.create_worker(
+            worker_id=worker_id,
+            role_id=worker_id,
+            profile={
+                "handler_id": worker_id,
+                "capability_type": capability_type,
+                "task_types": manifest.get("task_types", []),
+                "work_type_ids": manifest.get("work_type_ids", []),
+                "enabled": True,
+                "source": "worker_manifest",
+            },
+        )
+        workers_created += 1
+    return {"roles_created": roles_created, "workers_created": workers_created}
+
+
 def recommend_workforce_for_node(
     node: dict[str, Any],
     registry: OrganizationRegistry | None,
@@ -613,4 +669,5 @@ __all__ = [
     "OrganizationRegistry",
     "recommend_workforce_for_node",
     "recommend_workforce_for_nodes",
+    "sync_worker_catalog",
 ]
