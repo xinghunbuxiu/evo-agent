@@ -18,7 +18,7 @@ jobs:
     # Persistent self-hosted runners must not execute untrusted fork PR code.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Setup instructions: docs/SELF_HOSTED_CI_CN.md
-    runs-on: [self-hosted, linux, x64, evo-agent]
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - name: Check out repository
