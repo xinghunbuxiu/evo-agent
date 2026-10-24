@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   tests:
-    # Requires the repository-level Linux VPS runner to be Online with these labels.
+    # Persistent self-hosted runners must not execute untrusted fork PR code.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Setup instructions: docs/SELF_HOSTED_CI_CN.md
     runs-on: [self-hosted, linux, x64, evo-agent]
     timeout-minutes: 30
