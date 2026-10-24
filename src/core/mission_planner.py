@@ -301,6 +301,14 @@ class MissionPlanner:
             nodes=nodes,
         )
         serialized_nodes = [node.to_dict() for node in nodes]
+        preferred_handler_id = str(
+            context.get("runtime_primary_worker_id")
+            or context.get("primary_worker_id")
+            or ""
+        ).strip()
+        if preferred_handler_id:
+            for node_payload in serialized_nodes:
+                node_payload["preferred_handler_id"] = preferred_handler_id
         workforce_decisions = recommend_workforce_for_nodes(serialized_nodes, self.organization_registry)
         workforce_by_node = {
             str(item.get("node_id")): item
