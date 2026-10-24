@@ -42,6 +42,7 @@ from core import (
 )
 from core.tenant import TenantManager
 from core.task_queue import get_task_queue, TaskPriority, TaskStatus
+from core.organization_runtime import OrganizationRegistry, sync_worker_catalog
 from admin.database import db, MYSQL_AVAILABLE
 from admin.mission_runtime import (
     derive_follow_up_context,
@@ -1102,6 +1103,16 @@ def create_app() -> FastAPI:
         if env_has_local_executor:
             workspace = env_path
     workspace.mkdir(parents=True, exist_ok=True)
+    organization_registry = OrganizationRegistry(workspace)
+    worker_manifests = builtin_worker_manifests(workspace)
+    worker_config = load_worker_registry_config(workspace)
+    worker_states = worker_config.get("workers", {}) if isinstance(worker_config.get("workers"), dict) else {}
+    enabled_worker_ids = {
+        str(worker_id)
+        for worker_id, state in worker_states.items()
+        if isinstance(state, dict) and bool(state.get("enabled"))
+    }
+    sync_worker_catalog(organization_registry, worker_manifests, enabled_worker_ids)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
     _mission_action_runtime_ref.update(create_mission_action_runtime_bindings(
@@ -1109,6 +1120,7 @@ def create_app() -> FastAPI:
         task_priority_cls=TaskPriority,
         mission_action_handlers=register_builtin_worker_mission_action_handlers(workspace=workspace),
         context_resolvers=build_mission_context_resolvers(workspace),
+        organization_registry=organization_registry,
     ))
     _load_sessions()
     
@@ -1728,6 +1740,7 @@ def create_app() -> FastAPI:
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
         resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
+        organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
 
