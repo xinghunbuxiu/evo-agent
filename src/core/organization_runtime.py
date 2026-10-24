@@ -495,7 +495,7 @@ def sync_worker_catalog(
             continue
         role = registry.get_role(worker_id)
         if role is None:
-            registry.create_role(
+            role = registry.create_role(
                 role_id=worker_id,
                 title=str(manifest.get("title") or worker_id),
                 responsibilities=(
@@ -507,6 +507,8 @@ def sync_worker_catalog(
                 standards=["runtime-handler-required", "validated-knowledge-only"],
             )
             roles_created += 1
+        if role.get("status") != "active":
+            continue
 
         if worker_id not in enabled_worker_ids:
             continue
