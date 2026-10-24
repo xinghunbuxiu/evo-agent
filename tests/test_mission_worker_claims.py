@@ -175,6 +175,39 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(denied["action_type"], "dispatch_denied")
         self.assertEqual(denied["mission_runtime_authorization"]["reason_code"], "recommended_worker_not_available")
 
+    def test_handler_error_after_submission_keeps_claim_until_task_ends(self):
+        def partial_handler(**kwargs):
+            node = kwargs["node"]
+            task_id = "task-partial"
+            kwargs["submitted_task_ids"].append(task_id)
+            kwargs["counts"]["submitted"] += 1
+            kwargs["actions"].append({
+                "node_id": node["id"],
+                "title": node.get("title"),
+                "action_type": "task_submitted",
+                "status": "submitted",
+                "task_id": task_id,
+                "task_type": "analyze",
+                "detail": "submitted before handler error",
+            })
+            raise RuntimeError("post-submit failure")
+
+        plan = _plan([{
+            "id": "partial-node",
+            "workforce_decision": _workforce("assign_existing_worker_recommended"),
+        }])
+        result = self._bindings(partial_handler)["build_mission_actions"](
+            task_queue=object(), tenant_id="tenant-a", mission_run_id="run-partial",
+            plan=plan, context={"runtime_primary_worker_id": "worker-a"},
+            work_type={}, work_type_summary={},
+        )
+        action = next(item for item in result["actions"] if item.get("task_id") == "task-partial")
+        self.assertEqual(action["worker_claim"]["state"], "claimed")
+        self.assertEqual(action["handler_error_type"], "RuntimeError")
+        worker = self.registry.get_worker("worker-a")
+        self.assertEqual(worker["status"], "busy")
+        self.assertEqual(len(worker["active_task_ids"]), 1)
+
     def test_parallel_safe_busy_worker_is_cloned_then_clone_is_claimed(self):
         self.registry.claim_worker_task(worker_id="worker-a", task_id="existing-task")
         plan = _plan([{
