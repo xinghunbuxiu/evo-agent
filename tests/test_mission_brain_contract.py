@@ -173,8 +173,13 @@ class MissionBrainContractTests(unittest.TestCase):
             [item["node_id"] for item in contract["node_decisions"]],
             [item["id"] for item in plan["nodes"]],
         )
-        self.assertFalse(contract["workforce_policy"]["dynamic_dispatch_enabled"])
-        self.assertFalse(contract["workforce_policy"]["automatic_worker_creation"])
+        self.assertTrue(contract["workforce_policy"]["dynamic_dispatch_enabled"])
+        self.assertTrue(contract["workforce_policy"]["atomic_claim_required_before_handler"])
+        self.assertEqual(
+            contract["workforce_policy"]["automatic_worker_creation"],
+            "existing_role_and_compatible_handler_only",
+        )
+        self.assertFalse(contract["workforce_policy"]["automatic_role_creation"])
         self.assertTrue(all(
             item["workforce_decision"]["decision"] == "catalog_unavailable"
             for item in plan["nodes"]
@@ -221,7 +226,8 @@ class MissionBrainContractTests(unittest.TestCase):
             plan["orchestration"]["workforce_policy"]["decision_counts"]["assign_existing_worker_recommended"],
             1,
         )
-        self.assertFalse(plan["orchestration"]["workforce_policy"]["dynamic_dispatch_enabled"])
+        self.assertTrue(plan["orchestration"]["workforce_policy"]["dynamic_dispatch_enabled"])
+        self.assertTrue(plan["orchestration"]["workforce_policy"]["release_after_all_linked_tasks_terminal"])
 
 
 if __name__ == "__main__":
