@@ -348,26 +348,23 @@ class OrganizationRegistry:
         task_id = _validate_id(task_id, "task_id")
         lock_path = self.root / ".workers.lock"
         with _exclusive_worker_lock(lock_path):
-            try:
-                workers = self._read(self.workers_path)
-                worker = workers.get(worker_id)
-                if worker is None:
-                    raise KeyError(f"Worker not found: {worker_id}")
-                if worker.get("status") == "retired":
-                    raise ValueError("Retired worker cannot claim tasks")
-                active = list(worker.get("active_task_ids", []))
-                if task_id in active:
-                    return worker
-                if worker.get("status") != "available" or active:
-                    raise ValueError(f"Worker is not available for a new task: {worker_id}")
-                worker["status"] = "busy"
-                worker["active_task_ids"] = [task_id]
-                worker["updated_at"] = _now()
-                workers[worker_id] = worker
-                self._write(self.workers_path, workers)
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            if worker.get("status") == "retired":
+                raise ValueError("Retired worker cannot claim tasks")
+            active = list(worker.get("active_task_ids", []))
+            if task_id in active:
                 return worker
-            finally:
-                pass
+            if worker.get("status") != "available" or active:
+                raise ValueError(f"Worker is not available for a new task: {worker_id}")
+            worker["status"] = "busy"
+            worker["active_task_ids"] = [task_id]
+            worker["updated_at"] = _now()
+            workers[worker_id] = worker
+            self._write(self.workers_path, workers)
+            return worker
 
     def release_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
         """Release a claimed task; keep the worker busy until all its tasks are closed."""
@@ -375,23 +372,20 @@ class OrganizationRegistry:
         task_id = _validate_id(task_id, "task_id")
         lock_path = self.root / ".workers.lock"
         with _exclusive_worker_lock(lock_path):
-            try:
-                workers = self._read(self.workers_path)
-                worker = workers.get(worker_id)
-                if worker is None:
-                    raise KeyError(f"Worker not found: {worker_id}")
-                active = list(worker.get("active_task_ids", []))
-                if task_id not in active:
-                    raise ValueError(f"Task is not claimed by worker {worker_id}: {task_id}")
-                worker["active_task_ids"] = [item for item in active if item != task_id]
-                if worker.get("status") != "retired":
-                    worker["status"] = "busy" if worker["active_task_ids"] else "available"
-                worker["updated_at"] = _now()
-                workers[worker_id] = worker
-                self._write(self.workers_path, workers)
-                return worker
-            finally:
-                pass
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            active = list(worker.get("active_task_ids", []))
+            if task_id not in active:
+                raise ValueError(f"Task is not claimed by worker {worker_id}: {task_id}")
+            worker["active_task_ids"] = [item for item in active if item != task_id]
+            if worker.get("status") != "retired":
+                worker["status"] = "busy" if worker["active_task_ids"] else "available"
+            worker["updated_at"] = _now()
+            workers[worker_id] = worker
+            self._write(self.workers_path, workers)
+            return worker
 
     @staticmethod
     def _clone_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
