@@ -240,6 +240,8 @@ class MissionWorkerClaimTests(unittest.TestCase):
                     if task_id != "task-terminal":
                         return None
                     return SimpleNamespace(
+                        id=task_id,
+                        tenant_id="tenant-a",
                         status=SimpleNamespace(value=terminal_status),
                         result={},
                         error="terminal",
