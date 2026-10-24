@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes
+from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes, sync_worker_catalog
 
 
 class OrganizationRegistryTests(unittest.TestCase):
@@ -119,8 +119,13 @@ class OrganizationRegistryTests(unittest.TestCase):
         )
         self.assertEqual(released["status"], "available")
         self.assertEqual(released["active_task_ids"], [])
+        # Duplicate release is idempotent, but the same claim cannot be reopened.
+        repeated_release = self.registry.release_worker_task(
+            worker_id="android-a", task_id="mission-node-1",
+        )
+        self.assertEqual(repeated_release["status"], "available")
         with self.assertRaises(ValueError):
-            self.registry.release_worker_task(
+            self.registry.claim_worker_task(
                 worker_id="android-a", task_id="mission-node-1",
             )
 
@@ -211,6 +216,30 @@ class OrganizationRegistryTests(unittest.TestCase):
             "standard-candidate",
             self.registry.get_role("android-dev")["knowledge_asset_ids"],
         )
+
+    def test_worker_catalog_sync_creates_durable_roles_and_only_enabled_instances(self):
+        fresh = OrganizationRegistry(Path(self.temp.name) / "catalog")
+        result = sync_worker_catalog(
+            fresh,
+            {
+                "android": {
+                    "title": "Android Worker",
+                    "capability_type": "android",
+                    "task_types": ["analyze"],
+                    "owned_modules": ["runtime"],
+                },
+                "toutiao": {
+                    "title": "Toutiao Worker",
+                    "capability_type": "automation",
+                    "task_types": ["execute"],
+                },
+            },
+            {"android"},
+        )
+        self.assertEqual(result, {"roles_created": 2, "workers_created": 1})
+        self.assertEqual(fresh.get_role("android")["required_capabilities"], ["android"])
+        self.assertEqual(fresh.get_worker("android")["profile"]["handler_id"], "android")
+        self.assertIsNone(fresh.get_worker("toutiao"))
 
     def test_workforce_recommends_available_worker_without_claiming_dispatch(self):
         decision = recommend_workforce_for_node(
