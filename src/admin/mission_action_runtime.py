@@ -5,9 +5,12 @@ Mission 动作编排运行时。
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import uuid
 from typing import Any, Callable
 
 from core.mission_brain import index_mission_brain_decisions
+from core.organization_runtime import OrganizationRegistry
 
 
 def _append_base_action(
@@ -96,6 +99,7 @@ def create_mission_action_runtime_bindings(
     task_priority_cls,
     mission_action_handlers: dict[str, Callable] | None = None,
     context_resolvers: dict[str, Callable[[dict], dict]] | None = None,
+    organization_registry: OrganizationRegistry | None = None,
 ):
     def build_mission_actions(
         *,
@@ -135,6 +139,40 @@ def create_mission_action_runtime_bindings(
         if callable(context_resolver):
             resolved_context = context_resolver(context)
         worker_handler = mission_action_handlers.get(primary_worker_id) if isinstance(mission_action_handlers, dict) else None
+
+        def worker_handler_id(worker: dict[str, Any] | None) -> str:
+            if not isinstance(worker, dict):
+                return ""
+            profile = worker.get("profile", {}) if isinstance(worker.get("profile"), dict) else {}
+            candidates = [
+                profile.get("handler_id"),
+                worker.get("worker_id"),
+                worker.get("created_from_worker_id"),
+                worker.get("role_id"),
+            ]
+            handlers = mission_action_handlers if isinstance(mission_action_handlers, dict) else {}
+            return next((str(item).strip() for item in candidates if str(item or "").strip() in handlers), "")
+
+        def role_supports_workforce(role_id: str, workforce: dict[str, Any]) -> bool:
+            if organization_registry is None:
+                return False
+            role = organization_registry.get_role(role_id)
+            if not isinstance(role, dict) or role.get("status") != "active":
+                return False
+            required = {
+                str(item).strip().casefold()
+                for item in workforce.get("required_capabilities", [])
+                if str(item).strip()
+            }
+            capabilities = {
+                str(item).strip().casefold()
+                for item in role.get("required_capabilities", [])
+                if str(item).strip()
+            }
+            return bool(required) and required.issubset(capabilities)
+
+        def worker_claim_id() -> str:
+            return "mission-" + uuid.uuid4().hex[:32]
 
         plan_learning_tasks = plan.get("learning_tasks", []) if isinstance(plan.get("learning_tasks"), list) else []
         plan_learning_task_map: dict[str, str] = {}
@@ -254,13 +292,51 @@ def create_mission_action_runtime_bindings(
                         or workforce.get("dispatch_authorized") is not False
                     ):
                         authorized, reason_code = False, "workforce_contract_invalid"
-                    else:
+                    elif organization_registry is None:
                         workforce_result = str(workforce.get("decision") or "")
                         recommended_worker = str(workforce.get("recommended_worker_id") or "").strip()
                         if workforce_result != "assign_existing_worker_recommended":
                             authorized, reason_code = False, "workforce_recommendation_not_assignable"
                         elif not primary_worker_id or recommended_worker != primary_worker_id:
                             authorized, reason_code = False, "runtime_worker_does_not_match_recommendation"
+                    elif not callable(worker_handler):
+                        authorized, reason_code = False, "runtime_worker_handler_missing"
+                    else:
+                        workforce_result = str(workforce.get("decision") or "")
+                        recommended_worker = str(workforce.get("recommended_worker_id") or "").strip()
+                        recommended_role = str(workforce.get("recommended_role_id") or "").strip()
+                        if workforce_result == "assign_existing_worker_recommended":
+                            worker = organization_registry.get_worker(recommended_worker)
+                            if not isinstance(worker, dict):
+                                authorized, reason_code = False, "recommended_worker_missing"
+                            elif worker.get("status") != "available" or worker.get("active_task_ids"):
+                                authorized, reason_code = False, "recommended_worker_not_available"
+                            elif not role_supports_workforce(str(worker.get("role_id") or ""), workforce):
+                                authorized, reason_code = False, "worker_role_capability_mismatch"
+                            elif worker_handler_id(worker) != primary_worker_id:
+                                authorized, reason_code = False, "worker_handler_route_mismatch"
+                        elif workforce_result == "clone_worker_recommended":
+                            source_id = str(workforce.get("recommended_source_worker_id") or "").strip()
+                            source = organization_registry.get_worker(source_id)
+                            if node.get("parallel_safe") is not True:
+                                authorized, reason_code = False, "worker_clone_not_parallel_safe"
+                            elif not isinstance(source, dict) or source.get("status") != "busy" or not source.get("active_task_ids"):
+                                authorized, reason_code = False, "clone_source_not_busy"
+                            elif not role_supports_workforce(str(source.get("role_id") or ""), workforce):
+                                authorized, reason_code = False, "clone_source_role_capability_mismatch"
+                            elif worker_handler_id(source) != primary_worker_id:
+                                authorized, reason_code = False, "clone_source_handler_route_mismatch"
+                        elif workforce_result == "create_worker_recommended":
+                            role = organization_registry.get_role(recommended_role)
+                            if not role_supports_workforce(recommended_role, workforce):
+                                authorized, reason_code = False, "new_worker_role_capability_mismatch"
+                            elif recommended_role != primary_worker_id and not any(
+                                worker_handler_id(item) == primary_worker_id
+                                for item in organization_registry.list_workers(role_id=recommended_role, include_retired=True)
+                            ):
+                                authorized, reason_code = False, "new_worker_handler_route_unavailable"
+                        else:
+                            authorized, reason_code = False, "workforce_recommendation_not_assignable"
 
             workforce = decision.get("workforce_decision") if isinstance(decision, dict) else None
             return {
@@ -432,7 +508,107 @@ def create_mission_action_runtime_bindings(
 
             dispatch_node = dict(node)
             dispatch_node["mission_runtime_authorization"] = authorization
-            if callable(worker_handler):
+            claim = None
+            if callable(worker_handler) and organization_registry is not None:
+                workforce = decision.get("workforce_decision", {}) if isinstance(decision, dict) else {}
+                workforce_result = str(workforce.get("decision") or "")
+                claim_id = worker_claim_id()
+                try:
+                    if workforce_result == "assign_existing_worker_recommended":
+                        chosen_worker_id = str(workforce.get("recommended_worker_id") or "").strip()
+                        claim_origin = "existing"
+                    elif workforce_result == "clone_worker_recommended":
+                        source_worker_id = str(workforce.get("recommended_source_worker_id") or "").strip()
+                        chosen_worker_id = "clone-" + hashlib.sha256(
+                            f"{mission_run_id}:{node_id}:{source_worker_id}".encode("utf-8")
+                        ).hexdigest()[:20]
+                        existing_clone = organization_registry.get_worker(chosen_worker_id)
+                        if existing_clone is None:
+                            organization_registry.clone_worker(
+                                source_worker_id=source_worker_id,
+                                new_worker_id=chosen_worker_id,
+                            )
+                        elif existing_clone.get("created_from_worker_id") != source_worker_id:
+                            raise ValueError("Deterministic clone id belongs to a different source worker")
+                        claim_origin = "clone"
+                    elif workforce_result == "create_worker_recommended":
+                        role_id = str(workforce.get("recommended_role_id") or "").strip()
+                        chosen_worker_id = "worker-" + hashlib.sha256(
+                            f"{mission_run_id}:{node_id}:{role_id}".encode("utf-8")
+                        ).hexdigest()[:20]
+                        existing_worker = organization_registry.get_worker(chosen_worker_id)
+                        if existing_worker is None:
+                            templates = organization_registry.list_workers(role_id=role_id, include_retired=True)
+                            template = next(
+                                (item for item in templates if worker_handler_id(item) == primary_worker_id),
+                                None,
+                            )
+                            template_profile = (
+                                dict(template.get("profile", {}))
+                                if isinstance(template, dict) and isinstance(template.get("profile"), dict)
+                                else {
+                                    "handler_id": primary_worker_id,
+                                    "capability_type": node.get("capability_type"),
+                                    "task_types": [node.get("task_type")],
+                                }
+                            )
+                            organization_registry.create_worker(
+                                worker_id=chosen_worker_id,
+                                role_id=role_id,
+                                profile=template_profile,
+                            )
+                        claim_origin = "incubated"
+                    else:
+                        raise ValueError("Workforce recommendation is not executable")
+                    organization_registry.claim_worker_task(worker_id=chosen_worker_id, task_id=claim_id)
+                    claim = {
+                        "schema_version": "mission.worker.claim.v1",
+                        "worker_id": chosen_worker_id,
+                        "claim_id": claim_id,
+                        "handler_id": primary_worker_id,
+                        "origin": claim_origin,
+                        "state": "claimed",
+                        "claimed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    dispatch_node["organization_worker_id"] = chosen_worker_id
+                    dispatch_node["organization_worker_claim_id"] = claim_id
+                    dispatch_node["organization_worker_handler_id"] = primary_worker_id
+                except Exception as exc:
+                    authorization = {
+                        **authorization,
+                        "authorized": False,
+                        "reason_code": "worker_claim_failed",
+                        "evidence": {
+                            **authorization.get("evidence", {}),
+                            "worker_claim_error_type": type(exc).__name__,
+                        },
+                        "authorized_at": None,
+                    }
+                    authorization_by_node[node_id] = authorization
+                    counts["planned_only"] += 1
+                    append_action(
+                        actions=actions,
+                        node_id=node_id,
+                        title=node.get("title"),
+                        action_type="dispatch_denied",
+                        status="blocked",
+                        detail="Mission 运行时无法原子占用员工，已拒绝派发",
+                        matched_skill_ids=matched_skill_ids,
+                        matched_skills=matched_skills,
+                        work_type=work_type,
+                        work_type_summary=work_type_summary,
+                        extra={
+                            "task_type": task_type,
+                            "capability_type": capability_type,
+                            "mission_runtime_authorization": authorization,
+                            "workforce_decision": workforce,
+                        },
+                    )
+                    continue
+
+            before_task_count = len(submitted_task_ids)
+            before_action_count = len(actions)
+            try:
                 handled = worker_handler(
                     task_queue=task_queue,
                     tenant_id=tenant_id,
@@ -449,9 +625,61 @@ def create_mission_action_runtime_bindings(
                     matched_skills=matched_skills,
                     append_action=append_action,
                     task_priority_cls=task_priority_cls,
-                )
+                ) if callable(worker_handler) else False
+            except Exception:
+                if claim and organization_registry is not None:
+                    organization_registry.release_worker_task(
+                        worker_id=claim["worker_id"], task_id=claim["claim_id"],
+                    )
+                raise
+
+            if handled:
+                new_task_ids = [
+                    str(item).strip()
+                    for item in submitted_task_ids[before_task_count:]
+                    if str(item).strip()
+                ]
+                if claim and organization_registry is not None:
+                    if not new_task_ids:
+                        organization_registry.release_worker_task(
+                            worker_id=claim["worker_id"], task_id=claim["claim_id"],
+                        )
+                        claim = {**claim, "state": "released", "released_at": datetime.now(timezone.utc).isoformat()}
+                    claimed_task_actions: set[str] = set()
+                    for action in actions[before_action_count:]:
+                        if not isinstance(action, dict) or str(action.get("node_id") or "") != node_id:
+                            continue
+                        task_id = str(action.get("task_id") or "").strip()
+                        if task_id and task_id in new_task_ids:
+                            action["worker_claim"] = dict(claim)
+                            action["organization_worker_id"] = claim["worker_id"]
+                            claimed_task_actions.add(task_id)
+                    for task_id in new_task_ids:
+                        if task_id in claimed_task_actions:
+                            continue
+                        task = task_queue.get_task(task_id) if hasattr(task_queue, "get_task") else None
+                        actions.append({
+                            "node_id": node_id,
+                            "title": node.get("title"),
+                            "action_type": "task_submitted",
+                            "status": "submitted",
+                            "detail": "任务已进入队列；员工占用将保持到关联任务全部结束",
+                            "task_id": task_id,
+                            "task_type": getattr(task, "type", task_type),
+                            "worker_claim": dict(claim),
+                            "organization_worker_id": claim["worker_id"],
+                            "matched_verified_skill_ids": matched_skill_ids,
+                            "matched_verified_skills": matched_skills[:3],
+                            "work_type_id": work_type.get("work_type_id"),
+                            "work_type_title": work_type.get("title"),
+                            "delivery_targets": work_type_summary.get("deliverables", []),
+                        })
                 if handled:
                     continue
+            if claim and organization_registry is not None:
+                organization_registry.release_worker_task(
+                    worker_id=claim["worker_id"], task_id=claim["claim_id"],
+                )
 
             if node_status == "needs_learning" or task_type in {"learn", "promote", "validate", "plan", "collect", "execute"}:
                 counts["needs_learning"] += 1
