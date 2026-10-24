@@ -531,6 +531,21 @@ def sync_worker_catalog(
     return {"roles_created": roles_created, "workers_created": workers_created}
 
 
+
+def _worker_matches_handler(worker: dict[str, Any], preferred_handler_id: str) -> bool:
+    if not preferred_handler_id:
+        return True
+    profile = worker.get("profile", {}) if isinstance(worker.get("profile"), dict) else {}
+    configured = str(profile.get("handler_id") or "").strip()
+    if configured:
+        return configured == preferred_handler_id
+    return preferred_handler_id in {
+        str(worker.get("worker_id") or "").strip(),
+        str(worker.get("created_from_worker_id") or "").strip(),
+        str(worker.get("role_id") or "").strip(),
+    }
+
+
 def recommend_workforce_for_node(
     node: dict[str, Any],
     registry: OrganizationRegistry | None,
@@ -568,17 +583,24 @@ def recommend_workforce_for_node(
         return {**base, "decision": "insufficient_capability_requirements", "reason": "节点没有明确能力要求。"}
 
     normalized_required = {item.casefold() for item in required}
+    preferred_handler_id = str(node.get("preferred_handler_id") or "").strip()
     matching_roles = []
     for role in registry.list_roles():
         if role.get("status") != "active":
             continue
+        role_id = str(role.get("role_id") or "")
         role_caps = {
             str(item).strip().casefold()
             for item in role.get("required_capabilities", [])
             if str(item).strip()
         }
-        if normalized_required.issubset(role_caps):
-            matching_roles.append((len(role_caps - normalized_required), str(role.get("role_id") or ""), role))
+        if not normalized_required.issubset(role_caps):
+            continue
+        if preferred_handler_id and role_id != preferred_handler_id:
+            role_workers = registry.list_workers(role_id=role_id, include_retired=True)
+            if not any(_worker_matches_handler(worker, preferred_handler_id) for worker in role_workers):
+                continue
+        matching_roles.append((len(role_caps - normalized_required), role_id, role))
     matching_roles.sort(key=lambda item: (item[0], item[1]))
 
     if not matching_roles:
@@ -594,6 +616,8 @@ def recommend_workforce_for_node(
     offline: list[dict[str, Any]] = []
     for _, _, role in matching_roles:
         for worker in registry.list_workers(role_id=role["role_id"]):
+            if not _worker_matches_handler(worker, preferred_handler_id):
+                continue
             status = worker.get("status")
             if status == "available" and worker.get("worker_id") not in reserved:
                 candidates.append((len(worker.get("active_task_ids", [])), str(worker.get("worker_id") or ""), worker))
