@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
 import re
 import tempfile
 import uuid
@@ -308,6 +309,63 @@ class OrganizationRegistry:
         assets[asset_id] = asset
         self._write(self.assets_path, assets)
         return asset
+
+    def claim_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
+        """Atomically reserve an available worker for one task.
+
+        The lock serializes claims across processes sharing this workspace. A claim
+        fails closed if the worker is unavailable or already owns any active task.
+        """
+        worker_id = _validate_id(worker_id, "worker_id")
+        task_id = _validate_id(task_id, "task_id")
+        lock_path = self.root / ".workers.lock"
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                workers = self._read(self.workers_path)
+                worker = workers.get(worker_id)
+                if worker is None:
+                    raise KeyError(f"Worker not found: {worker_id}")
+                if worker.get("status") == "retired":
+                    raise ValueError("Retired worker cannot claim tasks")
+                active = list(worker.get("active_task_ids", []))
+                if task_id in active:
+                    return worker
+                if worker.get("status") != "available" or active:
+                    raise ValueError(f"Worker is not available for a new task: {worker_id}")
+                worker["status"] = "busy"
+                worker["active_task_ids"] = [task_id]
+                worker["updated_at"] = _now()
+                workers[worker_id] = worker
+                self._write(self.workers_path, workers)
+                return worker
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    def release_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
+        """Release a claimed task; keep the worker busy until all its tasks are closed."""
+        worker_id = _validate_id(worker_id, "worker_id")
+        task_id = _validate_id(task_id, "task_id")
+        lock_path = self.root / ".workers.lock"
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                workers = self._read(self.workers_path)
+                worker = workers.get(worker_id)
+                if worker is None:
+                    raise KeyError(f"Worker not found: {worker_id}")
+                active = list(worker.get("active_task_ids", []))
+                if task_id not in active:
+                    raise ValueError(f"Task is not claimed by worker {worker_id}: {task_id}")
+                worker["active_task_ids"] = [item for item in active if item != task_id]
+                if worker.get("status") != "retired":
+                    worker["status"] = "busy" if worker["active_task_ids"] else "available"
+                worker["updated_at"] = _now()
+                workers[worker_id] = worker
+                self._write(self.workers_path, workers)
+                return worker
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _clone_safe_profile(profile: dict[str, Any]) -> dict[str, Any]:
