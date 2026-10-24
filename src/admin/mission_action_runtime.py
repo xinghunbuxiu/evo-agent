@@ -633,12 +633,17 @@ def create_mission_action_runtime_bindings(
                     )
                 raise
 
+            new_task_ids = [
+                str(item).strip()
+                for item in submitted_task_ids[before_task_count:]
+                if str(item).strip()
+            ]
+            # The queue is authoritative: never release a lease merely because a buggy
+            # handler returned False after it had already submitted real tasks.
+            if new_task_ids:
+                handled = True
+
             if handled:
-                new_task_ids = [
-                    str(item).strip()
-                    for item in submitted_task_ids[before_task_count:]
-                    if str(item).strip()
-                ]
                 if claim and organization_registry is not None:
                     if not new_task_ids:
                         organization_registry.release_worker_task(
