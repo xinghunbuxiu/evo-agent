@@ -229,6 +229,50 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(clone["active_task_ids"], [claim["claim_id"]])
         self.assertEqual(action["organization_worker_id"], claim["worker_id"])
 
+    def test_failed_and_cancelled_tasks_also_release_worker_claims(self):
+        refresh = _execution_bindings(self.registry)["refresh_mission_run"]
+        for terminal_status in ("failed", "cancelled"):
+            claim_id = "mission-" + terminal_status
+            self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+
+            class Queue:
+                def get_task(self, task_id):
+                    if task_id != "task-terminal":
+                        return None
+                    return SimpleNamespace(
+                        status=SimpleNamespace(value=terminal_status),
+                        result={},
+                        error="terminal",
+                        payload={},
+                        type="analyze",
+                    )
+
+            run = {
+                "mission_run_id": "run-" + terminal_status,
+                "tenant_id": "tenant-a",
+                "goal": "terminal release",
+                "context": {},
+                "plan": {"nodes": [{"id": "node-a", "role_reflection_context": {}}]},
+                "actions": [{
+                    "node_id": "node-a",
+                    "title": "terminal task",
+                    "action_type": "task_submitted",
+                    "status": "submitted",
+                    "task_id": "task-terminal",
+                    "task_type": "analyze",
+                    "decision_trace": [],
+                    "worker_claim": {"worker_id": "worker-a", "claim_id": claim_id, "state": "claimed"},
+                }],
+                "submitted_task_ids": ["task-terminal"],
+            }
+            result = refresh(
+                workspace=Path(self.temp.name), task_queue=Queue(), tenant_manager=object(),
+                mission_run=run, build_mission_next_cycle_plan=lambda *args, **kwargs: {},
+                build_mission_growth_timeline=lambda *args, **kwargs: [],
+            )
+            self.assertEqual(self.registry.get_worker("worker-a")["status"], "available")
+            self.assertEqual(result["actions"][0]["worker_claim"]["state"], "released")
+
     def test_worker_claim_is_released_only_after_all_attached_tasks_are_terminal(self):
         claim_id = "mission-claim-123"
         self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
