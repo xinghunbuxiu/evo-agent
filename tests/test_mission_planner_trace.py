@@ -34,6 +34,59 @@ class MissionPlannerTraceTests(unittest.TestCase):
         planner._match_verified_skills = mock.Mock(return_value=[])
         return planner
 
+
+    def test_matching_verified_strategy_is_recommended_and_traced_per_tenant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            strategy_dir = workspace / ".tenants" / "test-tenant"
+            strategy_dir.mkdir(parents=True)
+            (strategy_dir / "strategies.json").write_text(
+                __import__("json").dumps([{
+                    "id": "floorplan-lines-first",
+                    "name": "先识别墙线再推断房间",
+                    "domain": "design",
+                    "description": "先确认墙线、门窗，再归纳房间边界",
+                    "applicable_when": ["户型图"],
+                    "steps": [{"action": "识别墙线"}, {"action": "关联门窗"}],
+                    "success_rate": 0.8,
+                    "usage_count": 5,
+                }], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            planner = MissionPlanner(workspace, registry=FakeRegistry())
+            planner._knowledge_signals = mock.Mock(return_value={
+                "experience_count": 0, "verified_skill_count": 0,
+                "top_experience_ids": [], "top_verified_skill_ids": [],
+            })
+            planner._role_reflection_context = mock.Mock(return_value={})
+            planner._match_verified_skills = mock.Mock(return_value=[])
+            custom_templates = {
+                "floorplan_review": {
+                    "title": "Floorplan review",
+                    "description": "Review a floorplan",
+                    "primary_capability_type": "design",
+                    "tasks": [{
+                        "id": "inspect", "title": "Inspect floorplan",
+                        "objective": "检查户型图墙线与门窗",
+                        "task_type": "analyze", "capability_type": "design",
+                        "acceptance": "结构结果可验证",
+                    }],
+                }
+            }
+            with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+                result = planner.plan(
+                    tenant_id="test-tenant",
+                    goal="检查户型图并总结墙线识别方法",
+                    mission_kind="floorplan_review",
+                    context={"source_path": "plan.png"},
+                )
+            node = result["nodes"][0]
+            self.assertEqual(node["recommended_strategies"][0]["id"], "floorplan-lines-first")
+            self.assertIn("floorplan-lines-first", " ".join(node["next_actions"]))
+            trace = {item["step"]: item for item in node["decision_trace"]}
+            self.assertEqual(trace["strategy_retrieval"]["result"], "matched")
+            self.assertEqual(trace["strategy_retrieval"]["evidence"]["tenant_id"], "test-tenant")
+
     def test_missing_source_input_is_traceable_to_blocker_rule(self):
         planner = self._planner()
         custom_templates = {
@@ -173,7 +226,7 @@ class MissionPlannerTraceTests(unittest.TestCase):
         node = result["nodes"][0]
         self.assertEqual(
             [item["step"] for item in node["decision_trace"]],
-            ["input_validation", "capability_match", "knowledge_check", "status_decision", "workforce_catalog_match"],
+            ["input_validation", "capability_match", "knowledge_check", "strategy_retrieval", "status_decision", "workforce_catalog_match"],
         )
         for item in node["decision_trace"]:
             self.assertTrue(item["rule_id"])
