@@ -170,9 +170,10 @@ class Strategy:
 class StrategyEngine:
     """持久化策略库；仅将带有验证证据的候选策略提升为可复用策略。"""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, tenant_id: str = "default"):
         self.workspace = Path(workspace)
-        self.strategy_file = self.workspace / ".tenants" / "default" / "strategies.json"
+        self.tenant_id = str(tenant_id or "default")
+        self.strategy_file = self.workspace / ".tenants" / self.tenant_id / "strategies.json"
         self.strategies: List[Strategy] = []
         self._load_strategies()
 
