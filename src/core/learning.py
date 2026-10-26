@@ -129,9 +129,9 @@ class ExperienceStore:
         return experiences[:limit]
 
 
-@dataclass  
+@dataclass
 class Strategy:
-    """策略定义"""
+    """经过验证、可复用的执行策略。"""
     id: str
     name: str
     domain: str
@@ -140,7 +140,7 @@ class Strategy:
     steps: List[Dict[str, Any]]
     success_rate: float = 0.0
     usage_count: int = 0
-    
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -153,33 +153,129 @@ class Strategy:
             "usage_count": self.usage_count,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Strategy":
+        return cls(
+            id=str(data["id"]),
+            name=str(data["name"]),
+            domain=str(data["domain"]),
+            description=str(data.get("description", "")),
+            applicable_when=[str(item) for item in data.get("applicable_when", [])],
+            steps=[item for item in data.get("steps", []) if isinstance(item, dict)],
+            success_rate=float(data.get("success_rate", 0.0)),
+            usage_count=int(data.get("usage_count", 0)),
+        )
+
 
 class StrategyEngine:
-    """策略引擎"""
-    
+    """持久化策略库；仅将带有验证证据的候选策略提升为可复用策略。"""
+
     def __init__(self, workspace: Path):
-        self.workspace = workspace
+        self.workspace = Path(workspace)
+        self.strategy_file = self.workspace / ".tenants" / "default" / "strategies.json"
         self.strategies: List[Strategy] = []
         self._load_strategies()
-    
+
     def _load_strategies(self) -> None:
-        """加载策略"""
-        # 初始为空，由 AI 生成
-        pass
-    
+        self.strategies = []
+        if not self.strategy_file.is_file():
+            return
+        with self.strategy_file.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, list):
+            raise ValueError("Strategy store must contain a JSON list")
+        self.strategies = [
+            Strategy.from_dict(item)
+            for item in payload
+            if isinstance(item, dict) and item.get("id")
+        ]
+
+    def _save_strategies(self) -> None:
+        self.strategy_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = self.strategy_file.with_suffix(".json.tmp")
+        temp_file.write_text(
+            json.dumps([item.to_dict() for item in self.strategies], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_file.replace(self.strategy_file)
+
     def find_strategy(self, domain: str, context: Dict[str, Any]) -> Optional[Strategy]:
-        """查找匹配策略"""
-        for s in self.strategies:
-            if s.domain == domain:
-                # 简单匹配逻辑
-                if all(cond in str(context) for cond in s.applicable_when):
-                    return s
+        context_text = json.dumps(context, ensure_ascii=False, sort_keys=True, default=str)
+        for strategy in self.strategies:
+            if strategy.domain == domain and all(
+                condition in context_text for condition in strategy.applicable_when
+            ):
+                return strategy
         return None
-    
-    def evolve_strategy(self, exp: Experience) -> None:
-        """基于经验进化策略"""
-        # TODO: 实现策略进化逻辑
-        pass
+
+    def evolve_strategy(self, exp: Experience) -> Optional[Strategy]:
+        """Update usage evidence or promote an explicitly validated strategy proposal.
+
+        Experience metadata contract:
+        - strategy_id + execution_success: update an existing strategy's observed outcome.
+        - strategy_proposal + validation_passed=True: register a new verified strategy.
+        Merely storing an experience or assigning a high quality_score never promotes a strategy.
+        """
+        metadata = exp.metadata if isinstance(exp.metadata, dict) else {}
+        changed = False
+        strategy_id = str(metadata.get("strategy_id") or "").strip()
+        if strategy_id and isinstance(metadata.get("execution_success"), bool):
+            strategy = next((item for item in self.strategies if item.id == strategy_id), None)
+            if strategy is not None:
+                previous_successes = strategy.success_rate * strategy.usage_count
+                strategy.usage_count += 1
+                strategy.success_rate = (
+                    previous_successes + (1.0 if metadata["execution_success"] else 0.0)
+                ) / strategy.usage_count
+                changed = True
+
+        proposal = metadata.get("strategy_proposal")
+        if metadata.get("validation_passed") is True and isinstance(proposal, dict):
+            proposal_id = str(proposal.get("id") or "").strip()
+            name = str(proposal.get("name") or "").strip()
+            steps = proposal.get("steps")
+            if proposal_id and name and isinstance(steps, list) and steps and all(
+                isinstance(step, dict) for step in steps
+            ):
+                strategy = next((item for item in self.strategies if item.id == proposal_id), None)
+                candidate = Strategy(
+                    id=proposal_id,
+                    name=name,
+                    domain=str(proposal.get("domain") or exp.domain),
+                    description=str(proposal.get("description") or exp.output_summary),
+                    applicable_when=[
+                        str(item) for item in proposal.get("applicable_when", [])
+                        if str(item).strip()
+                    ],
+                    steps=steps,
+                    success_rate=1.0,
+                    usage_count=1,
+                )
+                if strategy is None:
+                    self.strategies.append(candidate)
+                    strategy = candidate
+                else:
+                    strategy.name = candidate.name
+                    strategy.domain = candidate.domain
+                    strategy.description = candidate.description
+                    strategy.applicable_when = candidate.applicable_when
+                    strategy.steps = candidate.steps
+                    strategy.success_rate = candidate.success_rate
+                    strategy.usage_count = max(strategy.usage_count, 1)
+                changed = True
+
+        if changed:
+            self._save_strategies()
+        return next(
+            (item for item in self.strategies if item.id == strategy_id),
+            next(
+                (
+                    item for item in self.strategies
+                    if isinstance(proposal, dict) and item.id == str(proposal.get("id") or "")
+                ),
+                None,
+            ),
+        )
 
 
 __all__ = [
