@@ -338,6 +338,10 @@ def create_mission_execution_bindings(
                             action=current,
                             failed_task=task,
                         )
+                        # Keep the original failed task action (including its worker claim)
+                        # in the refreshed run. The learning ticket is an additional action, not
+                        # a replacement; otherwise claim reconciliation cannot release the worker.
+                        refreshed_actions.append(current)
                         refreshed_actions.append({
                             "node_id": node_id,
                             "title": current.get("title"),
