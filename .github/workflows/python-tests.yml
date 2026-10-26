@@ -17,26 +17,27 @@ jobs:
   tests:
     # Persistent self-hosted runners must not execute untrusted fork PR code.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Use the runner's installed Python to avoid a slow/unreliable Python download from GitHub Releases.
     # Setup instructions: docs/SELF_HOSTED_CI_CN.md
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements.txt
+      - name: Verify Python and create virtual environment
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m venv .venv
+          .venv/bin/python -m pip --version
       - name: Install runtime dependencies
         run: |
           set -o pipefail
-          python -m pip install -r requirements.txt 2>&1 | tee dependency-install-output.txt
+          .venv/bin/python -m pip install -r requirements.txt 2>&1 | tee dependency-install-output.txt
       - name: Run regression suite
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -v 2>&1 | tee regression-test-output.txt
+          .venv/bin/python -m unittest discover -s tests -v 2>&1 | tee regression-test-output.txt
       - name: Upload regression output
         if: always()
         continue-on-error: true
