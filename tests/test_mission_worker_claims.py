@@ -268,7 +268,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
                 "submitted_task_ids": ["task-terminal"],
             }
             result = refresh(
-                workspace=Path(self.temp.name), task_queue=Queue(), tenant_manager=object(),
+                workspace=Path(self.temp.name), task_queue=Queue(), tenant_manager=SimpleNamespace(get_knowledge_policy=lambda tenant_id: {}),
                 mission_run=run, build_mission_next_cycle_plan=lambda *args, **kwargs: {},
                 build_mission_growth_timeline=lambda *args, **kwargs: [],
             )
@@ -303,7 +303,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
         }
         refresh = _execution_bindings(self.registry)["refresh_mission_run"]
         first = refresh(
-            workspace=Path(self.temp.name), task_queue=queue, tenant_manager=object(),
+            workspace=Path(self.temp.name), task_queue=queue, tenant_manager=SimpleNamespace(get_knowledge_policy=lambda tenant_id: {}),
             mission_run=run, build_mission_next_cycle_plan=lambda *args, **kwargs: {},
             build_mission_growth_timeline=lambda *args, **kwargs: [],
         )
@@ -312,7 +312,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
 
         queue.tasks["task-two"].status = SimpleNamespace(value="success")
         second = refresh(
-            workspace=Path(self.temp.name), task_queue=queue, tenant_manager=object(),
+            workspace=Path(self.temp.name), task_queue=queue, tenant_manager=SimpleNamespace(get_knowledge_policy=lambda tenant_id: {}),
             mission_run=first, build_mission_next_cycle_plan=lambda *args, **kwargs: {},
             build_mission_growth_timeline=lambda *args, **kwargs: [],
         )
