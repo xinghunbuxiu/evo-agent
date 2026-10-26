@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry, get_capability_registry
 from .capability_types import capability_type_label, infer_capability_type
-from .learning import ExperienceStore, normalize_task_type
+from .learning import ExperienceStore, StrategyEngine, normalize_task_type
 from .skill_system import SkillRegistry
 from .mission_brain import build_mission_brain_contract
 from .organization_runtime import OrganizationRegistry, recommend_workforce_for_nodes
@@ -156,6 +156,7 @@ class MissionNode:
     depends_on: List[str] = field(default_factory=list)
     recommended_skill_ids: List[str] = field(default_factory=list)
     recommended_skills: List[Dict[str, Any]] = field(default_factory=list)
+    recommended_strategies: List[Dict[str, Any]] = field(default_factory=list)
     knowledge_signals: Dict[str, Any] = field(default_factory=dict)
     role_reflection_context: Dict[str, Any] = field(default_factory=dict)
     gap_type: str = ""
@@ -182,6 +183,7 @@ class MissionNode:
             "depends_on": self.depends_on,
             "recommended_skill_ids": self.recommended_skill_ids,
             "recommended_skills": self.recommended_skills,
+            "recommended_strategies": self.recommended_strategies,
             "knowledge_signals": self.knowledge_signals,
             "role_reflection_context": self.role_reflection_context,
             "gap_type": self.gap_type,
@@ -197,6 +199,7 @@ class MissionPlanner:
     def __init__(self, workspace: Path, registry: Optional[CapabilityRegistry] = None):
         self.workspace = workspace
         self.registry = registry or get_capability_registry()
+        self._strategy_engines: dict[str, StrategyEngine] = {}
         organization_root = Path(workspace) / ".organization"
         required_registry_files = (
             organization_root / "roles.json",
@@ -393,6 +396,30 @@ class MissionPlanner:
         )
         recommended_skill_ids = [skill.id for skill in matched_skills[:3]]
         recommended_skills = [self._skill_summary(skill) for skill in matched_skills[:3]]
+        strategy_engine = self._strategy_engines.get(tenant_id)
+        if strategy_engine is None:
+            strategy_engine = StrategyEngine(self.workspace, tenant_id=tenant_id)
+            self._strategy_engines[tenant_id] = strategy_engine
+        strategy_context = {
+            "goal": goal,
+            "objective": str(node_template.get("objective") or ""),
+            "title": str(node_template.get("title") or ""),
+            "task_type": str(node_template.get("task_type") or ""),
+            "capability_type": capability_type,
+            "context": context,
+        }
+        matched_strategy = strategy_engine.find_strategy(capability_type, strategy_context)
+        recommended_strategies = []
+        if matched_strategy is not None:
+            recommended_strategies.append({
+                "id": matched_strategy.id,
+                "name": matched_strategy.name,
+                "domain": matched_strategy.domain,
+                "description": matched_strategy.description,
+                "steps": matched_strategy.steps,
+                "success_rate": matched_strategy.success_rate,
+                "usage_count": matched_strategy.usage_count,
+            })
         blockers = self._node_blockers(goal=goal, context=context, task_type=str(node_template.get("task_type") or ""))
         if role_reflection_context.get("blocked_reason"):
             blockers.append(str(role_reflection_context.get("blocked_reason")))
@@ -495,6 +522,10 @@ class MissionPlanner:
             gap_type = "experience_gap"
             learning_objectives.append("当前经验不足，先用真实案例补首批可验证样本")
 
+        if recommended_strategies:
+            strategy = recommended_strategies[0]
+            reasoning.append(f"检索到可复用策略 {strategy['name']}（历史成功率 {strategy['success_rate']:.0%}，使用 {strategy['usage_count']} 次）")
+            next_actions.insert(0, f"先评估并复用策略 {strategy['id']}，逐步验证适用条件")
         # Keep an auditable evidence trail, not hidden chain-of-thought: each record
         # names the rule, observable evidence, and outcome used by the planner.
         if blockers:
@@ -541,6 +572,17 @@ class MissionPlanner:
                 },
             },
             {
+                "step": "strategy_retrieval",
+                "rule_id": "mission.strategy_retrieval.v1",
+                "result": "matched" if recommended_strategies else "no_match",
+                "evidence": {
+                    "tenant_id": tenant_id,
+                    "domain": capability_type,
+                    "strategy_ids": [item["id"] for item in recommended_strategies],
+                    "context_fields": ["goal", "objective", "task_type", "capability_type"],
+                },
+            },
+            {
                 "step": "status_decision",
                 "rule_id": decision_rule,
                 "result": status,
@@ -565,6 +607,7 @@ class MissionPlanner:
             available_capability_ids=available_capability_ids,
             recommended_skill_ids=recommended_skill_ids,
             recommended_skills=recommended_skills,
+            recommended_strategies=recommended_strategies,
             knowledge_signals=knowledge_signals,
             role_reflection_context=role_reflection_context,
             gap_type=gap_type,
