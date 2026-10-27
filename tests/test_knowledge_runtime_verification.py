@@ -22,7 +22,7 @@ class SkillReplayVerificationTests(unittest.TestCase):
             description="candidate",
             code="run and verify",
             parameters={},
-            trust_level=SkillTrustLevel.draft,
+            trust_level=SkillTrustLevel.DRAFT,
             source="test",
             version="1.0.0",
         )
