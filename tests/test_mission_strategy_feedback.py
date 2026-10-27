@@ -95,6 +95,29 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             strategy = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
             self.assertEqual(strategy.usage_count, 2)
             self.assertEqual(strategy.success_rate, 1.0)
+            self.assertEqual(strategy.feedback_task_ids, ["task-2"])
+            # A fresh engine simulates process restart. Replaying the same task
+            # evidence must not increment the strategy a second time.
+            restarted_engine = StrategyEngine(workspace, tenant_id="tenant-a")
+            from core.learning import Experience
+            replay = Experience(
+                id="mission-strategy-feedback-task-2",
+                domain="python",
+                task_type="analyze",
+                input_summary="Analyze source",
+                output_summary="execution finished",
+                quality_score=1.0,
+                metadata={
+                    "strategy_id": "strategy-a",
+                    "execution_success": True,
+                    "task_id": "task-2",
+                    "verification_passed": True,
+                },
+            )
+            restarted_engine.evolve_strategy(replay)
+            persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertEqual(persisted.usage_count, 2)
+            self.assertEqual(persisted.feedback_task_ids, ["task-2"])
             self.assertTrue(action["strategy_feedback_recorded"])
             self.assertEqual(action["strategy_feedback_task_id"], "task-2")
 
