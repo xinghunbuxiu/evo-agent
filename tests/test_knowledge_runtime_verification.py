@@ -42,14 +42,33 @@ class SkillReplayVerificationTests(unittest.TestCase):
             history.assert_not_called()
             verify.assert_not_called()
 
-    def test_replay_results_must_include_task_and_verifier_evidence(self):
+    def test_replay_results_must_be_bound_to_candidate_and_pass_all_checks(self):
+        invalid_results = [
+            [{"success": True, "task_id": "task-1", "verified_by": "pytest"}],
+            [{
+                "success": True, "task_id": "task-1", "verified_by": "pytest",
+                "validation_type": "skill_replay", "skill_id": "another-skill",
+                "checks": [{"name": "smoke", "passed": True}],
+            }],
+            [{
+                "success": True, "task_id": "task-1", "verified_by": "pytest",
+                "validation_type": "skill_replay", "skill_id": "candidate-skill",
+                "checks": [{"name": "smoke", "passed": False}],
+            }],
+            [{
+                "success": True, "task_id": "task-1", "verified_by": "pytest",
+                "validation_type": "skill_replay", "skill_id": "candidate-skill",
+                "checks": [],
+            }],
+        ]
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(knowledge_runtime.SkillRegistry, "verify_skill") as verify:
-            result = knowledge_runtime.maybe_auto_verify_skill_candidate(
-                Path(tmp), "tenant-a", self._skill(), "python",
-                replay_results=[{"success": True, "task_id": "task-1"}],
-            )
-            self.assertIsNone(result)
+            for evidence in invalid_results:
+                result = knowledge_runtime.maybe_auto_verify_skill_candidate(
+                    Path(tmp), "tenant-a", self._skill(), "python",
+                    replay_results=evidence,
+                )
+                self.assertIsNone(result)
             verify.assert_not_called()
 
 
