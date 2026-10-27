@@ -916,5 +916,6 @@ def create_mission_execution_bindings(
         "build_mission_failure_diagnosis": build_mission_failure_diagnosis,
         "upsert_mission_failure_learning_task": upsert_mission_failure_learning_task,
         "refresh_mission_learning_action": refresh_mission_learning_action,
+        "record_strategy_execution_feedback": record_strategy_execution_feedback,
         "refresh_mission_run": refresh_mission_run,
     }
