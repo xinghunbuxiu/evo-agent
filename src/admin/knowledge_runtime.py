@@ -253,26 +253,13 @@ def maybe_auto_verify_stable_experience_skill_candidate(
     skill: Skill,
     items: list[Experience],
 ) -> dict | None:
-    if len(items) < 3:
-        return None
-    avg_quality = round(sum(float(item.quality_score or 0.0) for item in items) / max(len(items), 1), 3)
-    if avg_quality < 0.86:
-        return None
-    registry = SkillRegistry(workspace, tenant_id)
-    test_results = [
-        {"success": float(item.quality_score or 0.0) >= 0.8, "quality_score": float(item.quality_score or 0.0), "id": item.id}
-        for item in items
-    ]
-    verified = registry.verify_skill(skill.id, test_results, min_success_rate=0.85)
-    if not verified:
-        return None
-    synced = sync_verified_skill_view(workspace, tenant_id, skill.id) or {}
-    return {
-        "validated_by": "stable_experience_cluster",
-        "evidence_count": len(items),
-        "avg_quality_score": avg_quality,
-        **synced,
-    }
+    """Historical experience clusters may draft skills, but cannot verify them.
+
+    These experiences predate the candidate skill and do not prove that the
+    candidate was loaded or executed. Keep this path fail-closed until it is
+    connected to persisted, skill-version-bound replay validation records.
+    """
+    return None
 
 
 def auto_draft_stable_experience_skills(
