@@ -42,6 +42,20 @@ class SkillReplayVerificationTests(unittest.TestCase):
             history.assert_not_called()
             verify.assert_not_called()
 
+    def test_stable_historical_experience_cluster_cannot_verify_candidate(self):
+        items = [
+            mock.Mock(id="history-1", quality_score=0.99),
+            mock.Mock(id="history-2", quality_score=0.98),
+            mock.Mock(id="history-3", quality_score=0.97),
+        ]
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(knowledge_runtime.SkillRegistry, "verify_skill") as verify:
+            result = knowledge_runtime.maybe_auto_verify_stable_experience_skill_candidate(
+                Path(tmp), "tenant-a", self._skill(), items
+            )
+            self.assertIsNone(result)
+            verify.assert_not_called()
+
     def test_replay_results_must_be_bound_to_candidate_and_pass_all_checks(self):
         invalid_results = [
             [{"success": True, "task_id": "task-1", "verified_by": "pytest"}],
