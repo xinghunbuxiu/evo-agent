@@ -238,7 +238,30 @@ class StrategyEngine:
                 changed = True
 
         proposal = metadata.get("strategy_proposal")
-        if metadata.get("validation_passed") is True and isinstance(proposal, dict):
+        validation_evidence = metadata.get("validation_evidence")
+        task_id = str(metadata.get("task_id") or "").strip()
+        evidence_task_id = (
+            str(validation_evidence.get("task_id") or "").strip()
+            if isinstance(validation_evidence, dict) else ""
+        )
+        checks = validation_evidence.get("checks") if isinstance(validation_evidence, dict) else None
+        evidence_is_task_bound = (
+            bool(task_id)
+            and evidence_task_id == task_id
+            and isinstance(validation_evidence, dict)
+            and validation_evidence.get("status") == "passed"
+            and isinstance(checks, list)
+            and bool(checks)
+            and all(isinstance(check, dict) and check.get("passed") is True for check in checks)
+        )
+        # A boolean supplied by a caller is not enough to promote a reusable
+        # strategy. Require non-empty, passing checks bound to the same task ID.
+        # The runtime must still source these checks from actual execution results.
+        if (
+            metadata.get("validation_passed") is True
+            and evidence_is_task_bound
+            and isinstance(proposal, dict)
+        ):
             proposal_id = str(proposal.get("id") or "").strip()
             name = str(proposal.get("name") or "").strip()
             steps = proposal.get("steps")
