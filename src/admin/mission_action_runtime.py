@@ -213,9 +213,21 @@ def create_mission_action_runtime_bindings(
 
         authorization_by_node: dict[str, dict[str, Any]] = {}
 
+        plan_nodes_by_id = {
+            str(item.get("id") or "").strip(): item
+            for item in plan.get("nodes", [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+
         def append_action(**kwargs) -> None:
             node_key = str(kwargs.get("node_id") or "").strip()
             extra = dict(kwargs.get("extra") or {})
+            planned_node = plan_nodes_by_id.get(node_key, {})
+            recommended_strategies = planned_node.get("recommended_strategies", [])
+            if isinstance(recommended_strategies, list) and recommended_strategies:
+                # Carry the planner's strategy evidence into the action/task contract.
+                # This is a recommendation only; the worker must report actual use.
+                extra.setdefault("recommended_strategies", recommended_strategies[:3])
             extra.setdefault("depends_on", list(dependency_graph.get(node_key, [])))
             decision = brain_decisions.get(node_key)
             coordination = coordination_by_node.get(node_key)
