@@ -180,6 +180,14 @@ def maybe_auto_verify_skill_candidate(
         and item.get("success") is True
         and str(item.get("task_id") or "").strip()
         and str(item.get("verified_by") or "").strip()
+        and item.get("validation_type") == "skill_replay"
+        and item.get("skill_id") == skill.id
+        and isinstance(item.get("checks"), list)
+        and bool(item["checks"])
+        and all(
+            isinstance(check, dict) and check.get("passed") is True
+            for check in item["checks"]
+        )
         for item in replay_results
     ):
         return None
