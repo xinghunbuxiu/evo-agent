@@ -166,6 +166,63 @@ def create_mission_execution_bindings(
         save_learning_tasks(workspace, {"tasks": tasks})
         return learning_task_id
 
+    def record_strategy_execution_feedback(*, workspace, tenant_id: str, action: dict, task, execution_success: bool) -> bool:
+        """Record outcome only when the worker explicitly confirms it used a recommended strategy.
+
+        Recommendation is not usage. The action marker makes refresh idempotent because
+        mission runs are refreshed repeatedly after queue tasks become terminal.
+        """
+        if not isinstance(action, dict) or action.get("strategy_feedback_recorded") is True:
+            return False
+        result = getattr(task, "result", None)
+        result = result if isinstance(result, dict) else {}
+        usage = result.get("strategy_usage")
+        if not isinstance(usage, dict) or usage.get("strategy_used") is not True:
+            return False
+        strategy_id = str(usage.get("strategy_id") or "").strip()
+        if not strategy_id:
+            return False
+
+        # Import locally so the execution runtime remains usable by lightweight tests
+        # and callers that do not need strategy learning.
+        from core.learning import Experience, StrategyEngine
+
+        engine = StrategyEngine(workspace, tenant_id=tenant_id)
+        if not any(item.id == strategy_id for item in engine.strategies):
+            return False
+        task_id = str(getattr(task, "id", "") or "").strip()
+        if not task_id:
+            return False
+        domain = str(usage.get("domain") or action.get("strategy_domain") or "general")
+        experience = Experience(
+            id=f"mission-strategy-feedback-{task_id}",
+            domain=domain,
+            task_type=str(action.get("task_type") or "mission"),
+            input_summary=str(action.get("title") or action.get("node_id") or "Mission task"),
+            output_summary=str(result.get("summary") or getattr(task, "error", "") or ""),
+            quality_score=1.0 if execution_success else 0.0,
+            metadata={
+                "strategy_id": strategy_id,
+                "execution_success": bool(execution_success),
+                "source": "mission_execution_feedback",
+                "task_id": task_id,
+                "mission_run_id": str(action.get("mission_run_id") or ""),
+                "verification_passed": usage.get("verification_passed") is True,
+            },
+        )
+        updated = engine.evolve_strategy(experience)
+        if updated is None:
+            return False
+        action["strategy_feedback_recorded"] = True
+        action["strategy_feedback_task_id"] = task_id
+        action["strategy_feedback"] = {
+            "strategy_id": strategy_id,
+            "execution_success": bool(execution_success),
+            "verification_passed": usage.get("verification_passed") is True,
+            "recorded_at": datetime.now().astimezone().isoformat(),
+        }
+        return True
+
     def refresh_mission_learning_action(
         *,
         workspace,
@@ -316,6 +373,14 @@ def create_mission_execution_bindings(
                     continue
 
                 task_status = str(task.status.value or "")
+                if task_status in {"success", "completed", "failed"}:
+                    record_strategy_execution_feedback(
+                        workspace=workspace,
+                        tenant_id=tenant_id,
+                        action=current,
+                        task=task,
+                        execution_success=task_status in {"success", "completed"},
+                    )
                 if task_status in {"success", "completed"}:
                     current["status"] = "completed"
                     current["detail"] = trim_candidate_text(
