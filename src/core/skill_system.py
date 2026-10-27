@@ -201,10 +201,18 @@ class SkillRegistry:
         min_success_rate: float = 0.8
     ) -> bool:
         """
-        验证技能（提升到 verified 级别）
-        
-        通过测试后，技能从草稿升级为本地验证通过
+        验证技能（提升到 verified 级别）。
+
+        Fail closed: arbitrary dictionaries and in-memory success counts are not
+        proof of execution. Promotion remains disabled until this registry checks
+        a persisted replay-validation record created by the trusted executor and
+        independent validator. Keep this guard here so callers cannot bypass the
+        knowledge-runtime checks by invoking the registry directly.
         """
+        return False
+
+        # Legacy implementation retained temporarily; unreachable until trusted
+        # persisted replay-validation records are integrated.
         # 加载草稿
         skill = self._load_local_draft(skill_id)
         if not skill:
