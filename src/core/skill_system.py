@@ -465,10 +465,25 @@ class SkillExecutor:
         auto_publish: bool = True
     ) -> Dict[str, Any]:
         """
-        验证并发布技能
-        
-        简化流程：基于执行历史自动验证并发布
+        验证并发布技能。
+
+        Disabled until the executor produces real, persisted replay evidence and
+        independent validation checks. The current _execute_skill_code method is
+        a placeholder that always reports success; its in-memory history must not
+        be treated as proof that a skill works or be allowed to publish a skill.
         """
+        return {
+            "success": False,
+            "verified": False,
+            "published": False,
+            "message": (
+                "Skill verification is disabled: the current executor is a "
+                "placeholder and does not produce independently validated replay evidence."
+            ),
+        }
+
+        # Kept below temporarily for reference; unreachable until the real replay
+        # executor and independent validator are connected.
         # 获取该技能的执行历史
         history = self.get_execution_history(skill_id)
         
