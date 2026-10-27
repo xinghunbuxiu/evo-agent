@@ -164,22 +164,34 @@ def maybe_auto_verify_skill_candidate(
     tenant_id: str,
     skill: Skill,
     framework_hint: str,
+    replay_results: list[dict] | None = None,
 ) -> dict | None:
-    evidences = matching_mission_delivery_experiences(workspace, tenant_id, framework_hint)
-    if len(evidences) < 2:
+    """Promote a skill only from explicit replay results, never from history alone.
+
+    Historical mission deliveries can justify drafting a candidate, but they are
+    not executions of this candidate. Callers must pass results produced by an
+    actual replay/verification executor; each result must identify its task and
+    verifier so the evidence can be audited.
+    """
+    if not isinstance(replay_results, list) or not replay_results:
         return None
-    test_results = [
-        {"success": True, "quality_score": exp.quality_score, "id": exp.id}
-        for exp in evidences
-    ]
+    if not all(
+        isinstance(item, dict)
+        and item.get("success") is True
+        and str(item.get("task_id") or "").strip()
+        and str(item.get("verified_by") or "").strip()
+        for item in replay_results
+    ):
+        return None
     registry = SkillRegistry(workspace, tenant_id)
-    verified = registry.verify_skill(skill.id, test_results, min_success_rate=0.8)
+    verified = registry.verify_skill(skill.id, replay_results, min_success_rate=0.8)
     if not verified:
         return None
     synced = sync_verified_skill_view(workspace, tenant_id, skill.id) or {}
     return {
-        "validated_by": "mission_delivery_history",
-        "evidence_count": len(evidences),
+        "validated_by": "mission_replay_executor",
+        "evidence_count": len(replay_results),
+        "validation_task_ids": [str(item["task_id"]) for item in replay_results],
         **synced,
     }
 
