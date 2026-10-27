@@ -50,9 +50,23 @@ class StrategyEngineTests(unittest.TestCase):
                 "applicable_when": ["python"],
                 "steps": [{"action": "execute"}, {"action": "assert_output"}],
             }
-            promoted = engine.evolve_strategy(self.make_experience({
+            # A caller-supplied boolean is not validation evidence.
+            unverified = engine.evolve_strategy(self.make_experience({
                 "strategy_proposal": proposal,
                 "validation_passed": True,
+            }))
+            self.assertIsNone(unverified)
+            self.assertEqual(engine.strategies, [])
+
+            promoted = engine.evolve_strategy(self.make_experience({
+                "task_id": "task-verified-1",
+                "strategy_proposal": proposal,
+                "validation_passed": True,
+                "validation_evidence": {
+                    "task_id": "task-verified-1",
+                    "status": "passed",
+                    "checks": [{"name": "expected_output", "passed": True}],
+                },
             }))
             self.assertIsNotNone(promoted)
             self.assertTrue(engine.strategy_file.is_file())
@@ -82,6 +96,7 @@ class StrategyEngineTests(unittest.TestCase):
             engine.evolve_strategy(self.make_experience({
                 "strategy_id": "strategy-a",
                 "execution_success": False,
+                "task_id": "task-execution-feedback-1",
             }))
             reloaded = StrategyEngine(workspace)
             strategy = next(item for item in reloaded.strategies if item.id == "strategy-a")
