@@ -140,6 +140,7 @@ class Strategy:
     steps: List[Dict[str, Any]]
     success_rate: float = 0.0
     usage_count: int = 0
+    feedback_task_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -151,6 +152,7 @@ class Strategy:
             "steps": self.steps,
             "success_rate": self.success_rate,
             "usage_count": self.usage_count,
+            "feedback_task_ids": list(self.feedback_task_ids),
         }
 
     @classmethod
@@ -164,6 +166,7 @@ class Strategy:
             steps=[item for item in data.get("steps", []) if isinstance(item, dict)],
             success_rate=float(data.get("success_rate", 0.0)),
             usage_count=int(data.get("usage_count", 0)),
+            feedback_task_ids=[str(item) for item in data.get("feedback_task_ids", []) if str(item).strip()],
         )
 
 
@@ -222,12 +225,16 @@ class StrategyEngine:
         strategy_id = str(metadata.get("strategy_id") or "").strip()
         if strategy_id and isinstance(metadata.get("execution_success"), bool):
             strategy = next((item for item in self.strategies if item.id == strategy_id), None)
-            if strategy is not None:
+            task_id = str(metadata.get("task_id") or "").strip()
+            # Mission feedback must be tied to a real task and deduplicated in the
+            # persisted strategy record, not only by a mutable in-memory action flag.
+            if strategy is not None and task_id and task_id not in strategy.feedback_task_ids:
                 previous_successes = strategy.success_rate * strategy.usage_count
                 strategy.usage_count += 1
                 strategy.success_rate = (
                     previous_successes + (1.0 if metadata["execution_success"] else 0.0)
                 ) / strategy.usage_count
+                strategy.feedback_task_ids.append(task_id)
                 changed = True
 
         proposal = metadata.get("strategy_proposal")
