@@ -43,6 +43,15 @@ class MissionDispatchAuthorizationTests(unittest.TestCase):
             "blockers": [],
             "recommended_skill_ids": [],
             "recommended_skills": [],
+            "recommended_strategies": [{
+                "id": "js-bundle-inspection",
+                "name": "Inspect bundle entrypoints first",
+                "domain": "javascript",
+                "description": "Trace entrypoints before deeper analysis",
+                "steps": [{"action": "inspect_entrypoints"}],
+                "success_rate": 0.75,
+                "usage_count": 4,
+            }],
             "validation_checks": ["analysis result reviewed"],
             "decision_trace": trace,
             "parallel_safe": False,
@@ -98,6 +107,7 @@ class MissionDispatchAuthorizationTests(unittest.TestCase):
         action = state["actions"][0]
         self.assertEqual(action["action_type"], "task_submitted")
         self.assertEqual(action["task_id"], "task-1")
+        self.assertEqual(action["recommended_strategies"][0]["id"], "js-bundle-inspection")
         self.assertTrue(action["mission_runtime_authorization"]["authorized"])
         self.assertFalse(action["mission_coordination_dispatch_authorized"])
         self.assertFalse(action["workforce_dispatch_authorized"])
