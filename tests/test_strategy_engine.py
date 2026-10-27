@@ -58,6 +58,19 @@ class StrategyEngineTests(unittest.TestCase):
             self.assertIsNone(unverified)
             self.assertEqual(engine.strategies, [])
 
+            mismatched_evidence = engine.evolve_strategy(self.make_experience({
+                "task_id": "task-verified-1",
+                "strategy_proposal": proposal,
+                "validation_passed": True,
+                "validation_evidence": {
+                    "task_id": "different-task",
+                    "status": "passed",
+                    "checks": [{"name": "expected_output", "passed": True}],
+                },
+            }))
+            self.assertIsNone(mismatched_evidence)
+            self.assertEqual(engine.strategies, [])
+
             promoted = engine.evolve_strategy(self.make_experience({
                 "task_id": "task-verified-1",
                 "strategy_proposal": proposal,
