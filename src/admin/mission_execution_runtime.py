@@ -183,6 +183,16 @@ def create_mission_execution_bindings(
         if not strategy_id:
             return False
 
+        # A worker may only report usage for a strategy that was actually included
+        # in this action's planner recommendation contract. Existence in the tenant
+        # strategy store alone is not evidence that this task used that strategy.
+        recommendations = action.get("recommended_strategies")
+        if not isinstance(recommendations, list) or not any(
+            isinstance(item, dict) and str(item.get("id") or "").strip() == strategy_id
+            for item in recommendations
+        ):
+            return False
+
         # Import locally so the execution runtime remains usable by lightweight tests
         # and callers that do not need strategy learning.
         from core.learning import Experience, StrategyEngine
