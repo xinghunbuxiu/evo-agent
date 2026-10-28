@@ -127,6 +127,11 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             self.assertEqual(persisted.feedback_task_ids, ["task-2"])
             self.assertTrue(action["strategy_feedback_recorded"])
             self.assertEqual(action["strategy_feedback_task_id"], "task-2")
+            self.assertEqual(action["strategy_feedback"]["verification_claim"], {
+                "passed": True,
+                "source": "worker_reported_unverified",
+            })
+            self.assertNotIn("verification_passed", action["strategy_feedback"])
 
     def test_usage_claim_for_unrecommended_strategy_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
