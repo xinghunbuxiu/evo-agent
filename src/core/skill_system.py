@@ -249,6 +249,12 @@ class SkillRegistry:
         
         只有验证通过的技能才能发布到云端
         """
+        # Fail closed at the publication boundary too. A JSON file under the
+        # local_verified directory is not itself proof that a trusted replay
+        # executor and independent validator approved this exact skill version.
+        # Re-enable only after publication checks a persisted validation record.
+        return False
+
         # 加载本地验证通过的技能
         skill = self._load_local_verified(skill_id)
         if not skill:
