@@ -69,7 +69,12 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             self._seed_strategy(workspace)
-            action = {"task_type": "analyze", "title": "Analyze source", "mission_run_id": "mission-1"}
+            action = {
+                "task_type": "analyze",
+                "title": "Analyze source",
+                "mission_run_id": "mission-1",
+                "recommended_strategies": [{"id": "strategy-a"}],
+            }
             task = SimpleNamespace(
                 id="task-2",
                 result={
@@ -120,6 +125,25 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             self.assertEqual(persisted.feedback_task_ids, ["task-2"])
             self.assertTrue(action["strategy_feedback_recorded"])
             self.assertEqual(action["strategy_feedback_task_id"], "task-2")
+
+    def test_usage_claim_for_unrecommended_strategy_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._seed_strategy(workspace)
+            action = {"recommended_strategies": [{"id": "another-strategy"}]}
+            task = SimpleNamespace(
+                id="task-unrecommended",
+                result={"strategy_usage": {"strategy_id": "strategy-a", "strategy_used": True}},
+                error="",
+            )
+            recorded = build_bindings()["record_strategy_execution_feedback"](
+                workspace=workspace, tenant_id="tenant-a", action=action,
+                task=task, execution_success=True,
+            )
+            strategy = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertFalse(recorded)
+            self.assertEqual(strategy.usage_count, 1)
+            self.assertNotIn("strategy_feedback_recorded", action)
 
     def test_feedback_is_tenant_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
