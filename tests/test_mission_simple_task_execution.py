@@ -88,11 +88,16 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
                 evidence["checks"] == {"2": True, "3": False, "-4": True, "-3": False, "0": True}
             )
             kwargs["append_action"](
+                actions=kwargs["actions"],
                 node_id=kwargs["node"]["id"],
                 title=kwargs["node"]["title"],
                 action_type="test_worker_execution",
                 status="completed" if evidence["passed"] else "failed",
                 detail="Python smoke test executed and assertions evaluated",
+                matched_skill_ids=kwargs["matched_skill_ids"],
+                matched_skills=kwargs["matched_skills"],
+                work_type=kwargs["work_type"],
+                work_type_summary=kwargs["work_type_summary"],
                 extra={"execution_evidence": dict(evidence)},
             )
             return evidence["passed"]
