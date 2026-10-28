@@ -225,6 +225,70 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             self.assertEqual(stored.usage_count, 2)
             self.assertEqual(stored.feedback_task_ids, ["task-e2e"])
 
+    def test_existing_planner_refreshes_strategy_feedback_before_next_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+
+            class EmptyRegistry:
+                def list_descriptors(self):
+                    return []
+
+            planner = MissionPlanner(workspace, registry=EmptyRegistry())
+            planner._knowledge_signals = mock.Mock(return_value={
+                "experience_count": 0,
+                "verified_skill_count": 0,
+                "top_experience_ids": [],
+                "top_verified_skill_ids": [],
+            })
+            planner._role_reflection_context = mock.Mock(return_value={})
+            planner._match_verified_skills = mock.Mock(return_value=[])
+            templates = {
+                "repeat_task": {
+                    "title": "Repeat task",
+                    "description": "Repeat a known task",
+                    "primary_capability_type": "python",
+                    "tasks": [{
+                        "id": "repeat",
+                        "title": "Repeat analysis",
+                        "objective": "Analyze source again",
+                        "task_type": "analyze",
+                        "capability_type": "python",
+                        "acceptance": "Analysis result is available",
+                    }],
+                }
+            }
+
+            with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=templates):
+                first = planner.plan(
+                    tenant_id="tenant-a", goal="Repeat analysis",
+                    mission_kind="repeat_task", context={},
+                )
+                self.assertEqual(first["nodes"][0]["recommended_strategies"], [])
+
+                self._seed_strategy(workspace)
+                action = {"recommended_strategies": [{"id": "strategy-a"}]}
+                task = SimpleNamespace(
+                    id="task-after-plan",
+                    result={"strategy_usage": {
+                        "strategy_id": "strategy-a",
+                        "strategy_used": True,
+                        "domain": "python",
+                    }},
+                    error="",
+                )
+                self.assertTrue(build_bindings()["record_strategy_execution_feedback"](
+                    workspace=workspace, tenant_id="tenant-a", action=action,
+                    task=task, execution_success=True,
+                ))
+
+                second = planner.plan(
+                    tenant_id="tenant-a", goal="Repeat analysis",
+                    mission_kind="repeat_task", context={},
+                )
+
+            self.assertEqual(second["nodes"][0]["recommended_strategies"][0]["id"], "strategy-a")
+            self.assertEqual(second["nodes"][0]["recommended_strategies"][0]["usage_count"], 2)
+
     def test_feedback_is_tenant_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
