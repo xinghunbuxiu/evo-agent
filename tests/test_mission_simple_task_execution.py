@@ -65,15 +65,15 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
         def deterministic_python_worker(**kwargs):
             # Test-only adapter: execute a small implementation and validate edge cases.
             code = (
-                "def is_even(value):\\n"
-                "    if not isinstance(value, int):\\n"
-                "        raise TypeError('value must be an integer')\\n"
-                "    return value % 2 == 0\\n"
-                "assert is_even(2) is True\\n"
-                "assert is_even(3) is False\\n"
-                "assert is_even(-4) is True\\n"
-                "assert is_even(-3) is False\\n"
-                "assert is_even(0) is True\\n"
+                "def is_even(value):\n"
+                "    if not isinstance(value, int):\n"
+                "        raise TypeError('value must be an integer')\n"
+                "    return value % 2 == 0\n"
+                "assert is_even(2) is True\n"
+                "assert is_even(3) is False\n"
+                "assert is_even(-4) is True\n"
+                "assert is_even(-3) is False\n"
+                "assert is_even(0) is True\n"
             )
             namespace = {}
             exec(compile(code, "<mission-test-worker>", "exec"), namespace)
