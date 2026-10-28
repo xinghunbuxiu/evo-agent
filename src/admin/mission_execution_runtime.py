@@ -217,7 +217,8 @@ def create_mission_execution_bindings(
                 "source": "mission_execution_feedback",
                 "task_id": task_id,
                 "mission_run_id": str(action.get("mission_run_id") or ""),
-                "verification_passed": usage.get("verification_passed") is True,
+                # This is an unverified worker claim, not independent validation evidence.
+                "worker_reported_verification_passed": usage.get("verification_passed") is True,
             },
         )
         updated = engine.evolve_strategy(experience)
@@ -228,7 +229,10 @@ def create_mission_execution_bindings(
         action["strategy_feedback"] = {
             "strategy_id": strategy_id,
             "execution_success": bool(execution_success),
-            "verification_passed": usage.get("verification_passed") is True,
+            "verification_claim": {
+                "passed": usage.get("verification_passed") is True,
+                "source": "worker_reported_unverified",
+            },
             "recorded_at": datetime.now().astimezone().isoformat(),
         }
         return True
