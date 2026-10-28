@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
+from core.mission_brain import build_mission_brain_contract  # noqa: E402
 
 
 class FakePriority:
@@ -96,6 +97,7 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
             )
             return evidence["passed"]
 
+        orchestration = build_mission_brain_contract([node])
         bindings = create_mission_action_runtime_bindings(
             normalize_string_list=lambda value: (
                 [str(item) for item in value if str(item).strip()]
@@ -113,6 +115,7 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
                 "mission_kind": "even_number_demo",
                 "runtime_route": {"primary_worker_id": "python-test-worker"},
                 "nodes": [node],
+                "orchestration": orchestration,
             },
             context={},
             work_type={},
