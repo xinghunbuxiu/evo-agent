@@ -400,6 +400,10 @@ class MissionPlanner:
         if strategy_engine is None:
             strategy_engine = StrategyEngine(self.workspace, tenant_id=tenant_id)
             self._strategy_engines[tenant_id] = strategy_engine
+        else:
+            # Feedback is written by execution workers through a separate engine.
+            # Refresh the cached planner view so the next plan can reuse new evidence.
+            strategy_engine._load_strategies()
         strategy_context = {
             "goal": goal,
             "objective": str(node_template.get("objective") or ""),
