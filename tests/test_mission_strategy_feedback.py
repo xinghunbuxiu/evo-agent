@@ -3,6 +3,7 @@
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
 from core.learning import Strategy, StrategyEngine  # noqa: E402
+from core.mission_planner import MissionPlanner  # noqa: E402
 
 
 def build_bindings():
@@ -144,6 +146,79 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             self.assertFalse(recorded)
             self.assertEqual(strategy.usage_count, 1)
             self.assertNotIn("strategy_feedback_recorded", action)
+
+    def test_execution_feedback_is_retrievable_by_next_mission_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._seed_strategy(workspace)
+            action = {
+                "task_type": "analyze",
+                "title": "Analyze source",
+                "mission_run_id": "mission-first",
+                "recommended_strategies": [{"id": "strategy-a"}],
+            }
+            task = SimpleNamespace(
+                id="task-e2e",
+                result={
+                    "summary": "source analysis completed",
+                    "strategy_usage": {
+                        "strategy_id": "strategy-a",
+                        "strategy_used": True,
+                        "domain": "python",
+                    },
+                },
+                error="",
+            )
+            feedback = build_bindings()["record_strategy_execution_feedback"]
+            self.assertTrue(feedback(
+                workspace=workspace, tenant_id="tenant-a", action=action,
+                task=task, execution_success=True,
+            ))
+
+            class EmptyRegistry:
+                def list_descriptors(self):
+                    return []
+
+            planner = MissionPlanner(workspace, registry=EmptyRegistry())
+            planner._knowledge_signals = mock.Mock(return_value={
+                "experience_count": 0,
+                "verified_skill_count": 0,
+                "top_experience_ids": [],
+                "top_verified_skill_ids": [],
+            })
+            planner._role_reflection_context = mock.Mock(return_value={})
+            planner._match_verified_skills = mock.Mock(return_value=[])
+            templates = {
+                "repeat_task": {
+                    "title": "Repeat task",
+                    "description": "Repeat a known task",
+                    "primary_capability_type": "python",
+                    "tasks": [{
+                        "id": "repeat",
+                        "title": "Repeat analysis",
+                        "objective": "Analyze source again",
+                        "task_type": "analyze",
+                        "capability_type": "python",
+                        "acceptance": "Analysis result is available",
+                    }],
+                }
+            }
+            with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=templates):
+                planned = planner.plan(
+                    tenant_id="tenant-a",
+                    goal="Repeat a known analysis task",
+                    mission_kind="repeat_task",
+                    context={},
+                )
+
+            node = planned["nodes"][0]
+            self.assertEqual(node["recommended_strategies"][0]["id"], "strategy-a")
+            trace = {item["step"]: item for item in node["decision_trace"]}
+            self.assertEqual(trace["strategy_retrieval"]["result"], "matched")
+            self.assertEqual(trace["strategy_retrieval"]["evidence"]["tenant_id"], "tenant-a")
+            stored = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertEqual(stored.usage_count, 2)
+            self.assertEqual(stored.feedback_task_ids, ["task-e2e"])
 
     def test_feedback_is_tenant_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
