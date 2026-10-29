@@ -84,6 +84,7 @@ def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organizat
     checked = 0
     held = 0
     released = 0
+    changed = False
     for run in items:
         if not isinstance(run, dict):
             continue
@@ -122,7 +123,6 @@ def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organizat
             group["task_ids"].add(task_id)
             group["actions"].append(action)
 
-    changed = False
     for claim_id, group in groups.items():
         checked += 1
         reason = None
