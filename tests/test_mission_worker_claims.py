@@ -332,7 +332,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
                     "worker_claim": {
                         "worker_id": "worker-a",
                         "claim_id": f"claim-{index}",
-                        "state": "claimed" if index == 0 else "released",
+                        "state": "claimed" if index == 50 else "released",
                     },
                 }],
             }
@@ -344,15 +344,15 @@ class MissionWorkerClaimTests(unittest.TestCase):
 
         # The oldest run is outside the normal 50-run history window, but is
         # still the durable source of evidence for a busy worker.
-        self.assertIn("run-0", restored_ids)
+        self.assertIn("run-50", restored_ids)
         self.assertEqual(len(restored), 51)
 
         # Once the old claim is terminal/released, the same history bound applies.
-        runs[0]["actions"][0]["worker_claim"]["state"] = "released"
+        runs[50]["actions"][0]["worker_claim"]["state"] = "released"
         save_mission_runs(workspace, {"items": runs})
         pruned = load_mission_runs(workspace)["items"]
         self.assertEqual(len(pruned), 50)
-        self.assertNotIn("run-0", {item["mission_run_id"] for item in pruned})
+        self.assertNotIn("run-50", {item["mission_run_id"] for item in pruned})
 
 
 if __name__ == "__main__":
