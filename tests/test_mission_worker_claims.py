@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core.organization_runtime import OrganizationRegistry
 from admin.mission_action_runtime import create_mission_action_runtime_bindings
 from admin.mission_execution_runtime import create_mission_execution_bindings
+from admin.mission_runtime import load_mission_runs, save_mission_runs
 
 
 def _plan(node_specs):
@@ -319,6 +320,39 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(self.registry.get_worker("worker-a")["status"], "available")
         self.assertEqual(self.registry.get_worker("worker-a")["active_task_ids"], [])
         self.assertTrue(all(item["worker_claim"]["state"] == "released" for item in second["actions"]))
+
+    def test_persisted_history_never_prunes_run_with_active_worker_claim(self):
+        workspace = Path(self.temp.name)
+        runs = [
+            {
+                "mission_run_id": f"run-{index}",
+                "actions": [{
+                    "action_type": "task_submitted",
+                    "task_id": f"task-{index}",
+                    "worker_claim": {
+                        "worker_id": "worker-a",
+                        "claim_id": f"claim-{index}",
+                        "state": "claimed" if index == 0 else "released",
+                    },
+                }],
+            }
+            for index in range(51)
+        ]
+        save_mission_runs(workspace, {"items": runs})
+        restored = load_mission_runs(workspace)["items"]
+        restored_ids = {item["mission_run_id"] for item in restored}
+
+        # The oldest run is outside the normal 50-run history window, but is
+        # still the durable source of evidence for a busy worker.
+        self.assertIn("run-0", restored_ids)
+        self.assertEqual(len(restored), 51)
+
+        # Once the old claim is terminal/released, the same history bound applies.
+        runs[0]["actions"][0]["worker_claim"]["state"] = "released"
+        save_mission_runs(workspace, {"items": runs})
+        pruned = load_mission_runs(workspace)["items"]
+        self.assertEqual(len(pruned), 50)
+        self.assertNotIn("run-0", {item["mission_run_id"] for item in pruned})
 
 
 if __name__ == "__main__":
