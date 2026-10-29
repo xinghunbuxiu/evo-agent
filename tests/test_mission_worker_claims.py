@@ -538,6 +538,40 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(claim["recovery_reason"], "queue_lookup_failed")
         self.assertEqual(OrganizationRegistry(workspace).get_worker("worker-a")["status"], "busy")
 
+    def test_startup_recovery_keeps_claim_when_registry_release_fails(self):
+        workspace = Path(self.temp.name)
+        claim_id = "startup-release-failure-claim"
+        self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+        save_mission_runs(workspace, {"items": [{
+            "mission_run_id": "startup-release-failure-run",
+            "actions": [{
+                "task_id": "task-done",
+                "worker_claim": {"worker_id": "worker-a", "claim_id": claim_id, "state": "claimed"},
+            }],
+        }]})
+
+        class Queue:
+            def get_task(self, task_id):
+                return SimpleNamespace(status=SimpleNamespace(value="success"))
+
+        class BrokenRegistry:
+            def release_worker_task(self, *, worker_id, task_id):
+                raise OSError("registry unavailable")
+
+        result = reconcile_worker_claims_on_startup(
+            workspace=workspace,
+            task_queue=Queue(),
+            organization_registry=BrokenRegistry(),
+        )
+        claim = load_mission_runs(workspace)["items"][0]["actions"][0]["worker_claim"]
+        worker = OrganizationRegistry(workspace).get_worker("worker-a")
+        self.assertEqual(result["claims_held_for_review"], 1)
+        self.assertEqual(claim["state"], "claimed")
+        self.assertEqual(claim["recovery_reason"], "worker_release_failed")
+        self.assertEqual(claim["release_error_type"], "OSError")
+        self.assertEqual(worker["status"], "busy")
+        self.assertEqual(worker["active_task_ids"], [claim_id])
+
     def test_persisted_history_never_prunes_run_with_active_worker_claim(self):
         workspace = Path(self.temp.name)
         runs = [
