@@ -31,12 +31,54 @@ def load_mission_runs(workspace: Path) -> dict:
     }
 
 
+def _mission_run_has_active_worker_claim(mission_run: dict) -> bool:
+    """Keep runs that are the only durable evidence for a live worker reservation."""
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    return any(
+        isinstance(action, dict)
+        and isinstance(action.get("worker_claim"), dict)
+        and action["worker_claim"].get("state") == "claimed"
+        for action in actions
+    )
+
+
+def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:
+    """Bound history without evicting runs that still own worker claims."""
+    valid = [item for item in items if isinstance(item, dict)]
+    retained_ids = {
+        str(item.get("mission_run_id") or "").strip()
+        for item in valid[:limit]
+        if str(item.get("mission_run_id") or "").strip()
+    }
+    retained_ids.update(
+        str(item.get("mission_run_id") or "").strip()
+        for item in valid
+        if _mission_run_has_active_worker_claim(item)
+        and str(item.get("mission_run_id") or "").strip()
+    )
+    # Runs without IDs cannot be safely deduplicated; keep them only inside the normal window.
+    result = []
+    seen_ids = set()
+    for index, item in enumerate(valid):
+        run_id = str(item.get("mission_run_id") or "").strip()
+        keep = (index < limit) or (bool(run_id) and run_id in retained_ids)
+        if not keep:
+            continue
+        if run_id:
+            if run_id in seen_ids:
+                continue
+            seen_ids.add(run_id)
+        result.append(item)
+    return result
+
+
 def save_mission_runs(workspace: Path, payload: dict) -> None:
     normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
+    normalized_items = _retain_mission_runs(normalized_items) if isinstance(normalized_items, list) else []
     mission_runs_file(workspace).write_text(
         json.dumps({
             "updated_at": datetime.now().isoformat(),
-            "items": normalized_items if isinstance(normalized_items, list) else [],
+            "items": normalized_items,
         }, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -298,7 +340,7 @@ def refresh_mission_runs(
         )
         if isinstance(synced, list):
             refreshed_items = [item for item in synced if isinstance(item, dict)]
-    save_mission_runs(workspace, {"items": refreshed_items[:50]})
+    save_mission_runs(workspace, {"items": refreshed_items})
     return load_mission_runs(workspace)
 
 
@@ -389,7 +431,7 @@ def create_start_mission(
         items = state.get("items", []) if isinstance(state, dict) else []
         items = [item for item in items if isinstance(item, dict)]
         items.insert(0, mission_run)
-        save_mission_runs(workspace, {"items": items[:50]})
+        save_mission_runs(workspace, {"items": items})
         if refresh_runs:
             refreshed = refresh_mission_runs_fn(
                 workspace=workspace,
