@@ -63,7 +63,7 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
                 name="Python integer parity checks",
                 domain="python",
                 description="Use modulo and verify positive, negative, and zero inputs.",
-                applicable_when=["implement an integer parity function"],
+                applicable_when=["parity"],
                 steps=[{"action": "implement"}, {"action": "run assertions"}],
                 success_rate=1.0,
                 usage_count=1,
