@@ -45,25 +45,17 @@ def _mission_run_has_active_worker_claim(mission_run: dict) -> bool:
 def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:
     """Bound history without evicting runs that still own worker claims."""
     valid = [item for item in items if isinstance(item, dict)]
-    retained_ids = {
-        str(item.get("mission_run_id") or "").strip()
-        for item in valid[:limit]
-        if str(item.get("mission_run_id") or "").strip()
-    }
-    retained_ids.update(
-        str(item.get("mission_run_id") or "").strip()
-        for item in valid
+    retained_indexes = set(range(min(max(0, limit), len(valid))))
+    retained_indexes.update(
+        index for index, item in enumerate(valid)
         if _mission_run_has_active_worker_claim(item)
-        and str(item.get("mission_run_id") or "").strip()
     )
-    # Runs without IDs cannot be safely deduplicated; keep them only inside the normal window.
     result = []
     seen_ids = set()
     for index, item in enumerate(valid):
-        run_id = str(item.get("mission_run_id") or "").strip()
-        keep = (index < limit) or (bool(run_id) and run_id in retained_ids)
-        if not keep:
+        if index not in retained_indexes:
             continue
+        run_id = str(item.get("mission_run_id") or "").strip()
         if run_id:
             if run_id in seen_ids:
                 continue
