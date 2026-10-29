@@ -321,6 +321,59 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(self.registry.get_worker("worker-a")["active_task_ids"], [])
         self.assertTrue(all(item["worker_claim"]["state"] == "released" for item in second["actions"]))
 
+    def test_restart_with_missing_queue_task_keeps_worker_claim_reserved(self):
+        workspace = Path(self.temp.name)
+        claim_id = "mission-restart-claim"
+        self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+        persisted_run = {
+            "mission_run_id": "run-after-restart",
+            "tenant_id": "tenant-a",
+            "goal": "recover worker reservation safely",
+            "context": {},
+            "plan": {"nodes": [{"id": "node-a", "role_reflection_context": {}}]},
+            "actions": [{
+                "node_id": "node-a",
+                "title": "persisted task",
+                "action_type": "task_submitted",
+                "status": "running",
+                "task_id": "task-record-missing",
+                "task_type": "analyze",
+                "decision_trace": [],
+                "worker_claim": {
+                    "worker_id": "worker-a",
+                    "claim_id": claim_id,
+                    "state": "claimed",
+                },
+            }],
+            "submitted_task_ids": ["task-record-missing"],
+        }
+        save_mission_runs(workspace, {"items": [persisted_run]})
+
+        # Simulate a process restart by loading the durable Mission record into a
+        # fresh refresh call; the queue cannot currently prove the task is terminal.
+        restored_run = load_mission_runs(workspace)["items"][0]
+
+        class Queue:
+            def get_task(self, task_id):
+                return None
+
+        refresh = _execution_bindings(self.registry)["refresh_mission_run"]
+        recovered = refresh(
+            workspace=workspace,
+            task_queue=Queue(),
+            tenant_manager=SimpleNamespace(get_knowledge_policy=lambda tenant_id: {}),
+            mission_run=restored_run,
+            build_mission_next_cycle_plan=lambda *args, **kwargs: {},
+            build_mission_growth_timeline=lambda *args, **kwargs: [],
+        )
+
+        worker = self.registry.get_worker("worker-a")
+        self.assertEqual(worker["status"], "busy")
+        self.assertEqual(worker["active_task_ids"], [claim_id])
+        self.assertEqual(recovered["actions"][0]["worker_claim"]["state"], "claimed")
+        self.assertEqual(recovered["actions"][0]["status"], "submitted")
+        self.assertEqual(recovered["mission_run_id"], "run-after-restart")
+
     def test_persisted_history_never_prunes_run_with_active_worker_claim(self):
         workspace = Path(self.temp.name)
         runs = [
