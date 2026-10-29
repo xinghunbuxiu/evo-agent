@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-regression-${{ github.workflow }}-${{ github.ref }}
+  group: python-regression-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
