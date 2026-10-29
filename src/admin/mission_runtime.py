@@ -76,6 +76,108 @@ def save_mission_runs(workspace: Path, payload: dict) -> None:
     )
 
 
+def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organization_registry) -> dict:
+    """Recover only durable worker claims; never refresh plans or dispatch new work."""
+    state = load_mission_runs(workspace)
+    items = state.get("items", []) if isinstance(state, dict) else []
+    groups: dict[str, dict] = {}
+    checked = 0
+    held = 0
+    released = 0
+    for run in items:
+        if not isinstance(run, dict):
+            continue
+        actions = run.get("actions", []) if isinstance(run.get("actions"), list) else []
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                continue
+            claim = action.get("worker_claim")
+            if not isinstance(claim, dict) or claim.get("state") != "claimed":
+                continue
+            claim_id = str(claim.get("claim_id") or "").strip()
+            worker_id = str(claim.get("worker_id") or "").strip()
+            task_id = str(action.get("task_id") or "").strip()
+            if not claim_id or not worker_id or not task_id:
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = "claim_or_task_identity_missing"
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+                held += 1
+                continue
+            group = groups.setdefault(claim_id, {
+                "worker_id": worker_id,
+                "task_ids": set(),
+                "actions": [],
+            })
+            if group["worker_id"] != worker_id:
+                group["identity_conflict"] = True
+            group["task_ids"].add(task_id)
+            group["actions"].append(action)
+
+    changed = False
+    for claim_id, group in groups.items():
+        checked += 1
+        reason = None
+        if group.get("identity_conflict"):
+            reason = "worker_identity_conflict"
+        else:
+            for task_id in sorted(group["task_ids"]):
+                try:
+                    task = task_queue.get_task(task_id)
+                except Exception:
+                    reason = "queue_lookup_failed"
+                    break
+                if task is None:
+                    reason = "queue_task_missing"
+                    break
+                status = str(getattr(getattr(task, "status", None), "value", "") or "")
+                if status not in {"success", "completed", "failed", "cancelled"}:
+                    reason = "queue_task_not_terminal"
+                    break
+        if reason:
+            for action in group["actions"]:
+                claim = action["worker_claim"]
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = reason
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+            held += 1
+            changed = True
+            continue
+        try:
+            organization_registry.release_worker_task(
+                worker_id=group["worker_id"],
+                task_id=claim_id,
+            )
+        except Exception as exc:
+            for action in group["actions"]:
+                claim = action["worker_claim"]
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = "worker_release_failed"
+                claim["release_error_type"] = type(exc).__name__
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+            held += 1
+            changed = True
+            continue
+        released_at = datetime.now().astimezone().isoformat()
+        for action in group["actions"]:
+            claim = action["worker_claim"]
+            claim["state"] = "released"
+            claim["released_at"] = released_at
+            claim["recovery_status"] = "recovered"
+            claim["recovery_reason"] = None
+            claim["recovery_checked_at"] = released_at
+        released += 1
+        changed = True
+
+    if changed:
+        save_mission_runs(workspace, {"items": items})
+    return {
+        "mission_runs": len([item for item in items if isinstance(item, dict)]),
+        "claims_checked": checked,
+        "claims_released": released,
+        "claims_held_for_review": held,
+    }
+
+
 def find_mission_run(workspace: Path, mission_run_id: str) -> dict | None:
     state = load_mission_runs(workspace)
     items = state.get("items", []) if isinstance(state, dict) else []
