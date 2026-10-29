@@ -37,7 +37,7 @@ jobs:
       - name: Run regression suite
         run: |
           set -o pipefail
-          .venv/bin/python -m unittest discover -s tests -v 2>&1 | tee regression-test-output.txt
+          .venv/bin/python scripts/run_regression_with_tree.py 2>&1 | tee regression-test-output.txt
       - name: Upload regression output
         if: always()
         continue-on-error: true
