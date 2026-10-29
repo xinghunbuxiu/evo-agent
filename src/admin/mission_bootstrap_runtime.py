@@ -18,7 +18,6 @@ def create_mission_bootstrap_runtime_bindings(
     *,
     workspace: Path,
     task_queue,
-    organization_registry=None,
     tenant_manager: TenantManager,
     mission_planner,
     upsert_plan_learning_tasks: Callable[..., list[str]],
@@ -36,6 +35,7 @@ def create_mission_bootstrap_runtime_bindings(
     builtin_worker_manifests,
     load_worker_registry_config: Callable,
     build_project_package_runtime_entries: Callable,
+    organization_registry,
     sync_autonomy_runtime_from_missions: Callable[..., list[dict] | None] | None = None,
     resolve_mission_member_context: Callable[..., dict] | None = None,
 ):
