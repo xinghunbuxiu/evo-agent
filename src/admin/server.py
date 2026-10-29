@@ -1644,6 +1644,32 @@ def create_app() -> FastAPI:
     async def start_background_research():
         purge_preset_finance_data(workspace)
         purge_preset_project_packages(workspace)
+        # Reconcile persisted Mission/Worker reservations before background work
+        # begins. Unknown or missing queue tasks remain claimed by design.
+        try:
+            recovered = _refresh_mission_runs(
+                workspace=workspace,
+                task_queue=task_queue,
+                tenant_manager=tenant_manager,
+            )
+            recovered_items = recovered.get("items", []) if isinstance(recovered, dict) else []
+            active_claims = sum(
+                1
+                for mission_run in recovered_items
+                if isinstance(mission_run, dict)
+                for action in (mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else [])
+                if isinstance(action, dict)
+                and isinstance(action.get("worker_claim"), dict)
+                and action["worker_claim"].get("state") == "claimed"
+            )
+            print(
+                "[mission-recovery] startup reconciliation complete "
+                f"mission_runs={len(recovered_items)} active_claim_actions={active_claims}"
+            )
+        except Exception as exc:
+            # Recovery failure must be visible but must not silently release claims
+            # or prevent the admin service from starting.
+            print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
         if not autonomy_thread.is_alive():
             autonomy_thread.start()
 
