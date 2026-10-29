@@ -23,8 +23,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Diagnose self-hosted runner before checkout
+        continue-on-error: true
         run: |
-          set -euxo pipefail
+          set -u
           date -u
           uname -a
           id
@@ -34,7 +35,14 @@ jobs:
           df -i
           printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
           ls -ld "$GITHUB_WORKSPACE" || true
-          timeout 10s git ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD
+          echo '--- DNS lookup ---'
+          timeout 5s getent hosts github.com || true
+          echo '--- HTTPS probe: github.com ---'
+          timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://github.com/ -o /dev/null -w 'github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
+          echo '--- HTTPS probe: api.github.com ---'
+          timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://api.github.com/ -o /dev/null -w 'api.github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
+          echo '--- Git remote probe ---'
+          timeout 12s git -c http.version=HTTP/1.1 ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD || true
       - name: Check out repository
         timeout-minutes: 5
         uses: actions/checkout@v4
