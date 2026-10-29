@@ -9,6 +9,8 @@ from typing import Callable
 
 from fastapi import Request
 
+from admin.mission_runtime import load_mission_runs
+
 
 def register_mission_routes(
     app,
@@ -95,6 +97,55 @@ def register_mission_routes(
             "updated_at": state.get("updated_at"),
             "items": filtered,
         })
+
+    @app.get("/api/missions/worker-claims/recovery-review")
+    async def list_worker_claims_for_recovery_review(tenant_id: str | None = None, limit: int = 100):
+        # Read persisted evidence directly: do not refresh missions or trigger dispatch here.
+        state = load_mission_runs(workspace)
+        items = state.get("items", []) if isinstance(state, dict) else []
+        reviews = []
+        for mission_run in items:
+            if not isinstance(mission_run, dict):
+                continue
+            if tenant_id and mission_run.get("tenant_id") != tenant_id:
+                continue
+            actions = mission_run.get("actions", [])
+            if not isinstance(actions, list):
+                continue
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                claim = action.get("worker_claim")
+                if not isinstance(claim, dict):
+                    continue
+                if claim.get("state") != "claimed" or claim.get("recovery_status") != "needs_review":
+                    continue
+                reviews.append({
+                    "mission_run_id": mission_run.get("mission_run_id"),
+                    "tenant_id": mission_run.get("tenant_id") or "default",
+                    "goal": mission_run.get("goal"),
+                    "node_id": action.get("node_id"),
+                    "action_title": action.get("title"),
+                    "task_id": action.get("task_id"),
+                    "worker_claim": {
+                        "claim_id": claim.get("claim_id"),
+                        "worker_id": claim.get("worker_id"),
+                        "state": claim.get("state"),
+                        "recovery_status": claim.get("recovery_status"),
+                        "recovery_reason": claim.get("recovery_reason"),
+                        "recovery_checked_at": claim.get("recovery_checked_at"),
+                        "release_error_type": claim.get("release_error_type"),
+                    },
+                })
+                if len(reviews) >= max(1, min(limit, 500)):
+                    return success_response({
+                        "count": len(reviews),
+                        "items": reviews,
+                    }, "待人工复核的 Worker Claim")
+        return success_response({
+            "count": len(reviews),
+            "items": reviews,
+        }, "待人工复核的 Worker Claim")
 
     @app.get("/api/missions/{mission_run_id}")
     async def get_mission_run(mission_run_id: str):
