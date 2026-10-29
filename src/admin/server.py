@@ -1647,24 +1647,13 @@ def create_app() -> FastAPI:
         # Reconcile persisted Mission/Worker reservations before background work
         # begins. Unknown or missing queue tasks remain claimed by design.
         try:
-            recovered = _refresh_mission_runs(
-                workspace=workspace,
-                task_queue=task_queue,
-                tenant_manager=tenant_manager,
-            )
-            recovered_items = recovered.get("items", []) if isinstance(recovered, dict) else []
-            active_claims = sum(
-                1
-                for mission_run in recovered_items
-                if isinstance(mission_run, dict)
-                for action in (mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else [])
-                if isinstance(action, dict)
-                and isinstance(action.get("worker_claim"), dict)
-                and action["worker_claim"].get("state") == "claimed"
-            )
+            recovery = _mission_bootstrap["reconcile_worker_claims_on_startup"]()
             print(
                 "[mission-recovery] startup reconciliation complete "
-                f"mission_runs={len(recovered_items)} active_claim_actions={active_claims}"
+                f"mission_runs={recovery.get('mission_runs', 0)} "
+                f"claims_checked={recovery.get('claims_checked', 0)} "
+                f"claims_released={recovery.get('claims_released', 0)} "
+                f"claims_held_for_review={recovery.get('claims_held_for_review', 0)}"
             )
         except Exception as exc:
             # Recovery failure must be visible but must not silently release claims
@@ -2355,6 +2344,7 @@ def create_app() -> FastAPI:
     _mission_bootstrap = create_mission_bootstrap_runtime_bindings(
         workspace=workspace,
         task_queue=task_queue,
+        organization_registry=organization_registry,
         tenant_manager=tenant_manager,
         mission_planner=mission_planner,
         upsert_plan_learning_tasks=_upsert_plan_learning_tasks,
