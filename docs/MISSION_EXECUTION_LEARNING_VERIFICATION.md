@@ -2,43 +2,58 @@
 
 This document records what the regression suite proves today and what it does not prove.
 
-## Verified flow (automated tests)
+## Verified single-flow integration test
+
+`tests/test_mission_execution_learning_e2e.py` carries one deterministic test task through the core learning loop:
 
 ```text
-Task input
-  -> MissionPlanner creates node + decision_trace
-  -> Mission runtime validates coordination contract and dispatch authorization
-  -> deterministic test worker executes and checks is_even(2, 3, -4, -3, 0)
-  -> runtime action carries execution evidence and original decision_trace
-  -> strategy feedback accepts only explicit strategy_usage claims
-  -> duplicate feedback for the same task is idempotent
-  -> a subsequent MissionPlanner plan can retrieve the persisted strategy
+Seed tenant-scoped strategy
+  -> Mission runtime authorizes a plan node
+  -> deterministic test worker executes is_even edge-case assertions
+  -> execution action retains decision_trace + execution_evidence + strategy_usage
+  -> feedback consumes the strategy_usage from that same action/task
+  -> duplicate feedback is rejected (idempotency)
+  -> a fresh StrategyEngine reloads persisted feedback after simulated restart
+  -> the next MissionPlanner plan retrieves the same strategy
 ```
 
-## Evidence in tests
+The worker is a deterministic test-only adapter. This proves evidence continuity across the runtime, feedback, persistence, and planning boundaries; it does **not** prove that a production LLM or external worker independently verified the result.
+
+## Regression evidence
 
 | Stage | Regression test | What it establishes |
 | --- | --- | --- |
-| Planning trace | `tests/test_mission_simple_task_analysis.py` | Input, capability, knowledge, strategy, status, and workforce decisions are recorded in order. Planning-only; no worker executes. |
-| Runtime dispatch and execution | `tests/test_mission_simple_task_execution.py` | The runtime authorization contract is enforced; the deterministic test adapter executes edge-case assertions; action retains decision trace and execution evidence. |
+| Planning trace | `tests/test_mission_simple_task_analysis.py` | Input, capability, knowledge, strategy, status, and workforce decisions are recorded. |
+| Runtime dispatch and execution | `tests/test_mission_simple_task_execution.py` | Runtime authorization is enforced; a deterministic worker executes edge-case assertions and the action retains decision trace and execution evidence. |
+| Single-flow execution-to-learning | `tests/test_mission_execution_learning_e2e.py` | The same action's strategy usage is fed back, duplicate feedback is idempotent, state survives engine reload, and the next plan retrieves the strategy. |
 | Failure lineage | `tests/test_mission_failure_learning_evidence.py` | Failure-learning records preserve Mission run, source task, node, decision trace, and dispatch authorization. |
-| Strategy feedback and reuse | `tests/test_mission_strategy_feedback.py` | Explicit usage is recorded once, recommendations alone do not count as use, unverified worker claims are not promoted to independent verification, and persisted strategy feedback is retrievable by a later plan. |
+| Strategy feedback guards | `tests/test_mission_strategy_feedback.py` | Recommendations alone do not count as usage; unverified worker claims are not promoted to independent verification; persisted feedback is retrievable by later plans. |
+| Worker reservation | `tests/test_mission_worker_claims.py` | A worker cannot be double-claimed, claims survive a handler error after submission, safe cloning is gated, and terminal task states release claims. |
 
 ## Latest observed CI evidence
 
-- Commit: `698d8b461ca4075eb360db2d093785cc4f526c1d`
-- Workflow: [Python regression tests](https://github.com/xinghunbuxiu/evo-agent/actions/runs/40712812354)
-- Result: passed
-- Regression suite output: `Ran 121 tests`, `OK`
-- Relevant tests in that run: runtime execution smoke test, failure-learning lineage tests, strategy feedback and subsequent-plan retrieval tests.
+- Commit: `04341e27da5d1edbd871178e9c55e929342a89db`
+- Workflow run: [Python regression tests #305](https://github.com/xinghunbuxiu/evo-agent/actions/runs/40807431541)
+- Result: **passed**
+- Observed job steps: runner diagnostics, checkout, Python virtual environment, dependency installation, regression suite, and artifact upload all completed successfully.
+- This is evidence that the workflow completed successfully; this document does not assert a test count unless the uploaded regression output is inspected.
 
 ## Boundaries and remaining work
 
-1. The execution smoke test uses a deterministic test double, not an LLM or production worker.
-2. The current evidence demonstrates connected mechanisms across separate regression tests; it is not yet one single test that carries the exact same task/action record through execution, persisted feedback, and the next plan.
-3. Worker-reported verification remains untrusted unless independent verification evidence is produced.
-4. Do not treat a saved candidate, an execution log, or a worker claim as a promoted verified skill. Promotion needs its own evidence and policy checks.
+1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
+2. Worker-reported verification is treated as an untrusted claim unless independent verification evidence is produced.
+3. A successful test run does not establish distributed locking or multi-host correctness. Worker claims currently live in a file-backed registry with a cross-platform file lock.
+4. Process-crash recovery and stale-claim reclamation are not yet proven. A future recovery mechanism must reconcile claims against durable Mission/task state and must not release a claim while any linked task is still active.
+5. Logical worker cloning copies an approved profile; it does not itself start an isolated model, CLI, or device process.
 
 ## Next verification increment
 
-Add a single integration regression test that seeds a strategy, dispatches a task through Mission runtime, records explicit usage tied to the resulting task evidence, reloads persisted state, and asserts that the next Mission plan retrieves that same strategy. Keep the deterministic worker label explicit so the test cannot be mistaken for production AI capability.
+Prioritize crash/restart recovery for worker claims:
+
+- Persist enough claim-to-Mission/node/task linkage to reconcile state after restart.
+- Recover only when linked tasks are confirmed terminal or definitively absent from durable queue state; ambiguous states must remain claimed and be surfaced for review.
+- Make recovery idempotent and record recovery evidence.
+- Add regression tests for restart with active tasks, terminal tasks, missing task records, and repeated recovery.
+- Keep multi-host/distributed lease guarantees explicitly out of scope until backed by a shared transactional store.
+
+The goal is to preserve the invariant: **never double-dispatch a worker, and never free a worker whose task may still be running.**
