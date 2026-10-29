@@ -475,6 +475,69 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(second["claims_checked"], 0)
         self.assertEqual(registry.get_worker("worker-a")["status"], "available")
 
+    def test_startup_recovery_keeps_shared_claim_until_every_task_is_terminal(self):
+        workspace = Path(self.temp.name)
+        claim_id = "startup-shared-claim"
+        self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+        save_mission_runs(workspace, {"items": [{
+            "mission_run_id": "startup-shared-run",
+            "actions": [
+                {
+                    "task_id": "task-done",
+                    "worker_claim": {"worker_id": "worker-a", "claim_id": claim_id, "state": "claimed"},
+                },
+                {
+                    "task_id": "task-still-running",
+                    "worker_claim": {"worker_id": "worker-a", "claim_id": claim_id, "state": "claimed"},
+                },
+            ],
+        }]})
+
+        class Queue:
+            def get_task(self, task_id):
+                status = "success" if task_id == "task-done" else "running"
+                return SimpleNamespace(status=SimpleNamespace(value=status))
+
+        result = reconcile_worker_claims_on_startup(
+            workspace=workspace,
+            task_queue=Queue(),
+            organization_registry=OrganizationRegistry(workspace),
+        )
+        worker = OrganizationRegistry(workspace).get_worker("worker-a")
+        claims = [a["worker_claim"] for a in load_mission_runs(workspace)["items"][0]["actions"]]
+        self.assertEqual(result["claims_held_for_review"], 1)
+        self.assertEqual(worker["status"], "busy")
+        self.assertEqual(worker["active_task_ids"], [claim_id])
+        self.assertTrue(all(c["state"] == "claimed" for c in claims))
+        self.assertTrue(all(c["recovery_reason"] == "queue_task_not_terminal" for c in claims))
+
+    def test_startup_recovery_records_queue_lookup_failure(self):
+        workspace = Path(self.temp.name)
+        claim_id = "startup-queue-error-claim"
+        self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+        save_mission_runs(workspace, {"items": [{
+            "mission_run_id": "startup-queue-error-run",
+            "actions": [{
+                "task_id": "task-queue-error",
+                "worker_claim": {"worker_id": "worker-a", "claim_id": claim_id, "state": "claimed"},
+            }],
+        }]})
+
+        class Queue:
+            def get_task(self, task_id):
+                raise RuntimeError("queue offline")
+
+        result = reconcile_worker_claims_on_startup(
+            workspace=workspace,
+            task_queue=Queue(),
+            organization_registry=OrganizationRegistry(workspace),
+        )
+        claim = load_mission_runs(workspace)["items"][0]["actions"][0]["worker_claim"]
+        self.assertEqual(result["claims_held_for_review"], 1)
+        self.assertEqual(claim["state"], "claimed")
+        self.assertEqual(claim["recovery_reason"], "queue_lookup_failed")
+        self.assertEqual(OrganizationRegistry(workspace).get_worker("worker-a")["status"], "busy")
+
     def test_persisted_history_never_prunes_run_with_active_worker_claim(self):
         workspace = Path(self.temp.name)
         runs = [
