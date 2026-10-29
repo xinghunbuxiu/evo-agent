@@ -102,6 +102,15 @@ def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organizat
                 claim["recovery_reason"] = "claim_or_task_identity_missing"
                 claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
                 held += 1
+                changed = True
+                if claim_id:
+                    group = groups.setdefault(claim_id, {
+                        "worker_id": worker_id,
+                        "task_ids": set(),
+                        "actions": [],
+                    })
+                    group["identity_conflict"] = True
+                    group["actions"].append(action)
                 continue
             group = groups.setdefault(claim_id, {
                 "worker_id": worker_id,
