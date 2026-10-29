@@ -349,15 +349,16 @@ class MissionWorkerClaimTests(unittest.TestCase):
         }
         save_mission_runs(workspace, {"items": [persisted_run]})
 
-        # Simulate a process restart by loading the durable Mission record into a
-        # fresh refresh call; the queue cannot currently prove the task is terminal.
+        # Simulate a process restart: both the Mission record and organization
+        # registry are reloaded from disk; the queue cannot prove the task terminal.
         restored_run = load_mission_runs(workspace)["items"][0]
+        restarted_registry = OrganizationRegistry(workspace)
 
         class Queue:
             def get_task(self, task_id):
                 return None
 
-        refresh = _execution_bindings(self.registry)["refresh_mission_run"]
+        refresh = _execution_bindings(restarted_registry)["refresh_mission_run"]
         recovered = refresh(
             workspace=workspace,
             task_queue=Queue(),
@@ -367,7 +368,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
             build_mission_growth_timeline=lambda *args, **kwargs: [],
         )
 
-        worker = self.registry.get_worker("worker-a")
+        worker = restarted_registry.get_worker("worker-a")
         self.assertEqual(worker["status"], "busy")
         self.assertEqual(worker["active_task_ids"], [claim_id])
         self.assertEqual(recovered["actions"][0]["worker_claim"]["state"], "claimed")
