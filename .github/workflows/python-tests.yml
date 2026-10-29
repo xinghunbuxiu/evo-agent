@@ -22,8 +22,26 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
+      - name: Diagnose self-hosted runner before checkout
+        run: |
+          set -euxo pipefail
+          date -u
+          uname -a
+          id
+          git --version
+          python3 --version
+          df -h
+          df -i
+          printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
+          ls -ld "$GITHUB_WORKSPACE" || true
+          timeout 10s git ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD
       - name: Check out repository
+        timeout-minutes: 5
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          clean: true
+          show-progress: true
       - name: Verify Python and create virtual environment
         run: |
           set -euo pipefail
