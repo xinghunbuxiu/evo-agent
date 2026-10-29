@@ -18,6 +18,7 @@ def create_mission_bootstrap_runtime_bindings(
     *,
     workspace: Path,
     task_queue,
+    organization_registry=None,
     tenant_manager: TenantManager,
     mission_planner,
     upsert_plan_learning_tasks: Callable[..., list[str]],
@@ -87,7 +88,7 @@ def create_mission_bootstrap_runtime_bindings(
         "reconcile_worker_claims_on_startup": lambda: reconcile_worker_claims_on_startup(
             workspace=workspace,
             task_queue=task_queue,
-            organization_registry=__import__("core.organization_runtime", fromlist=["OrganizationRegistry"]).OrganizationRegistry(workspace),
+            organization_registry=organization_registry,
         ),
         "start_mission": start_mission,
     }
