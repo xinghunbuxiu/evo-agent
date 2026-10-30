@@ -92,6 +92,7 @@ def _verification_signing_key(workspace: Path, *, create: bool) -> bytes | None:
             pass
         return key
 
+
 def _verification_signature_payload(evidence: dict[str, Any], tenant_id: str) -> bytes:
     unsigned = {key: value for key, value in evidence.items() if key != "signature"}
     envelope = {"tenant_id": str(tenant_id or "default"), "evidence": unsigned}
@@ -140,7 +141,6 @@ def verify_verification_evidence(
         return hmac.compare_digest(str(signature.get("value") or ""), expected)
     except (OSError, TypeError, ValueError):
         return False
-
 
 
 def normalize_verification_contract(value: Any) -> dict[str, Any]:
