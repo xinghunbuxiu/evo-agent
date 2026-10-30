@@ -625,7 +625,7 @@ def create_start_mission(
 def _append_worker_claim_recovery_audit(workspace: Path, event: dict) -> None:
     path = workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\\n"
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
