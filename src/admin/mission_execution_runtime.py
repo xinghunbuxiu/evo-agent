@@ -9,6 +9,7 @@ from typing import Callable
 
 from core.tenant import TenantManager
 from core.organization_runtime import OrganizationRegistry
+from core.verification import sign_verification_evidence
 
 
 def create_mission_execution_bindings(
@@ -242,6 +243,7 @@ def create_mission_execution_bindings(
             "status": status,
             "checks": checks,
         }
+        evidence = sign_verification_evidence(workspace, tenant_id, evidence)
         action["independent_verification"] = evidence
         action["verification_state"] = status
         action.pop("verification_reason", None)
@@ -327,15 +329,7 @@ def create_mission_execution_bindings(
                 "source": "mission_execution_feedback",
                 "task_id": task_id,
                 "mission_run_id": str(action.get("mission_run_id") or ""),
-                "verification_evidence": {
-                    "source": "mission_independent_verifier",
-                    "task_id": task_id,
-                    "execution_event_id": str(verification.get("execution_event_id") or ""),
-                    "verifier_id": str(verification.get("verifier_id") or ""),
-                    "verifier_version": str(verification.get("verifier_version") or ""),
-                    "status": verification_status,
-                    "checks": checks,
-                },
+                "verification_evidence": verification,
                 "worker_reported_verification_passed": usage.get("verification_passed") is True,
             },
         )
