@@ -623,7 +623,11 @@ class MissionPlanner:
             verification_contract=(
                 node_template.get("verification_contract")
                 if isinstance(node_template.get("verification_contract"), dict)
-                else {}
+                else (
+                    context.get("verification_contracts", {}).get(str(node_template.get("id") or "").strip(), {})
+                    if isinstance(context.get("verification_contracts"), dict)
+                    else {}
+                )
             ),
             priority=priority,
             next_actions=next_actions,
