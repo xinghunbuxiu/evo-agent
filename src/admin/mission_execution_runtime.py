@@ -35,6 +35,7 @@ def create_mission_execution_bindings(
     mission_summary_handlers: dict[str, Callable] | None = None,
     resume_mission_dependency_nodes: Callable | None = None,
     organization_registry: OrganizationRegistry | None = None,
+    independent_verifier: Callable[..., dict | None] | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -165,6 +166,78 @@ def create_mission_execution_bindings(
         tasks[learning_task_id] = learning_task
         save_learning_tasks(workspace, {"tasks": tasks})
         return learning_task_id
+
+    def verify_mission_task(*, workspace, tenant_id: str, mission_run: dict, action: dict, task) -> dict | None:
+        """Create trusted verification evidence only through the injected verifier.
+
+        Existing action evidence is discarded first: persisted or worker-supplied
+        dictionaries are claims, not proof. The verifier callback must inspect
+        execution artifacts independently and return verifier identity plus checks.
+        """
+        if not isinstance(action, dict):
+            return None
+        action.pop("independent_verification", None)
+        action["verification_state"] = "unavailable"
+        if not callable(independent_verifier):
+            action["verification_reason"] = "verifier_not_configured"
+            return None
+
+        task_id = str(getattr(task, "id", "") or "").strip()
+        completed_at = str(getattr(task, "completed_at", "") or "").strip()
+        if not task_id or not completed_at:
+            action["verification_reason"] = "execution_event_missing"
+            return None
+        try:
+            result = independent_verifier(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                mission_run=mission_run,
+                action=action,
+                task=task,
+            )
+        except Exception as exc:
+            action["verification_state"] = "error"
+            action["verification_reason"] = "verifier_execution_failed"
+            action["verification_error_type"] = type(exc).__name__
+            return None
+
+        if not isinstance(result, dict):
+            action["verification_reason"] = "verifier_result_missing"
+            return None
+        verifier_id = str(result.get("verifier_id") or "").strip()
+        verifier_version = str(result.get("verifier_version") or "").strip()
+        checks = result.get("checks")
+        if (
+            not verifier_id
+            or not verifier_version
+            or not isinstance(checks, list)
+            or not checks
+            or any(
+                not isinstance(check, dict)
+                or not str(check.get("check_id") or "").strip()
+                or not isinstance(check.get("passed"), bool)
+                for check in checks
+            )
+        ):
+            action["verification_reason"] = "verifier_result_invalid"
+            return None
+
+        # Identity, task binding, event identity and status are runtime-owned.
+        # The callback cannot choose another task or mark failed checks as passed.
+        status = "passed" if all(check["passed"] for check in checks) else "failed"
+        evidence = {
+            "source": "mission_independent_verifier",
+            "task_id": task_id,
+            "execution_event_id": f"task-completion:{task_id}:{completed_at}",
+            "verifier_id": verifier_id,
+            "verifier_version": verifier_version,
+            "status": status,
+            "checks": checks,
+        }
+        action["independent_verification"] = evidence
+        action["verification_state"] = status
+        action.pop("verification_reason", None)
+        return evidence
 
     def record_strategy_execution_feedback(*, workspace, tenant_id: str, action: dict, task, execution_success: bool) -> bool:
         """Record outcome only when the worker explicitly confirms it used a recommended strategy.
@@ -431,6 +504,14 @@ def create_mission_execution_bindings(
                     continue
 
                 task_status = str(task.status.value or "")
+                if task_status in {"success", "completed", "failed", "cancelled"}:
+                    verify_mission_task(
+                        workspace=workspace,
+                        tenant_id=tenant_id,
+                        mission_run=mission_run,
+                        action=current,
+                        task=task,
+                    )
                 if task_status in {"success", "completed", "failed"}:
                     record_strategy_execution_feedback(
                         workspace=workspace,
@@ -974,6 +1055,7 @@ def create_mission_execution_bindings(
         "build_mission_failure_diagnosis": build_mission_failure_diagnosis,
         "upsert_mission_failure_learning_task": upsert_mission_failure_learning_task,
         "refresh_mission_learning_action": refresh_mission_learning_action,
+        "verify_mission_task": verify_mission_task,
         "record_strategy_execution_feedback": record_strategy_execution_feedback,
         "refresh_mission_run": refresh_mission_run,
     }
