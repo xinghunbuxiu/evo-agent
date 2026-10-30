@@ -258,11 +258,43 @@ class StrategyEngine:
         metadata = exp.metadata if isinstance(exp.metadata, dict) else {}
         changed = False
         strategy_id = str(metadata.get("strategy_id") or "").strip()
-        if strategy_id and isinstance(metadata.get("execution_success"), bool):
+        verification = metadata.get("verification_evidence")
+        task_id = str(metadata.get("task_id") or "").strip()
+        checks = verification.get("checks") if isinstance(verification, dict) else None
+        verification_status = (
+            str(verification.get("status") or "").strip()
+            if isinstance(verification, dict) else ""
+        )
+        verification_is_independent = (
+            isinstance(verification, dict)
+            and verification.get("source") == "mission_independent_verifier"
+            and str(verification.get("task_id") or "").strip() == task_id
+            and bool(str(verification.get("execution_event_id") or "").strip())
+            and bool(str(verification.get("verifier_id") or "").strip())
+            and bool(str(verification.get("verifier_version") or "").strip())
+            and verification_status in {"passed", "failed"}
+            and isinstance(checks, list)
+            and bool(checks)
+            and all(
+                isinstance(check, dict)
+                and bool(str(check.get("check_id") or "").strip())
+                and isinstance(check.get("passed"), bool)
+                for check in checks
+            )
+            and (
+                (verification_status == "passed" and all(check["passed"] for check in checks))
+                or (verification_status == "failed" and any(not check["passed"] for check in checks))
+            )
+        )
+        if (
+            strategy_id
+            and isinstance(metadata.get("execution_success"), bool)
+            and metadata.get("execution_success") is (verification_status == "passed")
+            and verification_is_independent
+        ):
             strategy = next((item for item in self.strategies if item.id == strategy_id), None)
-            task_id = str(metadata.get("task_id") or "").strip()
-            # Mission feedback must be tied to a real task and deduplicated in the
-            # persisted strategy record, not only by a mutable in-memory action flag.
+            # Mission feedback must be tied to independently verified evidence and
+            # deduplicated in the persisted strategy record, not only an action flag.
             if strategy is not None and task_id and task_id not in strategy.feedback_task_ids:
                 previous_successes = strategy.success_rate * strategy.usage_count
                 strategy.usage_count += 1
