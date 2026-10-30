@@ -1756,6 +1756,8 @@ def create_app() -> FastAPI:
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
         resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
+        # Fail closed until a production verifier is explicitly configured.
+        independent_verifier=None,
         organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
