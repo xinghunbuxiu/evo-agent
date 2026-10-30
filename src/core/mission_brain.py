@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .verification import normalize_verification_contract
+
 
 def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
     """Build an explicit, serializable central-coordination contract for a plan."""
@@ -48,6 +50,12 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
 
         status = status_value.strip()
         gap_type = str(node.get("gap_type") or "").strip()
+        raw_verification_contract = node.get("verification_contract")
+        verification_contract = (
+            normalize_verification_contract(raw_verification_contract)
+            if raw_verification_contract
+            else None
+        )
         if status == "needs_input":
             decision = "request_missing_input"
         elif status == "reuse_existing" or gap_type == "reuse_existing":
@@ -79,6 +87,7 @@ def build_mission_brain_contract(nodes: list[Any]) -> dict[str, Any]:
             "validation_checks": [
                 str(item) for item in node.get("validation_checks", []) if str(item).strip()
             ],
+            "verification_contract": verification_contract,
             "workforce_decision": workforce_decision,
             "parallel_safe": bool(node.get("parallel_safe", False)),
             "decision_trace": trace if isinstance(trace, list) else [],
