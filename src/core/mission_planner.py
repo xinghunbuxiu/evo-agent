@@ -163,6 +163,7 @@ class MissionNode:
     blockers: List[str] = field(default_factory=list)
     learning_objectives: List[str] = field(default_factory=list)
     validation_checks: List[str] = field(default_factory=list)
+    verification_contract: Dict[str, Any] = field(default_factory=dict)
     priority: str = "medium"
     next_actions: List[str] = field(default_factory=list)
 
@@ -190,6 +191,7 @@ class MissionNode:
             "blockers": self.blockers,
             "learning_objectives": self.learning_objectives,
             "validation_checks": self.validation_checks,
+            "verification_contract": self.verification_contract,
             "priority": self.priority,
             "next_actions": self.next_actions,
         }
