@@ -143,7 +143,17 @@ curl "http://localhost:8000/api/missions/worker-claims/recovery-review"
 curl "http://localhost:8000/api/missions/worker-claims/recovery-review?tenant_id=default&limit=100"
 ```
 
-接口只读取已持久化的 Mission 记录，不刷新 Mission、不派发任务，也不会释放 Worker。当前它提供的是**待复核清单**，不是人工确认/释放操作接口；处理前仍需核对任务队列与 Worker 注册表中的实际状态。
+接口只读取已持久化的 Mission 记录，不刷新 Mission、不派发任务，也不会释放 Worker。当前它提供的是**待复核清单**，不是人工确认/释放操作接口。
+
+该接口要求有效登录，并且必须指定已授权的 `tenant_id`。租户成员关系目前通过部署环境变量显式配置，不提供用户自助加入或 HTTP 提权入口；未配置、配置错误或身份字段不完整时一律拒绝访问。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
+
+```bash
+# 示例：为 password 登录用户 ID=7 授予 tenant-a 管理员角色，
+# 为 Gitee 用户 ID=12345 授予 tenant-a 只读成员角色
+EVO_TENANT_MEMBERSHIPS_JSON='{"password:7":{"tenant-a":"tenant_admin"},"gitee:12345":{"tenant-a":"viewer"}}'
+```
+
+角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。配置变更应通过受控部署配置完成，禁止将该环境变量暴露给普通用户。处理前仍需核对任务队列与 Worker 注册表中的实际状态。
 ## 生产部署
 
 ### 1. 安全加固
