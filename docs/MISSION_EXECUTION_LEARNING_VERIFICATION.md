@@ -94,7 +94,9 @@ context = {
         }
     }
 }
-``` The verifier resolves paths against the workspace root,
+```
+
+The verifier resolves paths against the workspace root,
 rejects absolute paths, traversal and symlink escapes, and limits inspected files to
 2 MiB. It never executes worker-provided shell commands or Python code and does not
 trust `task.result` or worker-reported success flags.
@@ -103,25 +105,33 @@ This is the first real artifact-inspection capability, not a general-purpose tes
 runner. Existing natural-language `validation_checks` are not automatically
 converted into executable checks. A Mission without an explicit structured contract
 remains unverified and cannot contribute strategy outcome feedback. In particular,
-file-presence/content checks do not prove program behavior; language-specific
-isolated test runners and signed verifier provenance remain future work.
+file-presence/content checks do not prove program behavior. Runtime-generated evidence
+is now HMAC-SHA256 signed with a workspace-local key under `.admin/`, created with
+owner-only permissions and a cross-process initialization lock. Strategy feedback and
+strategy promotion reject unsigned, tampered, or cross-tenant evidence. This protects
+the learning API against fabricated JSON evidence from callers that do not possess the
+workspace signing key; it is **not** a security boundary against a malicious process
+running as the same OS user or one that can read/replace the key. Production isolation
+still requires a separately protected secret or verifier service, plus language-specific
+sandboxed test runners.
 
 ## Boundaries and remaining work
 
 1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
-2. Worker-reported verification is treated as an untrusted claim unless independent verification evidence is produced.
-3. A successful test run does not establish distributed locking or multi-host correctness. Worker claims currently live in a file-backed registry with a cross-platform file lock.
-4. Process-crash recovery and stale-claim reclamation are not yet proven. A future recovery mechanism must reconcile claims against durable Mission/task state and must not release a claim while any linked task is still active.
-5. Logical worker cloning copies an approved profile; it does not itself start an isolated model, CLI, or device process.
+2. Worker-reported verification is treated as an untrusted claim unless independently inspected and runtime-signed evidence is produced.
+3. Workspace-local HMAC signing protects against data-only evidence forgery, not a malicious process running as the same OS user or able to read the key.
+4. A successful test run does not establish distributed locking or multi-host correctness. Worker claims currently live in a file-backed registry with a cross-platform file lock.
+5. Startup recovery now reconciles persisted Mission claims with durable queue state. Missing, active, ambiguous, or unqueryable tasks remain reserved for review; terminal tasks can be released idempotently with audit evidence.
+6. Logical worker cloning copies an approved profile; it does not itself start an isolated model, CLI, or device process.
 
 ## Next verification increment
 
-Prioritize crash/restart recovery for worker claims:
+Prioritize a separately protected signing secret and an isolated test-runner boundary:
 
-- Persist enough claim-to-Mission/node/task linkage to reconcile state after restart.
-- Recover only when linked tasks are confirmed terminal or definitively absent from durable queue state; ambiguous states must remain claimed and be surfaced for review.
-- Make recovery idempotent and record recovery evidence.
-- Add regression tests for restart with active tasks, terminal tasks, missing task records, and repeated recovery.
-- Keep multi-host/distributed lease guarantees explicitly out of scope until backed by a shared transactional store.
+- Move the signing key out of the worker-readable workspace, or delegate signing to a trusted verifier service.
+- Add Python/JavaScript test runners only behind an explicit, allowlisted execution profile.
+- Execute test suites in an OS/container sandbox with bounded time, memory, filesystem and network access.
+- Bind test output, exit status, test selection and artifact digests into signed evidence.
+- Keep multi-host worker lease guarantees out of scope until backed by a shared transactional store.
 
 The goal is to preserve the invariant: **never double-dispatch a worker, and never free a worker whose task may still be running.**
