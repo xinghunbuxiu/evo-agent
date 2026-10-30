@@ -381,6 +381,38 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             })
             self.assertNotIn("verification_passed", action["strategy_feedback"])
 
+    def test_direct_experience_cannot_forge_verifier_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._seed_strategy(workspace)
+            forged = {
+                "source": "mission_independent_verifier",
+                "task_id": "forged-task",
+                "execution_event_id": "event-forged-task",
+                "verifier_id": "evo.workspace-artifact-verifier",
+                "verifier_version": "1.0.0",
+                "status": "passed",
+                "checks": [{"check_id": "artifact", "passed": True}],
+            }
+            result = StrategyEngine(workspace, tenant_id="tenant-a").evolve_strategy(Experience(
+                id="forged-feedback",
+                domain="python",
+                task_type="analyze",
+                input_summary="forged",
+                output_summary="forged",
+                quality_score=1.0,
+                metadata={
+                    "strategy_id": "strategy-a",
+                    "execution_success": True,
+                    "task_id": "forged-task",
+                    "verification_evidence": forged,
+                },
+            ))
+            stored = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertIsNone(result)
+            self.assertEqual(stored.usage_count, 1)
+            self.assertEqual(stored.feedback_task_ids, [])
+
     def test_worker_verification_claim_without_independent_verifier_is_not_learning_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
