@@ -16,6 +16,25 @@ def mission_runs_file(workspace: Path) -> Path:
     return path
 
 
+def load_mission_runs_strict(workspace: Path) -> dict:
+    """Read persisted Mission evidence without converting corruption into an empty history."""
+    path = mission_runs_file(workspace)
+    if not path.is_file():
+        return {"updated_at": None, "items": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Mission runs store must contain a JSON object")
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise ValueError("Mission runs store must contain an items array")
+    if any(not isinstance(item, dict) for item in items):
+        raise ValueError("Mission runs store contains a non-object run")
+    return {
+        "updated_at": data.get("updated_at"),
+        "items": items,
+    }
+
+
 def load_mission_runs(workspace: Path) -> dict:
     path = mission_runs_file(workspace)
     if not path.is_file():
