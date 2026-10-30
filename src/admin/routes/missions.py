@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import Request
 
-from admin.mission_runtime import load_mission_runs
+from admin.mission_runtime import load_mission_runs, load_mission_runs_strict
 
 
 def register_mission_routes(
@@ -111,8 +111,12 @@ def register_mission_routes(
             return error_response("无权访问该租户", 403)
 
         # Read persisted evidence directly: do not refresh missions or trigger dispatch here.
-        state = load_mission_runs(workspace)
-        items = state.get("items", []) if isinstance(state, dict) else []
+        # Corrupt/incomplete storage must not masquerade as an empty review queue.
+        try:
+            state = load_mission_runs_strict(workspace)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return error_response(f"Mission 复核数据读取失败: {type(exc).__name__}", 500)
+        items = state["items"]
         reviews = []
         for mission_run in items:
             if not isinstance(mission_run, dict):
