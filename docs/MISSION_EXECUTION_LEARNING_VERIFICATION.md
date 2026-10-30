@@ -48,11 +48,19 @@ under `independent_verification`; worker result fields such as
 rechecks the evidence contract before changing usage counts or success rates, so
 callers cannot bypass the runtime gate by constructing an Experience directly.
 
-This is a **guardrail, not yet a production verifier integration**. The deterministic
-end-to-end test attaches a test verifier result explicitly. Production Mission
-execution still needs a separately invoked verifier that writes this action-level
-evidence from actual execution artifacts. Until that integration exists, unverified
-worker claims intentionally do not update strategy outcome statistics.
+This remains a **verifier integration boundary, not a production verifier**.
+Mission refresh now calls an injected `independent_verifier` callback for terminal
+tasks. The runtime first removes any pre-existing action-level evidence, then accepts
+only verifier identity/version and well-formed check results from that callback. The
+runtime itself binds the result to the queue task ID and completion event, derives
+passed/failed from the checks, and only then exposes `independent_verification` to
+strategy feedback. Callback errors and malformed results fail closed.
+
+The production server currently injects `None` deliberately because the repository
+does not yet provide a production verifier that independently inspects execution
+artifacts. Therefore production tasks remain unverified and cannot update strategy
+outcome statistics. The test verifier proves the injection boundary and task binding;
+it does **not** prove artifact-level verification or production learning.
 
 ## Boundaries and remaining work
 
