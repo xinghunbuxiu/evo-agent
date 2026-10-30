@@ -99,6 +99,34 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             self.assertEqual(len(persisted.feedback_task_ids), worker_count)
             self.assertEqual(set(persisted.feedback_task_ids), {f"parallel-{i}" for i in range(worker_count)})
 
+    def test_same_task_feedback_racing_across_processes_is_applied_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._seed_strategy(workspace)
+            context = multiprocessing.get_context("spawn")
+            worker_count = 6
+            barrier = context.Barrier(worker_count)
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_record_feedback_in_process,
+                    args=(str(workspace), "same-task", barrier, results),
+                )
+                for _ in range(worker_count)
+            ]
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=20)
+            for process in processes:
+                self.assertFalse(process.is_alive(), "feedback worker timed out")
+                self.assertEqual(process.exitcode, 0)
+            self.assertEqual([results.get(timeout=2) for _ in processes], [True] * worker_count)
+
+            persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertEqual(persisted.usage_count, 2)
+            self.assertEqual(persisted.feedback_task_ids, ["same-task"])
+
     def test_recommendation_without_explicit_usage_does_not_update_strategy(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
