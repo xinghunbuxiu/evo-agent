@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
 from core.learning import Experience, Strategy, StrategyEngine  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
+from core.verification import sign_verification_evidence  # noqa: E402
 
 
 def build_bindings(*, independent_verifier=None):
@@ -41,6 +42,15 @@ def build_bindings(*, independent_verifier=None):
 def _record_feedback_in_process(workspace, task_id, barrier, results):
     engine = StrategyEngine(Path(workspace), tenant_id="tenant-a")
     barrier.wait(timeout=10)
+    evidence = sign_verification_evidence(Path(workspace), "tenant-a", {
+        "source": "mission_independent_verifier",
+        "task_id": task_id,
+        "execution_event_id": f"event-{task_id}",
+        "verifier_id": "test-verifier",
+        "verifier_version": "1",
+        "status": "passed",
+        "checks": [{"check_id": "result", "passed": True}],
+    })
     result = engine.evolve_strategy(Experience(
         id=f"feedback-{task_id}",
         domain="python",
@@ -52,22 +62,14 @@ def _record_feedback_in_process(workspace, task_id, barrier, results):
             "strategy_id": "strategy-a",
             "execution_success": True,
             "task_id": task_id,
-            "verification_evidence": {
-                "source": "mission_independent_verifier",
-                "task_id": task_id,
-                "execution_event_id": f"event-{task_id}",
-                "verifier_id": "test-verifier",
-                "verifier_version": "1",
-                "status": "passed",
-                "checks": [{"check_id": "result", "passed": True}],
-            },
+            "verification_evidence": evidence,
         },
     ))
     results.put(bool(result))
 
 class MissionStrategyFeedbackTests(unittest.TestCase):
-    def _verification(self, task_id, *, passed=True):
-        return {
+    def _verification(self, task_id, *, passed=True, workspace=None):
+        evidence = {
             "source": "mission_independent_verifier",
             "task_id": task_id,
             "execution_event_id": f"event-{task_id}",
@@ -76,6 +78,9 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             "status": "passed" if passed else "failed",
             "checks": [{"check_id": "result", "passed": passed}],
         }
+        return sign_verification_evidence(
+            Path(workspace or tempfile.gettempdir()), "tenant-a", evidence
+        )
 
     def test_runtime_verifier_replaces_untrusted_action_evidence(self):
         task = SimpleNamespace(id="task-verify", completed_at="2026-10-31T00:00:00")
@@ -318,7 +323,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 "mission_run_id": "mission-1",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
-            action["independent_verification"] = self._verification("task-2")
+            action["independent_verification"] = self._verification("task-2", workspace=workspace)
             task = SimpleNamespace(
                 id="task-2",
                 result={
@@ -439,7 +444,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 "mission_run_id": "mission-first",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
-            action["independent_verification"] = self._verification("task-e2e")
+            action["independent_verification"] = self._verification("task-e2e", workspace=workspace)
             task = SimpleNamespace(
                 id="task-e2e",
                 result={
@@ -545,7 +550,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
 
                 self._seed_strategy(workspace)
                 action = {"recommended_strategies": [{"id": "strategy-a"}]}
-                action["independent_verification"] = self._verification("task-after-plan")
+                action["independent_verification"] = self._verification("task-after-plan", workspace=workspace)
                 task = SimpleNamespace(
                     id="task-after-plan",
                     result={"strategy_usage": {
