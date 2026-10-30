@@ -134,6 +134,37 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(decisions["write_readme"]["verification_contract"], declared_contract)
         self.assertIsNone(decisions["other_node"]["verification_contract"])
 
+    def test_invalid_template_contract_is_not_silently_replaced_by_context_contract(self):
+        planner = self._planner()
+        custom_templates = {
+            "invalid_contract": {
+                "title": "Invalid contract",
+                "description": "Reject malformed declaration",
+                "primary_capability_type": "automation",
+                "tasks": [{
+                    "id": "write_readme",
+                    "title": "Write README",
+                    "objective": "Create README",
+                    "task_type": "execute",
+                    "capability_type": "automation",
+                    "acceptance": "README exists",
+                    "verification_contract": "not-a-contract",
+                }],
+            }
+        }
+        valid_fallback = {
+            "schema_version": "mission.verification.v1",
+            "checks": [{"check_id": "exists", "type": "file_exists", "path": "README.md"}],
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+            with self.assertRaisesRegex(ValueError, "verification contract"):
+                planner.plan(
+                    tenant_id="tenant-a",
+                    goal="Create README",
+                    mission_kind="invalid_contract",
+                    context={"verification_contracts": {"write_readme": valid_fallback}},
+                )
+
     def test_missing_source_input_is_traceable_to_blocker_rule(self):
         planner = self._planner()
         custom_templates = {
