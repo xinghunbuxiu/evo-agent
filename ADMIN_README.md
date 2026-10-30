@@ -158,25 +158,25 @@ EVO_TENANT_MEMBERSHIPS_JSON='{"password:7":{"tenant-a":"tenant_admin"},"gitee:12
 ```bash
 # 初次授予租户管理员（需在可信服务器终端执行）
 PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
-  --file /secure/path/memberships.json --actor deployment-admin \
+  --file /secure/path/memberships.json \
   set password:7 tenant-a tenant_admin
 
 # 授予 Gitee 用户只读角色
 PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
-  --file /secure/path/memberships.json --actor deployment-admin \
+  --file /secure/path/memberships.json \
   set gitee:12345 tenant-a viewer
 
 # 调整角色 / 移除成员
 PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
-  --file /secure/path/memberships.json --actor deployment-admin \
+  --file /secure/path/memberships.json \
   set password:7 tenant-a member
 PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
-  --file /secure/path/memberships.json --actor deployment-admin \
+  --file /secure/path/memberships.json \
   remove password:7 tenant-a
 
 # 查看当前成员关系
 PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
-  --file /secure/path/memberships.json --actor deployment-admin list
+  --file /secure/path/memberships.json list
 ```
 
 脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`。审计操作者身份由进程的有效操作系统 UID 和系统账户名自动取得，不接受命令行传入的操作者名称；每次变更先记录 `change_requested`，原子写入成功后再记录 `change_applied`，审计包含时间、目标身份、租户和变更前后角色。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
