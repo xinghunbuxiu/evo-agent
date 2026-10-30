@@ -2,6 +2,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -17,7 +18,7 @@ class TenantMembershipCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry_path = Path(directory) / "memberships.json"
             audit_path = Path(directory) / "membership-audit.jsonl"
-            with unittest.mock.patch("sys.argv", [
+            with mock.patch("sys.argv", [
                 "manage_tenant_memberships.py", "--file", str(registry_path),
                 "--actor", "ops-user", "set", "password:7", "tenant-a", "tenant_admin",
             ]):
