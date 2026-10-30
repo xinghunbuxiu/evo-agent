@@ -163,7 +163,7 @@ class MissionNode:
     blockers: List[str] = field(default_factory=list)
     learning_objectives: List[str] = field(default_factory=list)
     validation_checks: List[str] = field(default_factory=list)
-    verification_contract: Dict[str, Any] = field(default_factory=dict)
+    verification_contract: Any = field(default_factory=dict)
     priority: str = "medium"
     next_actions: List[str] = field(default_factory=list)
 
@@ -622,7 +622,7 @@ class MissionPlanner:
             validation_checks=validation_checks,
             verification_contract=(
                 node_template.get("verification_contract")
-                if isinstance(node_template.get("verification_contract"), dict)
+                if "verification_contract" in node_template
                 else (
                     context.get("verification_contracts", {}).get(str(node_template.get("id") or "").strip(), {})
                     if isinstance(context.get("verification_contracts"), dict)
