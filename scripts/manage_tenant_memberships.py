@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import json
 import os
+import pwd
 import re
 import tempfile
 from datetime import datetime, timezone
@@ -66,7 +67,6 @@ def main() -> int:
     parser.add_argument("--file", type=Path, default=Path(os.getenv(
         "EVO_TENANT_MEMBERSHIPS_FILE", ".tenants/memberships.json"
     )))
-    parser.add_argument("--actor", required=True, help="operator identity, e.g. ops:deployment")
     sub = parser.add_subparsers(dest="command", required=True)
     set_cmd = sub.add_parser("set", help="create or change a membership")
     set_cmd.add_argument("subject", help="password:<numeric-id> or gitee:<numeric-id>")
@@ -108,22 +108,37 @@ def main() -> int:
                 del registry[args.subject]
             action, new_role = "remove", None
 
-        _atomic_write(args.file, registry)
         audit_path = args.file.with_name("membership-audit.jsonl")
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        effective_uid = os.geteuid()
+        try:
+            effective_username = pwd.getpwuid(effective_uid).pw_name
+        except KeyError:
+            effective_username = str(effective_uid)
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "actor": args.actor,
+            "actor_username": effective_username,
+            "actor_uid": effective_uid,
             "action": action,
             "subject": args.subject,
             "tenant_id": tenant_id,
             "previous_role": previous,
             "new_role": new_role,
         }
+        # Record intent first; the applied event is written only after atomic replacement.
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
         audit_fd = os.open(audit_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             os.fchmod(audit_fd, 0o600)
-            os.write(audit_fd, (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
+            os.write(audit_fd, (json.dumps({**record, "event": "change_requested"}, ensure_ascii=False) + "\\n").encode("utf-8"))
+            os.fsync(audit_fd)
+        finally:
+            os.close(audit_fd)
+
+        _atomic_write(args.file, registry)
+        audit_fd = os.open(audit_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        try:
+            os.fchmod(audit_fd, 0o600)
+            os.write(audit_fd, (json.dumps({**record, "event": "change_applied"}, ensure_ascii=False) + "\\n").encode("utf-8"))
             os.fsync(audit_fd)
         finally:
             os.close(audit_fd)
