@@ -110,6 +110,17 @@ class MissionWorkerClaimRecoveryRouteTests(unittest.TestCase):
             self.assertEqual(item["worker_claim"]["recovery_reason"], "queue_task_missing")
             self.assertEqual(refresh_calls, [])
 
+            anonymous_request = Request({"type": "http", "method": "GET", "path": "/api/missions/worker-claims/recovery-review", "headers": [], "query_string": b""})
+            anonymous = asyncio.run(handler(request=anonymous_request, tenant_id="tenant-a", limit=100))
+            self.assertEqual(anonymous["status"], 401)
+
+            cross_tenant_request = Request({"type": "http", "method": "GET", "path": "/api/missions/worker-claims/recovery-review", "headers": [(b"cookie", b"session=valid")], "query_string": b""})
+            forbidden = asyncio.run(handler(request=cross_tenant_request, tenant_id="tenant-b", limit=100))
+            self.assertEqual(forbidden["status"], 403)
+
+            missing_tenant = asyncio.run(handler(request=cross_tenant_request, tenant_id=None, limit=100))
+            self.assertEqual(missing_tenant["status"], 400)
+
 
 if __name__ == "__main__":
     unittest.main()
