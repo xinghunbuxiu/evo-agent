@@ -151,7 +151,37 @@ curl -b "session=<登录后获得的 session cookie>" \
 EVO_TENANT_MEMBERSHIPS_JSON='{"password:7":{"tenant-a":"tenant_admin"},"gitee:12345":{"tenant-a":"viewer"}}'
 ```
 
-角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。配置变更应通过受控部署配置完成，禁止将该环境变量暴露给普通用户。处理前仍需核对任务队列与 Worker 注册表中的实际状态。
+成员关系支持两种部署方式：小规模部署可继续使用 `EVO_TENANT_MEMBERSHIPS_JSON`；推荐生产环境使用受控文件 `EVO_TENANT_MEMBERSHIPS_FILE=/secure/path/memberships.json`。配置文件不存在、不可读、格式错误或含重复 JSON key 时一律拒绝访问；文件方式优先于 JSON 环境变量，不会在文件缺失时回退到环境变量。
+
+推荐通过服务器 Shell 管理成员，不开放普通 HTTP 自助提权接口：
+
+```bash
+# 初次授予租户管理员（需在可信服务器终端执行）
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json --actor deployment-admin \
+  set password:7 tenant-a tenant_admin
+
+# 授予 Gitee 用户只读角色
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json --actor deployment-admin \
+  set gitee:12345 tenant-a viewer
+
+# 调整角色 / 移除成员
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json --actor deployment-admin \
+  set password:7 tenant-a member
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json --actor deployment-admin \
+  remove password:7 tenant-a
+
+# 查看当前成员关系
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json --actor deployment-admin list
+```
+
+脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`，并将每次变更追加到同目录的 `membership-audit.jsonl`（记录操作者、时间、目标身份、租户和变更前后角色）。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
+
+角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
 
 ## 生产部署
 
