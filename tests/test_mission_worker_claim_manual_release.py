@@ -7,6 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.organization_runtime import OrganizationRegistry
+import admin.mission_runtime as mission_runtime
 from admin.mission_runtime import (
     load_mission_runs,
     release_worker_claim_for_review,
@@ -112,6 +113,34 @@ class MissionWorkerClaimManualReleaseTests(unittest.TestCase):
         self.assertEqual(persisted["state"], "released")
         self.assertEqual(persisted["release_operation"]["status"], "applied")
         self.assertEqual(self.registry.get_worker("worker-a")["status"], "available")
+
+    def test_retry_repairs_missing_applied_audit_after_state_was_released(self):
+        original = mission_runtime._append_worker_claim_recovery_audit
+
+        def fail_applied(workspace, event):
+            if event.get("event") == "release_applied":
+                raise OSError("simulated audit disk failure")
+            return original(workspace, event)
+
+        mission_runtime._append_worker_claim_recovery_audit = fail_applied
+        try:
+            with self.assertRaises(OSError):
+                self.release()
+        finally:
+            mission_runtime._append_worker_claim_recovery_audit = original
+
+        audit_path = self.workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
+        before = [__import__("json").loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([item["event"] for item in before], ["release_requested"])
+        self.assertEqual(
+            load_mission_runs(self.workspace)["items"][0]["actions"][0]["worker_claim"]["state"],
+            "released",
+        )
+
+        retried = self.release()
+        after = [__import__("json").loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(retried["already_released"])
+        self.assertEqual([item["event"] for item in after], ["release_requested", "release_applied"])
 
     def test_nonterminal_task_keeps_worker_claim_and_writes_no_audit(self):
         with self.assertRaisesRegex(ValueError, "task_not_terminal"):
