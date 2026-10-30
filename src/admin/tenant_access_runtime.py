@@ -38,7 +38,7 @@ def tenant_role_for_user(
     if not isinstance(memberships, dict):
         return None
 
-    subject_id = f"{provider}:{user.get(chr(105)+chr(100))}"
+    subject_id = f"{provider}:{user.get('id')}"
     user_memberships = memberships.get(subject_id)
     if not isinstance(user_memberships, dict):
         return None
