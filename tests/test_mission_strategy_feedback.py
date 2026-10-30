@@ -51,11 +51,31 @@ def _record_feedback_in_process(workspace, task_id, barrier, results):
             "strategy_id": "strategy-a",
             "execution_success": True,
             "task_id": task_id,
+            "verification_evidence": {
+                "source": "mission_independent_verifier",
+                "task_id": task_id,
+                "execution_event_id": f"event-{task_id}",
+                "verifier_id": "test-verifier",
+                "verifier_version": "1",
+                "status": "passed",
+                "checks": [{"check_id": "result", "passed": True}],
+            },
         },
     ))
     results.put(bool(result))
 
 class MissionStrategyFeedbackTests(unittest.TestCase):
+    def _verification(self, task_id, *, passed=True):
+        return {
+            "source": "mission_independent_verifier",
+            "task_id": task_id,
+            "execution_event_id": f"event-{task_id}",
+            "verifier_id": "test-verifier",
+            "verifier_version": "1",
+            "status": "passed" if passed else "failed",
+            "checks": [{"check_id": "result", "passed": passed}],
+        }
+
     def _seed_strategy(self, workspace):
         engine = StrategyEngine(workspace, tenant_id="tenant-a")
         engine.strategies.append(Strategy(
@@ -152,6 +172,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 "mission_run_id": "mission-1",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
+            action["independent_verification"] = self._verification("task-2")
             task = SimpleNamespace(
                 id="task-2",
                 result={
@@ -193,6 +214,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                     "strategy_id": "strategy-a",
                     "execution_success": True,
                     "task_id": "task-2",
+                    "verification_evidence": self._verification("task-2"),
                     "verification_passed": True,
                 },
             )
@@ -237,6 +259,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 "mission_run_id": "mission-first",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
+            action["independent_verification"] = self._verification("task-e2e")
             task = SimpleNamespace(
                 id="task-e2e",
                 result={
@@ -342,6 +365,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
 
                 self._seed_strategy(workspace)
                 action = {"recommended_strategies": [{"id": "strategy-a"}]}
+                action["independent_verification"] = self._verification("task-after-plan")
                 task = SimpleNamespace(
                     id="task-after-plan",
                     result={"strategy_usage": {
