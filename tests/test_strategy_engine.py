@@ -64,8 +64,12 @@ class StrategyEngineTests(unittest.TestCase):
                 "validation_passed": True,
                 "validation_evidence": {
                     "task_id": "different-task",
+                    "source": "mission_independent_verifier",
+                    "execution_event_id": "event-1",
+                    "verifier_id": "test-verifier",
+                    "verifier_version": "1",
                     "status": "passed",
-                    "checks": [{"name": "expected_output", "passed": True}],
+                    "checks": [{"check_id": "expected_output", "passed": True}],
                 },
             }))
             self.assertIsNone(mismatched_evidence)
@@ -77,8 +81,12 @@ class StrategyEngineTests(unittest.TestCase):
                 "validation_passed": True,
                 "validation_evidence": {
                     "task_id": "task-verified-1",
+                    "source": "mission_independent_verifier",
+                    "execution_event_id": "event-task-verified-1",
+                    "verifier_id": "test-verifier",
+                    "verifier_version": "1",
                     "status": "passed",
-                    "checks": [{"name": "expected_output", "passed": True}],
+                    "checks": [{"check_id": "expected_output", "passed": True}],
                 },
             }))
             self.assertIsNotNone(promoted)
@@ -110,6 +118,15 @@ class StrategyEngineTests(unittest.TestCase):
                 "strategy_id": "strategy-a",
                 "execution_success": False,
                 "task_id": "task-execution-feedback-1",
+                "verification_evidence": {
+                    "source": "mission_independent_verifier",
+                    "task_id": "task-execution-feedback-1",
+                    "execution_event_id": "event-task-execution-feedback-1",
+                    "verifier_id": "test-verifier",
+                    "verifier_version": "1",
+                    "status": "failed",
+                    "checks": [{"check_id": "expected_output", "passed": False}],
+                },
             }))
             reloaded = StrategyEngine(workspace)
             strategy = next(item for item in reloaded.strategies if item.id == "strategy-a")
