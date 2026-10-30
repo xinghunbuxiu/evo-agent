@@ -10,6 +10,7 @@ from core.organization_runtime import OrganizationRegistry
 from admin.mission_runtime import (
     load_mission_runs,
     release_worker_claim_for_review,
+    reconcile_worker_claims_on_startup,
     save_mission_runs,
 )
 
@@ -90,6 +91,27 @@ class MissionWorkerClaimManualReleaseTests(unittest.TestCase):
         self.assertEqual(audit_path.stat().st_mode & 0o777, 0o600)
         repeated = self.release()
         self.assertTrue(repeated["already_released"])
+
+    def test_startup_recovery_finishes_a_persisted_manual_release_intent(self):
+        state = load_mission_runs(self.workspace)
+        claim = state["items"][0]["actions"][0]["worker_claim"]
+        claim["release_operation"] = {
+            "status": "requested",
+            "requested_at": "2026-10-30T10:00:00+00:00",
+            "actor_provider": "password",
+            "actor_id": "7",
+        }
+        save_mission_runs(self.workspace, state)
+        result = reconcile_worker_claims_on_startup(
+            workspace=self.workspace,
+            task_queue=Queue(),
+            organization_registry=self.registry,
+        )
+        persisted = load_mission_runs(self.workspace)["items"][0]["actions"][0]["worker_claim"]
+        self.assertEqual(result["claims_released"], 1)
+        self.assertEqual(persisted["state"], "released")
+        self.assertEqual(persisted["release_operation"]["status"], "applied")
+        self.assertEqual(self.registry.get_worker("worker-a")["status"], "available")
 
     def test_nonterminal_task_keeps_worker_claim_and_writes_no_audit(self):
         with self.assertRaisesRegex(ValueError, "task_not_terminal"):
