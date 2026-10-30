@@ -149,6 +149,7 @@ class Database:
             return None
         return {
             "id": user["id"],
+            "auth_provider": "password",
             "login": user["username"],
             "name": user.get("name") or username,
         }
@@ -182,6 +183,7 @@ class Database:
         
         return {
             "id": user_info.get("id"),
+            "auth_provider": "gitee",
             "login": user_info.get("login"),
             "name": user_info.get("name"),
             "avatar": user_info.get("avatar_url"),
@@ -298,6 +300,7 @@ class Database:
                     # DictCursor 返回字典
                     return {
                         "id": result["id"] if isinstance(result, dict) else result[0],
+                        "auth_provider": "password",
                         "login": result["username"] if isinstance(result, dict) else result[1],
                         "name": (result["name"] if isinstance(result, dict) else result[2]) or username,
                     }
