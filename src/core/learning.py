@@ -10,6 +10,7 @@ Evo Core - AI 学习引擎
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 from dataclasses import dataclass, field
@@ -212,7 +213,41 @@ class StrategyEngine:
                 return strategy
         return None
 
+    @contextmanager
+    def _strategy_store_lock(self):
+        """Serialize strategy read-modify-write across threads and processes."""
+        self.strategy_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.strategy_file.with_suffix(self.strategy_file.suffix + ".lock")
+        with lock_path.open("a+b") as lock_handle:
+            if lock_handle.tell() == 0:
+                lock_handle.write(b"0")
+                lock_handle.flush()
+            lock_handle.seek(0)
+            try:
+                import fcntl
+            except ImportError:  # pragma: no cover - exercised on Windows
+                import msvcrt
+                msvcrt.locking(lock_handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock_handle.seek(0)
+                    msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
     def evolve_strategy(self, exp: Experience) -> Optional[Strategy]:
+        """Apply feedback under a process-wide lock to prevent lost updates."""
+        with self._strategy_store_lock():
+            # Reload under the lock: this instance may hold a stale snapshot.
+            self._load_strategies()
+            return self._evolve_strategy_locked(exp)
+
+    def _evolve_strategy_locked(self, exp: Experience) -> Optional[Strategy]:
         """Update usage evidence or promote an explicitly validated strategy proposal.
 
         Experience metadata contract:
