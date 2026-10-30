@@ -248,6 +248,7 @@ def create_mission_execution_bindings(
                 "mission_run_id": str(action.get("mission_run_id") or ""),
                 "verification_evidence": {
                     "source": "mission_independent_verifier",
+                    "task_id": task_id,
                     "execution_event_id": str(verification.get("execution_event_id") or ""),
                     "verifier_id": str(verification.get("verifier_id") or ""),
                     "verifier_version": str(verification.get("verifier_version") or ""),
