@@ -118,6 +118,19 @@ class WorkspaceArtifactVerificationTests(unittest.TestCase):
         finally:
             outside.unlink(missing_ok=True)
 
+    def test_windows_absolute_and_backslash_paths_are_rejected(self):
+        for unsafe_path in ("C:\\Windows\\win.ini", "\\\\server\\share\\file.txt", "src\\..\\secret.txt"):
+            with self.subTest(path=unsafe_path):
+                with self.assertRaises(ValueError):
+                    normalize_verification_contract({
+                        "schema_version": "mission.verification.v1",
+                        "checks": [{
+                            "check_id": "unsafe_path",
+                            "type": "file_exists",
+                            "path": unsafe_path,
+                        }],
+                    })
+
     def test_invalid_contract_is_rejected(self):
         with self.assertRaises(ValueError):
             normalize_verification_contract({
