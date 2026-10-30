@@ -15,7 +15,7 @@ from core.learning import Experience, Strategy, StrategyEngine  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
 
 
-def build_bindings():
+def build_bindings(*, independent_verifier=None):
     return create_mission_execution_bindings(
         load_learning_tasks=lambda workspace: {"tasks": {}},
         save_learning_tasks=lambda workspace, payload: None,
@@ -35,6 +35,7 @@ def build_bindings():
         resolve_effective_growth_policy=lambda **kwargs: {},
         growth_policy_decision_label=lambda *args, **kwargs: "",
         effective_platform_promotion_status=lambda *args, **kwargs: "",
+        independent_verifier=independent_verifier,
     )
 
 def _record_feedback_in_process(workspace, task_id, barrier, results):
@@ -75,6 +76,63 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             "status": "passed" if passed else "failed",
             "checks": [{"check_id": "result", "passed": passed}],
         }
+
+    def test_runtime_verifier_replaces_untrusted_action_evidence(self):
+        task = SimpleNamespace(id="task-verify", completed_at="2026-10-31T00:00:00")
+        action = {
+            "independent_verification": self._verification("forged-task"),
+            "verification_state": "passed",
+        }
+        verifier_calls = []
+
+        def verifier(**kwargs):
+            verifier_calls.append(kwargs)
+            return {
+                "verifier_id": "filesystem-test-verifier",
+                "verifier_version": "2",
+                "checks": [
+                    {"check_id": "artifact_exists", "passed": True},
+                    {"check_id": "test_result", "passed": False},
+                ],
+            }
+
+        verify = build_bindings(independent_verifier=verifier)["verify_mission_task"]
+        evidence = verify(
+            workspace=Path("."),
+            tenant_id="tenant-a",
+            mission_run={"mission_run_id": "mission-1"},
+            action=action,
+            task=task,
+        )
+
+        self.assertEqual(len(verifier_calls), 1)
+        self.assertEqual(evidence["source"], "mission_independent_verifier")
+        self.assertEqual(evidence["task_id"], "task-verify")
+        self.assertEqual(
+            evidence["execution_event_id"],
+            "task-completion:task-verify:2026-10-31T00:00:00",
+        )
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(action["verification_state"], "failed")
+        self.assertNotEqual(evidence["task_id"], "forged-task")
+
+    def test_missing_runtime_verifier_discards_forged_evidence(self):
+        task = SimpleNamespace(id="task-no-verifier", completed_at="2026-10-31T00:00:00")
+        action = {"independent_verification": self._verification("task-no-verifier")}
+        verify = build_bindings()["verify_mission_task"]
+
+        evidence = verify(
+            workspace=Path("."),
+            tenant_id="tenant-a",
+            mission_run={"mission_run_id": "mission-1"},
+            action=action,
+            task=task,
+        )
+
+        self.assertIsNone(evidence)
+        self.assertNotIn("independent_verification", action)
+        self.assertEqual(action["verification_state"], "unavailable")
+        self.assertEqual(action["verification_reason"], "verifier_not_configured")
 
     def _seed_strategy(self, workspace):
         engine = StrategyEngine(workspace, tenant_id="tenant-a")
