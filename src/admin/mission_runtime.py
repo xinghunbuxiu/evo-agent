@@ -4,6 +4,7 @@ Mission 运行态持久化、续跑与启动组装。
 
 from admin.worker_route_runtime import worker_supports_mission_follow_up
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -698,6 +699,16 @@ def create_start_mission(
 def _append_worker_claim_recovery_audit(workspace: Path, event: dict) -> None:
     path = workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    event_id = str(event.get("event_id") or "").strip()
+    if event_id and path.is_file():
+        with path.open("r", encoding="utf-8") as existing:
+            for raw_line in existing:
+                try:
+                    prior = json.loads(raw_line)
+                except ValueError:
+                    continue
+                if isinstance(prior, dict) and prior.get("event_id") == event_id:
+                    return
     line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
@@ -768,6 +779,39 @@ def release_worker_claim_for_review(
             active = worker.get("active_task_ids", []) if isinstance(worker, dict) else []
             released = worker.get("released_task_ids", []) if isinstance(worker, dict) else []
             if claim_id in released and claim_id not in active:
+                operation = matches[0][2].get("release_operation") or {}
+                operation_id = str(operation.get("operation_id") or "").strip()
+                if operation_id:
+                    task_ids = sorted({
+                        str(action.get("task_id") or "").strip()
+                        for _, action, _ in matches
+                        if str(action.get("task_id") or "").strip()
+                    })
+                    actor_provider = str(operation.get("actor_provider") or "")
+                    actor_id = str(operation.get("actor_id") or "")
+                    applied_at = str(operation.get("applied_at") or operation.get("requested_at") or now())
+                    _append_worker_claim_recovery_audit(
+                        workspace,
+                        {
+                            "event_id": f"{operation_id}:release_applied",
+                            "timestamp": applied_at,
+                            "event": "release_applied",
+                            "tenant_id": tenant_id,
+                            "mission_run_id": mission_run_id,
+                            "claim_id": claim_id,
+                            "worker_id": worker_id,
+                            "task_ids": task_ids,
+                            "reason": str(operation.get("reason") or ""),
+                            "actor_provider": actor_provider,
+                            "actor_id": actor_id,
+                            "before": {"mission_claim_state": "claimed"},
+                            "after": {
+                                "mission_claim_state": "released",
+                                "worker_status": worker.get("status"),
+                                "worker_active_task_ids": active,
+                            },
+                        },
+                    )
                 return {
                     "mission_run_id": mission_run_id,
                     "claim_id": claim_id,
@@ -808,8 +852,13 @@ def release_worker_claim_for_review(
 
         actor_provider = str(actor.get("auth_provider") or "")
         actor_id = str(actor.get("id") or "")
+        requested_at = now()
+        operation_id = hashlib.sha256(
+            f"{tenant_id}:{mission_run_id}:{claim_id}:{requested_at}".encode("utf-8")
+        ).hexdigest()
         event_base = {
-            "timestamp": now(),
+            "event_id": operation_id,
+            "timestamp": requested_at,
             "tenant_id": tenant_id,
             "mission_run_id": mission_run_id,
             "claim_id": claim_id,
@@ -822,13 +871,13 @@ def release_worker_claim_for_review(
         }
         _append_worker_claim_recovery_audit(
             workspace,
-            {**event_base, "event": "release_requested", "after": None},
+            {**event_base, "event_id": f"{operation_id}:release_requested", "event": "release_requested", "after": None},
         )
 
-        requested_at = now()
         for _, _, claim in matches:
             claim["release_operation"] = {
                 "status": "requested",
+                "operation_id": operation_id,
                 "reason": reason,
                 "requested_at": requested_at,
                 "actor_provider": actor_provider,
@@ -855,6 +904,7 @@ def release_worker_claim_for_review(
             workspace,
             {
                 **event_base,
+                "event_id": f"{operation_id}:release_applied",
                 "timestamp": released_at,
                 "event": "release_applied",
                 "after": {
