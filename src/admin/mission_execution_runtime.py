@@ -184,6 +184,10 @@ def create_mission_execution_bindings(
 
         task_id = str(getattr(task, "id", "") or "").strip()
         completed_at = str(getattr(task, "completed_at", "") or "").strip()
+        task_tenant_id = str(getattr(task, "tenant_id", "") or "").strip()
+        if task_tenant_id and task_tenant_id != tenant_id:
+            action["verification_reason"] = "task_tenant_mismatch"
+            return None
         if not task_id or not completed_at:
             action["verification_reason"] = "execution_event_missing"
             return None
