@@ -2,7 +2,7 @@
 
 # Web 框架
 fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
+uvicorn>=0.24.0  # Keep CI/runtime core lean; optional server extras are not required by regression tests
 starlette>=0.27.0
 
 # 数据处理
