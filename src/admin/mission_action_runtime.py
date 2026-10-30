@@ -246,6 +246,9 @@ def create_mission_action_runtime_bindings(
                 extra["mission_brain_decision"] = decision.get("decision")
                 extra["decision_trace"] = decision.get("decision_trace", [])
                 extra["validation_checks"] = decision.get("validation_checks", [])
+                verification_contract = decision.get("verification_contract")
+                if isinstance(verification_contract, dict):
+                    extra["verification_contract"] = verification_contract
                 extra["verified_skill_ids"] = decision.get("verified_skill_ids", [])
                 workforce_decision = decision.get("workforce_decision")
                 if isinstance(workforce_decision, dict):
