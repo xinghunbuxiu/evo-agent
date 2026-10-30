@@ -116,6 +116,37 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         self.assertEqual(action["verification_state"], "failed")
         self.assertNotEqual(evidence["task_id"], "forged-task")
 
+    def test_verifier_rejects_cross_tenant_task(self):
+        task = SimpleNamespace(
+            id="task-other-tenant",
+            completed_at="2026-10-31T00:00:00",
+            tenant_id="tenant-b",
+            status=SimpleNamespace(value="success"),
+        )
+        action = {}
+        calls = []
+
+        def verifier(**kwargs):
+            calls.append(kwargs)
+            return {
+                "verifier_id": "filesystem-test-verifier",
+                "verifier_version": "2",
+                "checks": [{"check_id": "artifact_exists", "passed": True}],
+            }
+
+        verify = build_bindings(independent_verifier=verifier)["verify_mission_task"]
+        evidence = verify(
+            workspace=Path("."),
+            tenant_id="tenant-a",
+            mission_run={"mission_run_id": "mission-1"},
+            action=action,
+            task=task,
+        )
+
+        self.assertIsNone(evidence)
+        self.assertEqual(calls, [])
+        self.assertEqual(action["verification_reason"], "task_tenant_mismatch")
+
     def test_successful_task_with_all_artifact_checks_passes(self):
         task = SimpleNamespace(
             id="task-passed",
