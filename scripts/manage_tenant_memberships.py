@@ -129,7 +129,7 @@ def main() -> int:
         audit_fd = os.open(audit_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             os.fchmod(audit_fd, 0o600)
-            os.write(audit_fd, (json.dumps({**record, "event": "change_requested"}, ensure_ascii=False) + "\\n").encode("utf-8"))
+            os.write(audit_fd, (json.dumps({**record, "event": "change_requested"}, ensure_ascii=False) + "\n").encode("utf-8"))
             os.fsync(audit_fd)
         finally:
             os.close(audit_fd)
@@ -138,7 +138,7 @@ def main() -> int:
         audit_fd = os.open(audit_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             os.fchmod(audit_fd, 0o600)
-            os.write(audit_fd, (json.dumps({**record, "event": "change_applied"}, ensure_ascii=False) + "\\n").encode("utf-8"))
+            os.write(audit_fd, (json.dumps({**record, "event": "change_applied"}, ensure_ascii=False) + "\n").encode("utf-8"))
             os.fsync(audit_fd)
         finally:
             os.close(audit_fd)
