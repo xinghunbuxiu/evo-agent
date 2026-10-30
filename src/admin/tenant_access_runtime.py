@@ -21,6 +21,9 @@ def tenant_role_for_user(
     """
     if not isinstance(user, dict) or user.get("id") is None:
         return None
+    provider = str(user.get("auth_provider") or "").strip()
+    if provider not in {"password", "gitee"}:
+        return None
     normalized_tenant_id = str(tenant_id or "").strip()
     if not normalized_tenant_id:
         return None
@@ -35,7 +38,8 @@ def tenant_role_for_user(
     if not isinstance(memberships, dict):
         return None
 
-    user_memberships = memberships.get(str(user.get("id")))
+    subject_id = f"{provider}:{user.get(chr(105)+chr(100))}"
+    user_memberships = memberships.get(subject_id)
     if not isinstance(user_memberships, dict):
         return None
     role = user_memberships.get(normalized_tenant_id)
