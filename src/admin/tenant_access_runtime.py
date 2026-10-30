@@ -16,7 +16,7 @@ def tenant_role_for_user(
     """Return the configured role for this authenticated user and tenant.
 
     Memberships are provisioned out-of-band through EVO_TENANT_MEMBERSHIPS_JSON.
-    The shape is {"<user-id>": {"<tenant-id>": "tenant_admin|member|viewer"}}.
+    The shape is {"password:<user-id>": {"<tenant-id>": "role"}, "gitee:<user-id>": {"<tenant-id>": "role"}}.
     Missing, malformed, or ambiguous configuration denies access.
     """
     if not isinstance(user, dict) or user.get("id") is None:
