@@ -683,11 +683,31 @@ def release_worker_claim_for_review(
             raise PermissionError("worker_claim_tenant_mismatch")
         if not any(run is selected_run for run, _, _ in matches):
             raise ValueError("worker_claim_not_attached_to_selected_run")
+
+        worker_id = next(iter(worker_ids))
+        if all(
+            claim.get("state") == "released"
+            and isinstance(claim.get("release_operation"), dict)
+            and claim["release_operation"].get("status") == "applied"
+            for _, _, claim in matches
+        ):
+            worker = organization_registry.get_worker(worker_id)
+            active = worker.get("active_task_ids", []) if isinstance(worker, dict) else []
+            released = worker.get("released_task_ids", []) if isinstance(worker, dict) else []
+            if claim_id in released and claim_id not in active:
+                return {
+                    "mission_run_id": mission_run_id,
+                    "claim_id": claim_id,
+                    "worker_id": worker_id,
+                    "state": "released",
+                    "already_released": True,
+                }
+            raise ValueError("worker_registry_claim_state_conflict")
+
         if any(claim.get("state") != "claimed" or claim.get("recovery_status") != "needs_review"
                for _, _, claim in matches):
             raise ValueError("worker_claim_not_pending_review")
 
-        worker_id = next(iter(worker_ids))
         task_ids = sorted({str(action.get("task_id") or "").strip() for _, action, _ in matches})
         if not task_ids or any(not task_id for task_id in task_ids):
             raise ValueError("worker_claim_task_identity_missing")
