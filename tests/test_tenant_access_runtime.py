@@ -10,6 +10,7 @@ class TenantAccessRuntimeTests(unittest.TestCase):
         self.assertEqual(tenant_role_for_user(user, "tenant-a", memberships_json=config), "tenant_admin")
         self.assertEqual(tenant_role_for_user(user, "tenant-b", memberships_json=config), "viewer")
         self.assertFalse(user_can_access_tenant(user, "tenant-c", memberships_json=config))
+        self.assertFalse(user_can_access_tenant({"id": 42, "auth_provider": "gitee"}, "tenant-a", memberships_json=config))
 
     def test_missing_or_malformed_membership_fails_closed(self):
         user = {"id": 42}
