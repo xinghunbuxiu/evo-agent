@@ -166,8 +166,11 @@ def _merge_release_markers(workspace: Path, incoming_items: list) -> list:
                 continue
             claim_id = str(claim.get("claim_id") or "").strip()
             operation = claim.get("release_operation")
-            if claim_id and isinstance(operation, dict) and operation.get("status") in {"requested", "applied"}:
-                markers[claim_id] = {
+            tenant_id = str(run.get("tenant_id") or "default")
+            worker_id = str(claim.get("worker_id") or "").strip()
+            marker_key = (tenant_id, claim_id, worker_id)
+            if claim_id and worker_id and isinstance(operation, dict) and operation.get("status") in {"requested", "applied"}:
+                markers[marker_key] = {
                     "state": claim.get("state"),
                     "released_at": claim.get("released_at"),
                     "recovery_status": claim.get("recovery_status"),
@@ -180,7 +183,9 @@ def _merge_release_markers(workspace: Path, incoming_items: list) -> list:
             claim = action.get("worker_claim") if isinstance(action, dict) else None
             if not isinstance(claim, dict):
                 continue
-            marker = markers.get(str(claim.get("claim_id") or "").strip())
+            run_tenant_id = str(run.get("tenant_id") or "default")
+            worker_id = str(claim.get("worker_id") or "").strip()
+            marker = markers.get((run_tenant_id, str(claim.get("claim_id") or "").strip(), worker_id))
             if marker is None:
                 continue
             current_operation = claim.get("release_operation")
