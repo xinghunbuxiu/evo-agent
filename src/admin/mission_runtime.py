@@ -184,11 +184,13 @@ def _merge_release_markers(workspace: Path, incoming_items: list) -> list:
             if marker is None:
                 continue
             current_operation = claim.get("release_operation")
+            if claim.get("state") == "released":
+                continue
             if not isinstance(current_operation, dict) or current_operation.get("status") != "applied":
                 claim["release_operation"] = copy.deepcopy(marker["release_operation"])
-                if marker["state"] == "released":
-                    for key in ("state", "released_at", "recovery_status", "recovery_reason", "recovery_checked_at"):
-                        claim[key] = marker[key]
+            if marker["state"] == "released":
+                for key in ("state", "released_at", "recovery_status", "recovery_reason", "recovery_checked_at"):
+                    claim[key] = marker[key]
     return incoming_items
 
 
@@ -307,6 +309,10 @@ def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, o
             claim["recovery_status"] = "recovered"
             claim["recovery_reason"] = None
             claim["recovery_checked_at"] = released_at
+            release_operation = claim.get("release_operation")
+            if isinstance(release_operation, dict) and release_operation.get("status") == "requested":
+                release_operation["status"] = "applied"
+                release_operation["applied_at"] = released_at
         released += 1
         changed = True
 
