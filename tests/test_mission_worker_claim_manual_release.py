@@ -88,6 +88,8 @@ class MissionWorkerClaimManualReleaseTests(unittest.TestCase):
             "release_requested", "release_applied",
         ])
         self.assertEqual(audit_path.stat().st_mode & 0o777, 0o600)
+        repeated = self.release()
+        self.assertTrue(repeated["already_released"])
 
     def test_nonterminal_task_keeps_worker_claim_and_writes_no_audit(self):
         with self.assertRaisesRegex(ValueError, "task_not_terminal"):
