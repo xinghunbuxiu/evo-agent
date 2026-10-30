@@ -224,7 +224,11 @@ def create_mission_execution_bindings(
 
         # Identity, task binding, event identity and status are runtime-owned.
         # The callback cannot choose another task or mark failed checks as passed.
-        status = "passed" if all(check["passed"] for check in checks) else "failed"
+        task_status_value = getattr(getattr(task, "status", None), "value", getattr(task, "status", ""))
+        task_succeeded = str(task_status_value or "").strip().lower() in {"success", "completed"}
+        if not task_succeeded:
+            checks = [*checks, {"check_id": "task_execution_succeeded", "passed": False}]
+        status = "passed" if task_succeeded and all(check["passed"] for check in checks) else "failed"
         evidence = {
             "source": "mission_independent_verifier",
             "task_id": task_id,
