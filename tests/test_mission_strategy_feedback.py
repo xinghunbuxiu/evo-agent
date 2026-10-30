@@ -116,6 +116,33 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         self.assertEqual(action["verification_state"], "failed")
         self.assertNotEqual(evidence["task_id"], "forged-task")
 
+    def test_successful_task_with_all_artifact_checks_passes(self):
+        task = SimpleNamespace(
+            id="task-passed",
+            completed_at="2026-10-31T00:00:00",
+            status=SimpleNamespace(value="success"),
+        )
+        action = {}
+
+        def verifier(**kwargs):
+            return {
+                "verifier_id": "filesystem-test-verifier",
+                "verifier_version": "2",
+                "checks": [{"check_id": "artifact_exists", "passed": True}],
+            }
+
+        verify = build_bindings(independent_verifier=verifier)["verify_mission_task"]
+        evidence = verify(
+            workspace=Path("."),
+            tenant_id="tenant-a",
+            mission_run={"mission_run_id": "mission-1"},
+            action=action,
+            task=task,
+        )
+
+        self.assertEqual(evidence["status"], "passed")
+        self.assertEqual(action["verification_state"], "passed")
+
     def test_failed_task_cannot_be_marked_passed_by_artifact_checks(self):
         task = SimpleNamespace(
             id="task-failed",
