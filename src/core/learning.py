@@ -16,6 +16,7 @@ from typing import Any, Optional, Dict, List
 from dataclasses import dataclass, field
 from datetime import datetime
 from .capability_types import infer_capability_type, legacy_domains_for_capability_type
+from .verification import verify_verification_evidence
 
 
 TASK_TYPE_ALIASES = {
@@ -293,6 +294,7 @@ class StrategyEngine:
             and isinstance(metadata.get("execution_success"), bool)
             and metadata.get("execution_success") is (verification_status == "passed")
             and verification_is_independent
+            and verify_verification_evidence(self.workspace, self.tenant_id, verification)
         ):
             strategy = next((item for item in self.strategies if item.id == strategy_id), None)
             # Mission feedback must be tied to independently verified evidence and
@@ -338,6 +340,7 @@ class StrategyEngine:
         if (
             metadata.get("validation_passed") is True
             and evidence_is_task_bound
+            and verify_verification_evidence(self.workspace, self.tenant_id, validation_evidence)
             and isinstance(proposal, dict)
         ):
             proposal_id = str(proposal.get("id") or "").strip()
