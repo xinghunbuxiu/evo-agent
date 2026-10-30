@@ -28,6 +28,8 @@ def register_mission_routes(
     derive_follow_up_context: Callable[[dict], dict],
     success_response: Callable[[dict | None, str], dict],
     error_response: Callable[[str, int], object],
+    get_session_user: Callable[[Request], dict | None],
+    authorize_tenant: Callable[[dict, str], bool],
 ) -> None:
     @app.post("/api/missions/plan")
     async def plan_mission(request: Request):
@@ -99,7 +101,15 @@ def register_mission_routes(
         })
 
     @app.get("/api/missions/worker-claims/recovery-review")
-    async def list_worker_claims_for_recovery_review(tenant_id: str | None = None, limit: int = 100):
+    async def list_worker_claims_for_recovery_review(request: Request, tenant_id: str | None = None, limit: int = 100):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if not tenant_id or not str(tenant_id).strip():
+            return error_response("必须指定 tenant_id", 400)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+
         # Read persisted evidence directly: do not refresh missions or trigger dispatch here.
         state = load_mission_runs(workspace)
         items = state.get("items", []) if isinstance(state, dict) else []
