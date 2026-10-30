@@ -620,6 +620,11 @@ class MissionPlanner:
             blockers=blockers,
             learning_objectives=self._unique_list(learning_objectives),
             validation_checks=validation_checks,
+            verification_contract=(
+                node_template.get("verification_contract")
+                if isinstance(node_template.get("verification_contract"), dict)
+                else {}
+            ),
             priority=priority,
             next_actions=next_actions,
             required_capabilities=self._node_required_capabilities(
