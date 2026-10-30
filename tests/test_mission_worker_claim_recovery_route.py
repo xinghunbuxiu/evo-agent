@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from starlette.requests import Request
+
 from admin.routes.missions import register_mission_routes
 from admin.mission_runtime import save_mission_runs
 
@@ -93,10 +95,13 @@ class MissionWorkerClaimRecoveryRouteTests(unittest.TestCase):
                 derive_follow_up_context=lambda run: {},
                 success_response=lambda data, message="": {"data": data, "message": message},
                 error_response=lambda message, status: {"error": message, "status": status},
+                get_session_user=lambda request: {"id": 7} if request.cookies.get("session") == "valid" else None,
+                authorize_tenant=lambda user, tenant_id: user.get("id") == 7 and tenant_id == "tenant-a",
             )
 
             handler = app.routes[("GET", "/api/missions/worker-claims/recovery-review")]
-            response = asyncio.run(handler(tenant_id="tenant-a", limit=100))
+            request = Request({"type": "http", "method": "GET", "path": "/api/missions/worker-claims/recovery-review", "headers": [(b"cookie", b"session=valid")], "query_string": b""})
+            response = asyncio.run(handler(request=request, tenant_id="tenant-a", limit=100))
 
             self.assertEqual(response["data"]["count"], 1)
             item = response["data"]["items"][0]
