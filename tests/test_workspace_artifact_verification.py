@@ -9,7 +9,12 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.mission_brain import build_mission_brain_contract
-from core.verification import normalize_verification_contract, verify_workspace_artifacts
+from core.verification import (
+    normalize_verification_contract,
+    sign_verification_evidence,
+    verify_verification_evidence,
+    verify_workspace_artifacts,
+)
 
 
 class WorkspaceArtifactVerificationTests(unittest.TestCase):
@@ -141,6 +146,24 @@ class WorkspaceArtifactVerificationTests(unittest.TestCase):
                     "command": "rm -rf /",
                 }],
             })
+
+    def test_verification_evidence_signature_is_integrity_and_tenant_bound(self):
+        evidence = {
+            "source": "mission_independent_verifier",
+            "task_id": "task-1",
+            "execution_event_id": "event-1",
+            "verifier_id": "test-verifier",
+            "verifier_version": "1",
+            "status": "passed",
+            "checks": [{"check_id": "artifact", "passed": True}],
+        }
+        signed = sign_verification_evidence(self.workspace, "tenant-a", evidence)
+        self.assertTrue(verify_verification_evidence(self.workspace, "tenant-a", signed))
+        self.assertFalse(verify_verification_evidence(self.workspace, "tenant-b", signed))
+        tampered = dict(signed)
+        tampered["status"] = "failed"
+        self.assertFalse(verify_verification_evidence(self.workspace, "tenant-a", tampered))
+        self.assertFalse(verify_verification_evidence(self.workspace / "missing", "tenant-a", signed))
 
     def test_mission_brain_preserves_validated_contract(self):
         contract = {
