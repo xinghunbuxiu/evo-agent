@@ -17,6 +17,7 @@ from admin.mission_execution_runtime import create_mission_execution_bindings  #
 from core.learning import Strategy, StrategyEngine  # noqa: E402
 from core.mission_brain import build_mission_brain_contract  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
+from core.verification import sign_verification_evidence  # noqa: E402
 
 
 class FakePriority:
@@ -188,7 +189,7 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
             action = dispatched["actions"][0]
             # This is attached by the independent verifier stage, separately from
             # the worker's strategy_usage claim in the task result.
-            action["independent_verification"] = {
+            action["independent_verification"] = sign_verification_evidence(workspace, tenant_id, {
                 "source": "mission_independent_verifier",
                 "task_id": "task-even-e2e",
                 "execution_event_id": "execution-event-even-e2e",
@@ -200,7 +201,7 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
                     {"check_id": "negative", "passed": True},
                     {"check_id": "zero", "passed": True},
                 ],
-            }
+            })
             self.assertTrue(action["mission_runtime_authorization"]["authorized"])
             self.assertEqual(action["decision_trace"], trace)
             self.assertEqual(action["recommended_strategies"][0]["id"], "strategy-even-python")
