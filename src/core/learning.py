@@ -376,8 +376,11 @@ class StrategyEngine:
                     strategy.usage_count = max(strategy.usage_count, 1)
                 changed = True
 
-        if changed:
-            self._save_strategies()
+        if not changed:
+            # A rejected, unsigned, tampered, or duplicate feedback event must not
+            # look like a successful update to the caller.
+            return None
+        self._save_strategies()
         return next(
             (item for item in self.strategies if item.id == strategy_id),
             next(
