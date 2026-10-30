@@ -43,6 +43,7 @@ from core import (
 from core.tenant import TenantManager
 from core.task_queue import get_task_queue, TaskPriority, TaskStatus
 from core.organization_runtime import OrganizationRegistry, sync_worker_catalog
+from core.verification import verify_workspace_artifacts
 from admin.database import db, MYSQL_AVAILABLE
 from admin.mission_runtime import (
     derive_follow_up_context,
@@ -1756,8 +1757,8 @@ def create_app() -> FastAPI:
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
         resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
-        # Fail closed until a production verifier is explicitly configured.
-        independent_verifier=None,
+        # The verifier reads declared artifacts inside the workspace; it never executes worker commands.
+        independent_verifier=verify_workspace_artifacts,
         organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
