@@ -5,7 +5,11 @@ commands or code, and every artifact path is confined to the workspace.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
+import secrets
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -14,6 +18,103 @@ VERIFIER_ID = "evo.workspace-artifact-verifier"
 VERIFIER_VERSION = "1.0.0"
 SCHEMA_VERSION = "mission.verification.v1"
 SUPPORTED_CHECK_TYPES = {"file_exists", "file_contains", "json_value_equals"}
+
+SIGNATURE_ALGORITHM = "hmac-sha256"
+SIGNING_KEY_FILENAME = "mission_verification_signing.key"
+
+
+def _verification_signing_key(workspace: Path, *, create: bool) -> bytes | None:
+    """Load a workspace-local signing key; create it atomically for the trusted runtime."""
+    admin_dir = Path(workspace) / ".admin"
+    key_path = admin_dir / SIGNING_KEY_FILENAME
+    if create:
+        admin_dir.mkdir(parents=True, exist_ok=True)
+    if key_path.is_symlink():
+        raise ValueError("verification signing key must not be a symlink")
+    if not key_path.exists():
+        if not create:
+            return None
+        key = secrets.token_bytes(32)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(str(key_path), flags, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(key)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception:
+                try:
+                    key_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+    if key_path.is_symlink() or not key_path.is_file():
+        raise ValueError("verification signing key is not a regular file")
+    key = key_path.read_bytes()
+    if len(key) != 32:
+        raise ValueError("verification signing key has an invalid length")
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        pass
+    return key
+
+
+def _verification_signature_payload(evidence: dict[str, Any], tenant_id: str) -> bytes:
+    unsigned = {key: value for key, value in evidence.items() if key != "signature"}
+    envelope = {"tenant_id": str(tenant_id or "default"), "evidence": unsigned}
+    return json.dumps(
+        envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def sign_verification_evidence(
+    workspace: Path, tenant_id: str, evidence: dict[str, Any]
+) -> dict[str, Any]:
+    """Sign runtime-owned verification evidence before it enters strategy feedback."""
+    if not isinstance(evidence, dict):
+        raise ValueError("verification evidence must be an object")
+    signed = dict(evidence)
+    key = _verification_signing_key(Path(workspace), create=True)
+    assert key is not None
+    digest = hmac.new(key, _verification_signature_payload(signed, tenant_id), hashlib.sha256).hexdigest()
+    signed["signature"] = {
+        "algorithm": SIGNATURE_ALGORITHM,
+        "key_id": hashlib.sha256(key).hexdigest()[:16],
+        "value": digest,
+    }
+    return signed
+
+
+def verify_verification_evidence(
+    workspace: Path, tenant_id: str, evidence: Any
+) -> bool:
+    """Verify integrity and tenant binding; unsigned legacy claims fail closed."""
+    if not isinstance(evidence, dict):
+        return False
+    signature = evidence.get("signature")
+    if not isinstance(signature, dict) or signature.get("algorithm") != SIGNATURE_ALGORITHM:
+        return False
+    try:
+        key = _verification_signing_key(Path(workspace), create=False)
+        if key is None:
+            return False
+        expected_key_id = hashlib.sha256(key).hexdigest()[:16]
+        if not hmac.compare_digest(str(signature.get("key_id") or ""), expected_key_id):
+            return False
+        expected = hmac.new(
+            key, _verification_signature_payload(evidence, tenant_id), hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(str(signature.get("value") or ""), expected)
+    except (OSError, TypeError, ValueError):
+        return False
+
 
 
 def normalize_verification_contract(value: Any) -> dict[str, Any]:
