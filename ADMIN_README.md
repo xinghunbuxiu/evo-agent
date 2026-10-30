@@ -179,7 +179,7 @@ PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
   --file /secure/path/memberships.json --actor deployment-admin list
 ```
 
-脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`，并将每次变更追加到同目录的 `membership-audit.jsonl`（记录操作者、时间、目标身份、租户和变更前后角色）。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
+脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`。审计操作者身份由进程的有效操作系统 UID 和系统账户名自动取得，不接受命令行传入的操作者名称；每次变更先记录 `change_requested`，原子写入成功后再记录 `change_applied`，审计包含时间、目标身份、租户和变更前后角色。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
 
 角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
 
