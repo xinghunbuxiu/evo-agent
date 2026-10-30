@@ -365,7 +365,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                     "strategy_id": "strategy-a",
                     "execution_success": True,
                     "task_id": "task-2",
-                    "verification_evidence": self._verification("task-2"),
+                    "verification_evidence": self._verification("task-2", workspace=workspace),
                     "verification_passed": True,
                 },
             )
