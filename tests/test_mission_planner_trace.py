@@ -87,6 +87,53 @@ class MissionPlannerTraceTests(unittest.TestCase):
             self.assertEqual(trace["strategy_retrieval"]["result"], "matched")
             self.assertEqual(trace["strategy_retrieval"]["evidence"]["tenant_id"], "test-tenant")
 
+    def test_context_verification_contract_is_bound_to_matching_node(self):
+        planner = self._planner()
+        custom_templates = {
+            "artifact_demo": {
+                "title": "Artifact demo",
+                "description": "Verify a declared artifact",
+                "primary_capability_type": "automation",
+                "tasks": [{
+                    "id": "write_readme",
+                    "title": "Write README",
+                    "objective": "Create a README",
+                    "task_type": "execute",
+                    "capability_type": "automation",
+                    "acceptance": "README exists",
+                }, {
+                    "id": "other_node",
+                    "title": "Other",
+                    "objective": "No artifact contract",
+                    "task_type": "plan",
+                    "capability_type": "automation",
+                    "acceptance": "Plan",
+                }],
+            }
+        }
+        declared_contract = {
+            "schema_version": "mission.verification.v1",
+            "checks": [{
+                "check_id": "readme_exists",
+                "type": "file_exists",
+                "path": "README.md",
+            }],
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+            result = planner.plan(
+                tenant_id="tenant-a",
+                goal="Create and verify README",
+                mission_kind="artifact_demo",
+                context={"verification_contracts": {"write_readme": declared_contract}},
+            )
+
+        by_id = {node["id"]: node for node in result["nodes"]}
+        self.assertEqual(by_id["write_readme"]["verification_contract"], declared_contract)
+        self.assertEqual(by_id["other_node"]["verification_contract"], {})
+        decisions = {item["node_id"]: item for item in result["orchestration"]["node_decisions"]}
+        self.assertEqual(decisions["write_readme"]["verification_contract"], declared_contract)
+        self.assertIsNone(decisions["other_node"]["verification_contract"])
+
     def test_missing_source_input_is_traceable_to_blocker_rule(self):
         planner = self._planner()
         custom_templates = {
