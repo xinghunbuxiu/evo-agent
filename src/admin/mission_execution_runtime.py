@@ -180,6 +180,38 @@ def create_mission_execution_bindings(
         if not isinstance(usage, dict) or usage.get("strategy_used") is not True:
             return False
         strategy_id = str(usage.get("strategy_id") or "").strip()
+        task_id = str(getattr(task, "id", "") or "").strip()
+        verification = action.get("independent_verification")
+        checks = verification.get("checks") if isinstance(verification, dict) else None
+        verification_status = (
+            str(verification.get("status") or "").strip()
+            if isinstance(verification, dict) else ""
+        )
+        # Verification must be attached by the Mission runtime's verifier, not
+        # accepted from the worker's result payload. Worker-reported booleans are
+        # retained as claims only and can never update strategy outcome statistics.
+        if (
+            not task_id
+            or not isinstance(verification, dict)
+            or verification.get("source") != "mission_independent_verifier"
+            or str(verification.get("task_id") or "").strip() != task_id
+            or not str(verification.get("execution_event_id") or "").strip()
+            or not str(verification.get("verifier_id") or "").strip()
+            or not str(verification.get("verifier_version") or "").strip()
+            or verification_status not in {"passed", "failed"}
+            or not isinstance(checks, list)
+            or not checks
+            or any(
+                not isinstance(check, dict)
+                or not str(check.get("check_id") or "").strip()
+                or not isinstance(check.get("passed"), bool)
+                for check in checks
+            )
+            or (verification_status == "passed" and not all(check["passed"] for check in checks))
+            or (verification_status == "failed" and all(check["passed"] for check in checks))
+        ):
+            return False
+        execution_success = verification_status == "passed"
         if not strategy_id:
             return False
 
@@ -200,9 +232,6 @@ def create_mission_execution_bindings(
         engine = StrategyEngine(workspace, tenant_id=tenant_id)
         if not any(item.id == strategy_id for item in engine.strategies):
             return False
-        task_id = str(getattr(task, "id", "") or "").strip()
-        if not task_id:
-            return False
         domain = str(usage.get("domain") or action.get("strategy_domain") or "general")
         experience = Experience(
             id=f"mission-strategy-feedback-{task_id}",
@@ -217,7 +246,14 @@ def create_mission_execution_bindings(
                 "source": "mission_execution_feedback",
                 "task_id": task_id,
                 "mission_run_id": str(action.get("mission_run_id") or ""),
-                # This is an unverified worker claim, not independent validation evidence.
+                "verification_evidence": {
+                    "source": "mission_independent_verifier",
+                    "execution_event_id": str(verification.get("execution_event_id") or ""),
+                    "verifier_id": str(verification.get("verifier_id") or ""),
+                    "verifier_version": str(verification.get("verifier_version") or ""),
+                    "status": verification_status,
+                    "checks": checks,
+                },
                 "worker_reported_verification_passed": usage.get("verification_passed") is True,
             },
         )
@@ -229,6 +265,13 @@ def create_mission_execution_bindings(
         action["strategy_feedback"] = {
             "strategy_id": strategy_id,
             "execution_success": bool(execution_success),
+            "verification": {
+                "status": verification_status,
+                "source": "mission_independent_verifier",
+                "execution_event_id": str(verification.get("execution_event_id") or ""),
+                "verifier_id": str(verification.get("verifier_id") or ""),
+                "verifier_version": str(verification.get("verifier_version") or ""),
+            },
             "verification_claim": {
                 "passed": usage.get("verification_passed") is True,
                 "source": "worker_reported_unverified",
