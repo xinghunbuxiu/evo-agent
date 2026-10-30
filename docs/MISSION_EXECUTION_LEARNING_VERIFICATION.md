@@ -48,19 +48,17 @@ under `independent_verification`; worker result fields such as
 rechecks the evidence contract before changing usage counts or success rates, so
 callers cannot bypass the runtime gate by constructing an Experience directly.
 
-This remains a **verifier integration boundary, not a production verifier**.
-Mission refresh now calls an injected `independent_verifier` callback for terminal
-tasks. The runtime first removes any pre-existing action-level evidence, then accepts
-only verifier identity/version and well-formed check results from that callback. The
-runtime itself binds the result to the queue task ID and completion event, derives
-passed/failed from the checks, and only then exposes `independent_verification` to
-strategy feedback. Callback errors and malformed results fail closed.
+This remains a **limited verifier integration, not a general production test runner**.
+Mission refresh calls an injected `independent_verifier` callback for terminal tasks.
+The runtime first removes any pre-existing action-level evidence, then accepts only
+verifier identity/version and well-formed check results from that callback. The runtime
+itself binds the result to the queue task ID and completion event, derives passed/failed
+from the checks, and only then exposes `independent_verification` to strategy feedback.
+Callback errors, malformed results, failed queue tasks, and cross-tenant tasks fail closed.
 
-The production server currently injects `None` deliberately because the repository
-does not yet provide a production verifier that independently inspects execution
-artifacts. Therefore production tasks remain unverified and cannot update strategy
-outcome statistics. The test verifier proves the injection boundary and task binding;
-it does **not** prove artifact-level verification or production learning.
+The production server injects the read-only workspace artifact verifier described below.
+Only tasks with an explicit, valid structured contract can receive artifact verification;
+tasks without one remain unverified and cannot update strategy outcome statistics.
 
 ## Read-only workspace artifact verifier (2026-10-31)
 
@@ -71,9 +69,32 @@ Mission nodes may now carry an optional `verification_contract` using schema
 - `file_contains`: a UTF-8 file contains the declared text.
 - `json_value_equals`: a JSON value at a declared key/index path equals the expected value.
 
-The contract is validated during Mission brain contract construction and propagated
-to the Mission action. The production server injects the read-only verifier into the
-Mission execution runtime. The verifier resolves paths against the workspace root,
+A contract can be declared directly on a registered task template as
+`verification_contract`, or supplied at Mission planning time through
+`context.verification_contracts`, keyed by the exact node ID. A task-template
+declaration takes precedence over the context mapping. The planner preserves the
+declaration; the Mission brain validates it; the action runtime carries it into the
+execution record; and the production server injects the read-only verifier into the
+Mission execution runtime.
+
+Example planning context:
+
+```python
+context = {
+    "verification_contracts": {
+        "write_readme": {
+            "schema_version": "mission.verification.v1",
+            "checks": [
+                {
+                    "check_id": "readme_exists",
+                    "type": "file_exists",
+                    "path": "README.md",
+                }
+            ],
+        }
+    }
+}
+``` The verifier resolves paths against the workspace root,
 rejects absolute paths, traversal and symlink escapes, and limits inspected files to
 2 MiB. It never executes worker-provided shell commands or Python code and does not
 trust `task.result` or worker-reported success flags.
