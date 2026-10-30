@@ -1,5 +1,6 @@
 """Mission strategy feedback must be explicit and idempotent."""
 
+import multiprocessing
 import sys
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
-from core.learning import Strategy, StrategyEngine  # noqa: E402
+from core.learning import Experience, Strategy, StrategyEngine  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
 
 
@@ -36,6 +37,23 @@ def build_bindings():
         effective_platform_promotion_status=lambda *args, **kwargs: "",
     )
 
+def _record_feedback_in_process(workspace, task_id, barrier, results):
+    engine = StrategyEngine(Path(workspace), tenant_id="tenant-a")
+    barrier.wait(timeout=10)
+    result = engine.evolve_strategy(Experience(
+        id=f"feedback-{task_id}",
+        domain="python",
+        task_type="analyze",
+        input_summary="parallel feedback",
+        output_summary="completed",
+        quality_score=1.0,
+        metadata={
+            "strategy_id": "strategy-a",
+            "execution_success": True,
+            "task_id": task_id,
+        },
+    ))
+    results.put(bool(result))
 
 class MissionStrategyFeedbackTests(unittest.TestCase):
     def _seed_strategy(self, workspace):
@@ -51,6 +69,35 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             usage_count=1,
         ))
         engine._save_strategies()
+
+    def test_parallel_process_feedback_does_not_lose_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._seed_strategy(workspace)
+            context = multiprocessing.get_context("spawn")
+            worker_count = 6
+            barrier = context.Barrier(worker_count)
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_record_feedback_in_process,
+                    args=(str(workspace), f"parallel-{index}", barrier, results),
+                )
+                for index in range(worker_count)
+            ]
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=20)
+            for process in processes:
+                self.assertFalse(process.is_alive(), "feedback worker timed out")
+                self.assertEqual(process.exitcode, 0)
+            self.assertEqual([results.get(timeout=2) for _ in processes], [True] * worker_count)
+
+            persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
+            self.assertEqual(persisted.usage_count, 1 + worker_count)
+            self.assertEqual(len(persisted.feedback_task_ids), worker_count)
+            self.assertEqual(set(persisted.feedback_task_ids), {f"parallel-{i}" for i in range(worker_count)})
 
     def test_recommendation_without_explicit_usage_does_not_update_strategy(self):
         with tempfile.TemporaryDirectory() as tmp:
