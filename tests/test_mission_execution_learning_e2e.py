@@ -186,6 +186,21 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
             self.assertTrue(runtime_evidence["passed"])
             self.assertEqual(len(dispatched["actions"]), 1)
             action = dispatched["actions"][0]
+            # This is attached by the independent verifier stage, separately from
+            # the worker's strategy_usage claim in the task result.
+            action["independent_verification"] = {
+                "source": "mission_independent_verifier",
+                "task_id": "task-even-e2e",
+                "execution_event_id": "execution-event-even-e2e",
+                "verifier_id": "deterministic-assertion-verifier",
+                "verifier_version": "1",
+                "status": "passed",
+                "checks": [
+                    {"check_id": "positive", "passed": True},
+                    {"check_id": "negative", "passed": True},
+                    {"check_id": "zero", "passed": True},
+                ],
+            }
             self.assertTrue(action["mission_runtime_authorization"]["authorized"])
             self.assertEqual(action["decision_trace"], trace)
             self.assertEqual(action["recommended_strategies"][0]["id"], "strategy-even-python")
