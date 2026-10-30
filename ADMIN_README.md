@@ -136,11 +136,9 @@ GET /api/stats
 服务启动时，如果关联队列任务缺失、状态无法读取、仍未结束，或 Worker 释放失败，系统会保留占用并标记为 `needs_review`，避免误释放正在使用的员工。
 
 ```bash
-# 查询所有待人工复核的 Worker Claim
-curl "http://localhost:8000/api/missions/worker-claims/recovery-review"
-
-# 按租户筛选并限制返回条数（最多 500 条）
-curl "http://localhost:8000/api/missions/worker-claims/recovery-review?tenant_id=default&limit=100"
+# 使用已登录浏览器会话对应的 session Cookie，并明确指定租户
+curl -b "session=<登录后获得的 session cookie>" \
+  "http://localhost:8000/api/missions/worker-claims/recovery-review?tenant_id=tenant-a&limit=100"
 ```
 
 接口只读取已持久化的 Mission 记录，不刷新 Mission、不派发任务，也不会释放 Worker。当前它提供的是**待复核清单**，不是人工确认/释放操作接口。
@@ -154,6 +152,7 @@ EVO_TENANT_MEMBERSHIPS_JSON='{"password:7":{"tenant-a":"tenant_admin"},"gitee:12
 ```
 
 角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。配置变更应通过受控部署配置完成，禁止将该环境变量暴露给普通用户。处理前仍需核对任务队列与 Worker 注册表中的实际状态。
+
 ## 生产部署
 
 ### 1. 安全加固
