@@ -20,23 +20,28 @@ class TenantMembershipCliTests(unittest.TestCase):
             audit_path = Path(directory) / "membership-audit.jsonl"
             with mock.patch("sys.argv", [
                 "manage_tenant_memberships.py", "--file", str(registry_path),
-                "--actor", "ops-user", "set", "password:7", "tenant-a", "tenant_admin",
+                "set", "password:7", "tenant-a", "tenant_admin",
             ]):
                 self.assertEqual(MODULE.main(), 0)
             self.assertEqual(json.loads(registry_path.read_text())["password:7"]["tenant-a"], "tenant_admin")
             self.assertEqual(registry_path.stat().st_mode & 0o777, 0o600)
             first = json.loads(audit_path.read_text().splitlines()[0])
-            self.assertEqual(first["actor"], "ops-user")
+            self.assertIn("actor_username", first)
+            self.assertIsInstance(first["actor_uid"], int)
+            self.assertEqual(first["event"], "change_requested")
             self.assertIsNone(first["previous_role"])
             self.assertEqual(first["new_role"], "tenant_admin")
 
             with unittest.mock.patch("sys.argv", [
                 "manage_tenant_memberships.py", "--file", str(registry_path),
-                "--actor", "ops-user", "remove", "password:7", "tenant-a",
+                "remove", "password:7", "tenant-a",
             ]):
                 self.assertEqual(MODULE.main(), 0)
             self.assertEqual(json.loads(registry_path.read_text()), {})
-            self.assertEqual(len(audit_path.read_text().splitlines()), 2)
+            audit_records = [json.loads(line) for line in audit_path.read_text().splitlines()]
+            self.assertEqual(len(audit_records), 4)
+            self.assertEqual(audit_records[1]["event"], "change_applied")
+            self.assertEqual(audit_records[2]["event"], "change_requested")
 
     def test_duplicate_registry_keys_are_rejected_without_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
