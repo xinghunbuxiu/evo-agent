@@ -32,7 +32,7 @@ class TenantMembershipCliTests(unittest.TestCase):
             self.assertIsNone(first["previous_role"])
             self.assertEqual(first["new_role"], "tenant_admin")
 
-            with unittest.mock.patch("sys.argv", [
+            with mock.patch("sys.argv", [
                 "manage_tenant_memberships.py", "--file", str(registry_path),
                 "remove", "password:7", "tenant-a",
             ]):
