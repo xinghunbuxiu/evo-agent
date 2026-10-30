@@ -16,6 +16,8 @@ class TenantAccessRuntimeTests(unittest.TestCase):
         user = {"id": 42}
         self.assertIsNone(tenant_role_for_user(user, "tenant-a", memberships_json=""))
         self.assertIsNone(tenant_role_for_user(user, "tenant-a", memberships_json="{"))
+        duplicate_tenant = '{"password:42":{"tenant-a":"viewer","tenant-a":"tenant_admin"}}'
+        self.assertIsNone(tenant_role_for_user({"id": 42, "auth_provider": "password"}, "tenant-a", memberships_json=duplicate_tenant))
         self.assertIsNone(tenant_role_for_user({"login": "alice", "id": 42}, "tenant-a", memberships_json='{"password:42":{"tenant-a":"tenant_admin"}}'))
 
     def test_unknown_roles_are_denied(self):
