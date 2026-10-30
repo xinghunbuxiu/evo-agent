@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.learning import Experience, Strategy, StrategyEngine  # noqa: E402
+from core.verification import sign_verification_evidence  # noqa: E402
 
 
 class StrategyEngineTests(unittest.TestCase):
@@ -79,7 +80,7 @@ class StrategyEngineTests(unittest.TestCase):
                 "task_id": "task-verified-1",
                 "strategy_proposal": proposal,
                 "validation_passed": True,
-                "validation_evidence": {
+                "validation_evidence": sign_verification_evidence(workspace, "default", {
                     "task_id": "task-verified-1",
                     "source": "mission_independent_verifier",
                     "execution_event_id": "event-task-verified-1",
@@ -87,7 +88,7 @@ class StrategyEngineTests(unittest.TestCase):
                     "verifier_version": "1",
                     "status": "passed",
                     "checks": [{"check_id": "expected_output", "passed": True}],
-                },
+                }),
             }))
             self.assertIsNotNone(promoted)
             self.assertTrue(engine.strategy_file.is_file())
@@ -118,7 +119,7 @@ class StrategyEngineTests(unittest.TestCase):
                 "strategy_id": "strategy-a",
                 "execution_success": False,
                 "task_id": "task-execution-feedback-1",
-                "verification_evidence": {
+                "verification_evidence": sign_verification_evidence(workspace, "default", {
                     "source": "mission_independent_verifier",
                     "task_id": "task-execution-feedback-1",
                     "execution_event_id": "event-task-execution-feedback-1",
@@ -126,7 +127,7 @@ class StrategyEngineTests(unittest.TestCase):
                     "verifier_version": "1",
                     "status": "failed",
                     "checks": [{"check_id": "expected_output", "passed": False}],
-                },
+                }),
             }))
             reloaded = StrategyEngine(workspace)
             strategy = next(item for item in reloaded.strategies if item.id == "strategy-a")
