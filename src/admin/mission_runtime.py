@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,32 +20,50 @@ def mission_runs_file(workspace: Path) -> Path:
     return path
 
 
+_MISSION_CLAIM_THREAD_LOCK = threading.RLock()
+_MISSION_CLAIM_LOCK_STATE = threading.local()
+
+
 @contextmanager
 def exclusive_mission_claim_lock(workspace: Path):
-    """Serialize startup recovery and operator release across processes."""
-    lock_path = workspace / ".admin" / ".mission-worker-claims.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as handle:
-        if os.name == "nt":
-            import msvcrt
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+    """Serialize claim transitions across threads and processes; reentrant per thread."""
+    with _MISSION_CLAIM_THREAD_LOCK:
+        depth = getattr(_MISSION_CLAIM_LOCK_STATE, "depth", 0)
+        if depth:
+            _MISSION_CLAIM_LOCK_STATE.depth = depth + 1
             try:
                 yield
             finally:
+                _MISSION_CLAIM_LOCK_STATE.depth -= 1
+            return
+
+        lock_path = workspace / ".admin" / ".mission-worker-claims.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 0
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 0
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _write_mission_runs_atomic(workspace: Path, payload: dict) -> None:
@@ -134,8 +153,51 @@ def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:
     return result
 
 
+def _merge_release_markers(workspace: Path, incoming_items: list) -> list:
+    path = mission_runs_file(workspace)
+    if not path.is_file():
+        return incoming_items
+    persisted = load_mission_runs_strict(workspace)["items"]
+    markers = {}
+    for run in persisted:
+        for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id") or "").strip()
+            operation = claim.get("release_operation")
+            if claim_id and isinstance(operation, dict) and operation.get("status") in {"requested", "applied"}:
+                markers[claim_id] = {
+                    "state": claim.get("state"),
+                    "released_at": claim.get("released_at"),
+                    "recovery_status": claim.get("recovery_status"),
+                    "recovery_reason": claim.get("recovery_reason"),
+                    "recovery_checked_at": claim.get("recovery_checked_at"),
+                    "release_operation": copy.deepcopy(operation),
+                }
+    for run in incoming_items:
+        for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            if not isinstance(claim, dict):
+                continue
+            marker = markers.get(str(claim.get("claim_id") or "").strip())
+            if marker is None:
+                continue
+            current_operation = claim.get("release_operation")
+            if not isinstance(current_operation, dict) or current_operation.get("status") != "applied":
+                claim["release_operation"] = copy.deepcopy(marker["release_operation"])
+                if marker["state"] == "released":
+                    for key in ("state", "released_at", "recovery_status", "recovery_reason", "recovery_checked_at"):
+                        claim[key] = marker[key]
+    return incoming_items
+
+
 def save_mission_runs(workspace: Path, payload: dict) -> None:
-    _write_mission_runs_atomic(workspace, payload)
+    with exclusive_mission_claim_lock(workspace):
+        normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
+        normalized_items = [item for item in normalized_items if isinstance(item, dict)] if isinstance(normalized_items, list) else []
+        normalized_items = _merge_release_markers(workspace, normalized_items)
+        _write_mission_runs_atomic(workspace, {"items": normalized_items})
 
 
 def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organization_registry) -> dict:
