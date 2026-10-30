@@ -181,7 +181,25 @@ PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
 
 脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`。审计操作者身份由进程的有效操作系统 UID 和系统账户名自动取得，不接受命令行传入的操作者名称；每次变更先记录 `change_requested`，原子写入成功后再记录 `change_applied`，审计包含时间、目标身份、租户和变更前后角色。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
 
-角色目前仅用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；尚未开放人工释放写操作。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
+角色用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；只有 `tenant_admin` 可以执行人工释放。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
+
+人工释放前必须由运维人员确认任务确实已结束，并核对任务结果。接口会从服务端持久化 Mission run 中重新读取 Claim 及全部关联任务，不接受客户端传入的 Worker/任务列表；只有全部关联任务处于 `success`、`completed`、`failed` 或 `cancelled` 终态，且 Worker Registry 当前占用与 Claim 一致时才会释放。任何数据缺失、租户冲突、状态不确定或 Registry 不匹配都会拒绝释放。
+
+```bash
+curl -X POST \
+  -b "session=<登录后获得的 session cookie>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "tenant-a",
+    "mission_run_id": "mission-run-id",
+    "reason": "已核对所有关联任务结果，确认任务终止且 Worker 占用属于该 Claim"
+  }' \
+  "http://localhost:8000/api/missions/worker-claims/<claim-id>/release"
+```
+
+释放操作会先持久化 `release_requested` 意图并记录操作者、租户、任务、原因和操作 ID，再释放 Worker Registry，最后将 Mission Claim 标记为 released 并写入 `release_applied` 审计。审计事件按操作 ID 幂等；如果释放状态已落盘但 applied 审计写入失败，重复请求会补齐缺失的 applied 审计事件。启动恢复会识别持久化的 requested 意图，并在重新核验所有关联任务终态后继续完成释放。复核审计文件位于 `.admin/worker_claim_recovery_audit.jsonl`，文件权限为 `0600`。
+
+**注意**：Mission runs 与 Worker Registry 仍是两个独立文件存储；协调锁覆盖本应用内遵循该锁的 Claim 转换和 Mission 保存路径，但这不是数据库级跨存储事务，也不提供跨主机共享文件系统的一致性保证。部署为多主机时应迁移到具备事务/租约能力的共享持久化存储。发生 503 时不要据此断言 Worker 一定仍占用或一定已释放，应先查看 recovery-review 清单、Mission Claim 状态和审计日志，再决定是否重试。
 
 ## 生产部署
 
