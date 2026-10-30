@@ -886,9 +886,11 @@ def release_worker_claim_for_review(
             raise ValueError("worker_registry_claim_state_invalid")
         if claim_id in active and claim_id in released:
             raise ValueError("worker_registry_claim_state_conflict")
-        already_released = claim_id in released and claim_id not in active
-        if not already_released and claim_id not in active:
+        # A registry-side release without a matching released Mission record is drift,
+        # not an idempotent retry. The fully released/idempotent case is handled above.
+        if claim_id not in active:
             raise ValueError("worker_registry_claim_mismatch")
+        already_released = False
 
         actor_provider = str(actor.get("auth_provider") or "")
         actor_id = str(actor.get("id") or "")
