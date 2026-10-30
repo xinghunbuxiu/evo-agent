@@ -97,6 +97,8 @@ class MissionWorkerClaimRecoveryRouteTests(unittest.TestCase):
                 error_response=lambda message, status: {"error": message, "status": status},
                 get_session_user=lambda request: {"id": 7} if request.cookies.get("session") == "valid" else None,
                 authorize_tenant=lambda user, tenant_id: user.get("id") == 7 and tenant_id == "tenant-a",
+                tenant_role=lambda user, tenant_id: "tenant_admin" if user.get("id") == 7 and tenant_id == "tenant-a" else None,
+                organization_registry=object(),
             )
 
             handler = app.routes[("GET", "/api/missions/worker-claims/recovery-review")]
