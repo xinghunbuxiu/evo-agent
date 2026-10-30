@@ -93,6 +93,7 @@ from admin.runtime_state import (
     save_autonomy_runtime as _save_autonomy_runtime,
     save_learning_tasks as _save_learning_tasks,
 )
+from admin.tenant_access_runtime import user_can_access_tenant as _user_can_access_tenant
 from admin.session_runtime import (
     create_session as _create_session_entry,
     delete_session as _delete_session_entry,
@@ -2384,6 +2385,8 @@ def create_app() -> FastAPI:
         derive_follow_up_context=derive_follow_up_context,
         success_response=success_response,
         error_response=error_response,
+        get_session_user=_get_session_user,
+        authorize_tenant=_user_can_access_tenant,
     )
 
     register_self_media_routes(
