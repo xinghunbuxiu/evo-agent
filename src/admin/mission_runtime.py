@@ -324,6 +324,46 @@ def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, o
 
     if changed:
         save_mission_runs(workspace, {"items": items})
+
+    # Complete the audit side of any persisted release intent. This also repairs
+    # a crash after the Mission/Registry transition but before release_applied.
+    for run in items:
+        if not isinstance(run, dict):
+            continue
+        actions = run.get("actions", []) if isinstance(run.get("actions"), list) else []
+        for action in actions:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            operation = claim.get("release_operation") if isinstance(claim, dict) else None
+            if not isinstance(operation, dict) or operation.get("status") != "applied":
+                continue
+            operation_id = str(operation.get("operation_id") or "").strip()
+            if not operation_id:
+                continue
+            worker_id = str(claim.get("worker_id") or "").strip()
+            worker = organization_registry.get_worker(worker_id) if worker_id else None
+            _append_worker_claim_recovery_audit(
+                workspace,
+                {
+                    "event_id": f"{operation_id}:release_applied",
+                    "timestamp": str(operation.get("applied_at") or claim.get("released_at") or datetime.now().astimezone().isoformat()),
+                    "event": "release_applied",
+                    "tenant_id": str(operation.get("tenant_id") or run.get("tenant_id") or "default"),
+                    "mission_run_id": str(operation.get("mission_run_id") or run.get("mission_run_id") or ""),
+                    "claim_id": str(claim.get("claim_id") or ""),
+                    "worker_id": worker_id,
+                    "task_ids": operation.get("task_ids") if isinstance(operation.get("task_ids"), list) else [],
+                    "reason": str(operation.get("reason") or ""),
+                    "actor_provider": str(operation.get("actor_provider") or ""),
+                    "actor_id": str(operation.get("actor_id") or ""),
+                    "before": {"mission_claim_state": "claimed"},
+                    "after": {
+                        "mission_claim_state": "released",
+                        "worker_status": worker.get("status") if isinstance(worker, dict) else None,
+                        "worker_active_task_ids": worker.get("active_task_ids") if isinstance(worker, dict) else None,
+                    },
+                },
+            )
+
     return {
         "mission_runs": len([item for item in items if isinstance(item, dict)]),
         "claims_checked": checked,
@@ -882,6 +922,9 @@ def release_worker_claim_for_review(
                 "requested_at": requested_at,
                 "actor_provider": actor_provider,
                 "actor_id": actor_id,
+                "tenant_id": tenant_id,
+                "mission_run_id": mission_run_id,
+                "task_ids": task_ids,
             }
         save_mission_runs(workspace, {"items": items})
 
