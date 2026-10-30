@@ -43,7 +43,7 @@ def normalize_verification_contract(value: Any) -> dict[str, Any]:
             or PureWindowsPath(relative_path).drive
             or "\\" in relative_path
             or ":" in relative_path
-            or "\\x00" in relative_path
+            or "\x00" in relative_path
         ):
             raise ValueError(f"verification check {check_id!r} requires a portable relative path")
         if any(part in {"", ".", ".."} for part in Path(relative_path).parts):
