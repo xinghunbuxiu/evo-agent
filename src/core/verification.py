@@ -10,6 +10,7 @@ import hmac
 import json
 import os
 import secrets
+from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -23,26 +24,52 @@ SIGNATURE_ALGORITHM = "hmac-sha256"
 SIGNING_KEY_FILENAME = "mission_verification_signing.key"
 
 
+@contextmanager
+def _verification_key_lock(lock_path: Path):
+    """Serialize first-time key creation across local processes and platforms."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - Windows
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _verification_signing_key(workspace: Path, *, create: bool) -> bytes | None:
     """Load a workspace-local signing key; create it atomically for the trusted runtime."""
     admin_dir = Path(workspace) / ".admin"
     key_path = admin_dir / SIGNING_KEY_FILENAME
     if create:
         admin_dir.mkdir(parents=True, exist_ok=True)
-    if key_path.is_symlink():
-        raise ValueError("verification signing key must not be a symlink")
-    if not key_path.exists():
-        if not create:
-            return None
-        key = secrets.token_bytes(32)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        try:
+    if not admin_dir.is_dir():
+        return None
+    with _verification_key_lock(key_path.with_suffix(key_path.suffix + ".lock")):
+        if key_path.is_symlink():
+            raise ValueError("verification signing key must not be a symlink")
+        if not key_path.exists():
+            if not create:
+                return None
+            key = secrets.token_bytes(32)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
             fd = os.open(str(key_path), flags, 0o600)
-        except FileExistsError:
-            pass
-        else:
             try:
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(key)
@@ -54,17 +81,16 @@ def _verification_signing_key(workspace: Path, *, create: bool) -> bytes | None:
                 except OSError:
                     pass
                 raise
-    if key_path.is_symlink() or not key_path.is_file():
-        raise ValueError("verification signing key is not a regular file")
-    key = key_path.read_bytes()
-    if len(key) != 32:
-        raise ValueError("verification signing key has an invalid length")
-    try:
-        os.chmod(key_path, 0o600)
-    except OSError:
-        pass
-    return key
-
+        if key_path.is_symlink() or not key_path.is_file():
+            raise ValueError("verification signing key is not a regular file")
+        key = key_path.read_bytes()
+        if len(key) != 32:
+            raise ValueError("verification signing key has an invalid length")
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+        return key
 
 def _verification_signature_payload(evidence: dict[str, Any], tenant_id: str) -> bytes:
     unsigned = {key: value for key, value in evidence.items() if key != "signature"}
