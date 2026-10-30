@@ -646,6 +646,7 @@ def release_worker_claim_for_review(
     tenant_id: str,
     claim_id: str,
     actor: dict,
+    reason: str,
     task_queue,
     organization_registry,
 ) -> dict:
@@ -721,6 +722,7 @@ def release_worker_claim_for_review(
             "claim_id": claim_id,
             "worker_id": worker_id,
             "task_ids": task_ids,
+            "reason": reason,
             "actor_provider": actor_provider,
             "actor_id": actor_id,
             "before": {"mission_claim_state": "claimed", "worker_active_task_ids": list(active)},
@@ -734,6 +736,7 @@ def release_worker_claim_for_review(
         for _, _, claim in matches:
             claim["release_operation"] = {
                 "status": "requested",
+                "reason": reason,
                 "requested_at": requested_at,
                 "actor_provider": actor_provider,
                 "actor_id": actor_id,
