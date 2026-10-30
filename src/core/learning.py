@@ -251,8 +251,10 @@ class StrategyEngine:
         """Update usage evidence or promote an explicitly validated strategy proposal.
 
         Experience metadata contract:
-        - strategy_id + execution_success: update an existing strategy's observed outcome.
-        - strategy_proposal + validation_passed=True: register a new verified strategy.
+        - strategy_id + execution_success + independent verification evidence:
+          update an existing strategy's observed outcome.
+        - strategy_proposal + validation_passed=True + independent verification
+          evidence: register a new verified strategy.
         Merely storing an experience or assigning a high quality_score never promotes a strategy.
         """
         metadata = exp.metadata if isinstance(exp.metadata, dict) else {}
@@ -316,14 +318,23 @@ class StrategyEngine:
             bool(task_id)
             and evidence_task_id == task_id
             and isinstance(validation_evidence, dict)
+            and validation_evidence.get("source") == "mission_independent_verifier"
+            and bool(str(validation_evidence.get("execution_event_id") or "").strip())
+            and bool(str(validation_evidence.get("verifier_id") or "").strip())
+            and bool(str(validation_evidence.get("verifier_version") or "").strip())
             and validation_evidence.get("status") == "passed"
             and isinstance(checks, list)
             and bool(checks)
-            and all(isinstance(check, dict) and check.get("passed") is True for check in checks)
+            and all(
+                isinstance(check, dict)
+                and bool(str(check.get("check_id") or "").strip())
+                and check.get("passed") is True
+                for check in checks
+            )
         )
-        # A boolean supplied by a caller is not enough to promote a reusable
-        # strategy. Require non-empty, passing checks bound to the same task ID.
-        # The runtime must still source these checks from actual execution results.
+        # A boolean or worker-authored check list is not enough to promote a
+        # reusable strategy. Require verifier identity/version and execution-event
+        # linkage as well as non-empty passing checks bound to the same task ID.
         if (
             metadata.get("validation_passed") is True
             and evidence_is_task_bound
