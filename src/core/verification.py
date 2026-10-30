@@ -6,7 +6,7 @@ commands or code, and every artifact path is confined to the workspace.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -36,8 +36,16 @@ def normalize_verification_contract(value: Any) -> dict[str, Any]:
             raise ValueError(f"verification check {index} has a missing or duplicate check_id")
         if check_type not in SUPPORTED_CHECK_TYPES:
             raise ValueError(f"verification check {check_id!r} uses an unsupported type")
-        if not relative_path or Path(relative_path).is_absolute():
-            raise ValueError(f"verification check {check_id!r} requires a relative path")
+        if (
+            not relative_path
+            or Path(relative_path).is_absolute()
+            or PureWindowsPath(relative_path).is_absolute()
+            or PureWindowsPath(relative_path).drive
+            or "\\" in relative_path
+            or ":" in relative_path
+            or "\\x00" in relative_path
+        ):
+            raise ValueError(f"verification check {check_id!r} requires a portable relative path")
         if any(part in {"", ".", ".."} for part in Path(relative_path).parts):
             raise ValueError(f"verification check {check_id!r} has an unsafe path")
         item: dict[str, Any] = {
@@ -74,6 +82,8 @@ def _workspace_file(workspace: Path, relative_path: str) -> Path:
         raise ValueError("artifact path escapes workspace") from exc
     if not candidate.is_file():
         raise ValueError("artifact is not a regular file")
+    if candidate.stat().st_size > 2 * 1024 * 1024:
+        raise ValueError("artifact exceeds the 2 MiB verification limit")
     return candidate
 
 
