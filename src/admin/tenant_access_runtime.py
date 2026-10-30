@@ -7,6 +7,15 @@ import os
 from typing import Any
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate membership key: {key}")
+        result[key] = value
+    return result
+
+
 def tenant_role_for_user(
     user: dict[str, Any] | None,
     tenant_id: str,
@@ -32,7 +41,7 @@ def tenant_role_for_user(
     if raw is None:
         raw = os.getenv("EVO_TENANT_MEMBERSHIPS_JSON", "")
     try:
-        memberships = json.loads(raw) if raw else {}
+        memberships = json.loads(raw, object_pairs_hook=_reject_duplicate_keys) if raw else {}
     except (TypeError, ValueError):
         return None
     if not isinstance(memberships, dict):
