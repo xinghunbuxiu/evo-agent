@@ -38,6 +38,22 @@ The worker is a deterministic test-only adapter. This proves evidence continuity
 - Observed job steps: runner diagnostics, checkout, Python virtual environment, dependency installation, regression suite, and artifact upload all completed successfully.
 - This is evidence that the workflow completed successfully; this document does not assert a test count unless the uploaded regression output is inspected.
 
+## Independent-verification gate (2026-10-30)
+
+Strategy outcome statistics now require structured verification evidence bound to the
+same task: verifier identity/version, execution event ID, a passed/failed status, and
+non-empty check-level results. The evidence must be attached to the Mission action
+under `independent_verification`; worker result fields such as
+`strategy_usage.verification_passed` remain untrusted claims. The StrategyEngine
+rechecks the evidence contract before changing usage counts or success rates, so
+callers cannot bypass the runtime gate by constructing an Experience directly.
+
+This is a **guardrail, not yet a production verifier integration**. The deterministic
+end-to-end test attaches a test verifier result explicitly. Production Mission
+execution still needs a separately invoked verifier that writes this action-level
+evidence from actual execution artifacts. Until that integration exists, unverified
+worker claims intentionally do not update strategy outcome statistics.
+
 ## Boundaries and remaining work
 
 1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
