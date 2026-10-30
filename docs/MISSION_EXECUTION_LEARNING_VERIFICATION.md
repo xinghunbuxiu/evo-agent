@@ -62,6 +62,29 @@ artifacts. Therefore production tasks remain unverified and cannot update strate
 outcome statistics. The test verifier proves the injection boundary and task binding;
 it does **not** prove artifact-level verification or production learning.
 
+## Read-only workspace artifact verifier (2026-10-31)
+
+Mission nodes may now carry an optional `verification_contract` using schema
+`mission.verification.v1`. The deterministic workspace verifier currently supports:
+
+- `file_exists`: a regular file exists inside the workspace.
+- `file_contains`: a UTF-8 file contains the declared text.
+- `json_value_equals`: a JSON value at a declared key/index path equals the expected value.
+
+The contract is validated during Mission brain contract construction and propagated
+to the Mission action. The production server injects the read-only verifier into the
+Mission execution runtime. The verifier resolves paths against the workspace root,
+rejects absolute paths, traversal and symlink escapes, and limits inspected files to
+2 MiB. It never executes worker-provided shell commands or Python code and does not
+trust `task.result` or worker-reported success flags.
+
+This is the first real artifact-inspection capability, not a general-purpose test
+runner. Existing natural-language `validation_checks` are not automatically
+converted into executable checks. A Mission without an explicit structured contract
+remains unverified and cannot contribute strategy outcome feedback. In particular,
+file-presence/content checks do not prove program behavior; language-specific
+isolated test runners and signed verifier provenance remain future work.
+
 ## Boundaries and remaining work
 
 1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
