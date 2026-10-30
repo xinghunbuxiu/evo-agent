@@ -98,9 +98,14 @@ class MissionWorkerClaimManualReleaseTests(unittest.TestCase):
         claim = state["items"][0]["actions"][0]["worker_claim"]
         claim["release_operation"] = {
             "status": "requested",
+            "operation_id": "test-operation-startup-recovery",
             "requested_at": "2026-10-30T10:00:00+00:00",
             "actor_provider": "password",
             "actor_id": "7",
+            "tenant_id": "tenant-a",
+            "mission_run_id": "run-a",
+            "task_ids": ["task-a"],
+            "reason": "Startup recovery test after interrupted manual release",
         }
         save_mission_runs(self.workspace, state)
         result = reconcile_worker_claims_on_startup(
@@ -113,6 +118,10 @@ class MissionWorkerClaimManualReleaseTests(unittest.TestCase):
         self.assertEqual(persisted["state"], "released")
         self.assertEqual(persisted["release_operation"]["status"], "applied")
         self.assertEqual(self.registry.get_worker("worker-a")["status"], "available")
+        audit_path = self.workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
+        audit = [__import__("json").loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([event["event"] for event in audit], ["release_applied"])
+        self.assertEqual(audit[0]["event_id"], "test-operation-startup-recovery:release_applied")
 
     def test_retry_repairs_missing_applied_audit_after_state_was_released(self):
         original = mission_runtime._append_worker_claim_recovery_audit
