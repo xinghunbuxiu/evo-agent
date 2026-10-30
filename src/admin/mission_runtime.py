@@ -5,6 +5,9 @@ Mission 运行态持久化、续跑与启动组装。
 from admin.worker_route_runtime import worker_supports_mission_follow_up
 import copy
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -14,6 +17,54 @@ def mission_runs_file(workspace: Path) -> Path:
     path = workspace / ".admin" / "mission_runs.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@contextmanager
+def exclusive_mission_claim_lock(workspace: Path):
+    """Serialize startup recovery and operator release across processes."""
+    lock_path = workspace / ".admin" / ".mission-worker-claims.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _write_mission_runs_atomic(workspace: Path, payload: dict) -> None:
+    path = mission_runs_file(workspace)
+    normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
+    normalized_items = _retain_mission_runs(normalized_items) if isinstance(normalized_items, list) else []
+    content = json.dumps({
+        "updated_at": datetime.now().isoformat(),
+        "items": normalized_items,
+    }, indent=2, ensure_ascii=False)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 def load_mission_runs_strict(workspace: Path) -> dict:
@@ -84,18 +135,19 @@ def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:
 
 
 def save_mission_runs(workspace: Path, payload: dict) -> None:
-    normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
-    normalized_items = _retain_mission_runs(normalized_items) if isinstance(normalized_items, list) else []
-    mission_runs_file(workspace).write_text(
-        json.dumps({
-            "updated_at": datetime.now().isoformat(),
-            "items": normalized_items,
-        }, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_mission_runs_atomic(workspace, payload)
 
 
 def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organization_registry) -> dict:
+    with exclusive_mission_claim_lock(workspace):
+        return _reconcile_worker_claims_on_startup_locked(
+            workspace=workspace,
+            task_queue=task_queue,
+            organization_registry=organization_registry,
+        )
+
+
+def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, organization_registry) -> dict:
     """Recover only durable worker claims; never refresh plans or dispatch new work."""
     state = load_mission_runs(workspace)
     items = state.get("items", []) if isinstance(state, dict) else []
@@ -568,3 +620,159 @@ def create_start_mission(
         return latest, None
 
     return start_mission
+
+
+def _append_worker_claim_recovery_audit(workspace: Path, event: dict) -> None:
+    path = workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\\n"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def release_worker_claim_for_review(
+    *,
+    workspace: Path,
+    mission_run_id: str,
+    tenant_id: str,
+    claim_id: str,
+    actor: dict,
+    task_queue,
+    organization_registry,
+) -> dict:
+    """Release a reviewed claim using a durable intent-before-side-effect sequence."""
+    from datetime import timezone
+
+    now = lambda: datetime.now(timezone.utc).isoformat()
+    with exclusive_mission_claim_lock(workspace):
+        state = load_mission_runs_strict(workspace)
+        items = state["items"]
+        selected_run = next((
+            item for item in items
+            if str(item.get("mission_run_id") or "") == str(mission_run_id or "")
+        ), None)
+        if not isinstance(selected_run, dict):
+            raise KeyError("mission_run_not_found")
+        if str(selected_run.get("tenant_id") or "default") != str(tenant_id):
+            raise PermissionError("mission_run_tenant_mismatch")
+
+        matches = []
+        for run in items:
+            for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+                claim = action.get("worker_claim") if isinstance(action, dict) else None
+                if isinstance(claim, dict) and str(claim.get("claim_id") or "") == str(claim_id):
+                    matches.append((run, action, claim))
+        if not matches:
+            raise KeyError("worker_claim_not_found")
+
+        worker_ids = {str(claim.get("worker_id") or "").strip() for _, _, claim in matches}
+        tenant_ids = {str(run.get("tenant_id") or "default") for run, _, _ in matches}
+        if len(worker_ids) != 1 or not next(iter(worker_ids)):
+            raise ValueError("worker_claim_identity_conflict")
+        if tenant_ids != {str(tenant_id)}:
+            raise PermissionError("worker_claim_tenant_mismatch")
+        if not any(run is selected_run for run, _, _ in matches):
+            raise ValueError("worker_claim_not_attached_to_selected_run")
+        if any(claim.get("state") != "claimed" or claim.get("recovery_status") != "needs_review"
+               for _, _, claim in matches):
+            raise ValueError("worker_claim_not_pending_review")
+
+        worker_id = next(iter(worker_ids))
+        task_ids = sorted({str(action.get("task_id") or "").strip() for _, action, _ in matches})
+        if not task_ids or any(not task_id for task_id in task_ids):
+            raise ValueError("worker_claim_task_identity_missing")
+        for task_id in task_ids:
+            task = task_queue.get_task(task_id)
+            if task is None:
+                raise ValueError("worker_claim_task_missing")
+            status_value = getattr(getattr(task, "status", None), "value", None)
+            status = str(status_value or getattr(task, "status", "") or "")
+            if status not in {"success", "completed", "failed", "cancelled"}:
+                raise ValueError("worker_claim_task_not_terminal")
+
+        worker = organization_registry.get_worker(worker_id)
+        if not isinstance(worker, dict):
+            raise ValueError("worker_registry_entry_missing")
+        active = worker.get("active_task_ids")
+        released = worker.get("released_task_ids")
+        if not isinstance(active, list) or not isinstance(released, list):
+            raise ValueError("worker_registry_claim_state_invalid")
+        if claim_id in active and claim_id in released:
+            raise ValueError("worker_registry_claim_state_conflict")
+        already_released = claim_id in released and claim_id not in active
+        if not already_released and claim_id not in active:
+            raise ValueError("worker_registry_claim_mismatch")
+
+        actor_provider = str(actor.get("auth_provider") or "")
+        actor_id = str(actor.get("id") or "")
+        event_base = {
+            "timestamp": now(),
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "claim_id": claim_id,
+            "worker_id": worker_id,
+            "task_ids": task_ids,
+            "actor_provider": actor_provider,
+            "actor_id": actor_id,
+            "before": {"mission_claim_state": "claimed", "worker_active_task_ids": list(active)},
+        }
+        _append_worker_claim_recovery_audit(
+            workspace,
+            {**event_base, "event": "release_requested", "after": None},
+        )
+
+        requested_at = now()
+        for _, _, claim in matches:
+            claim["release_operation"] = {
+                "status": "requested",
+                "requested_at": requested_at,
+                "actor_provider": actor_provider,
+                "actor_id": actor_id,
+            }
+        save_mission_runs(workspace, {"items": items})
+
+        if not already_released:
+            organization_registry.release_worker_task(worker_id=worker_id, task_id=claim_id)
+
+        released_at = now()
+        for _, _, claim in matches:
+            claim["state"] = "released"
+            claim["released_at"] = released_at
+            claim["recovery_status"] = "manually_released"
+            claim["recovery_reason"] = "tenant_admin_manual_release"
+            claim["recovery_checked_at"] = released_at
+            claim["release_operation"]["status"] = "applied"
+            claim["release_operation"]["applied_at"] = released_at
+        save_mission_runs(workspace, {"items": items})
+
+        final_worker = organization_registry.get_worker(worker_id)
+        _append_worker_claim_recovery_audit(
+            workspace,
+            {
+                **event_base,
+                "timestamp": released_at,
+                "event": "release_applied",
+                "after": {
+                    "mission_claim_state": "released",
+                    "worker_status": final_worker.get("status") if isinstance(final_worker, dict) else None,
+                    "worker_active_task_ids": final_worker.get("active_task_ids") if isinstance(final_worker, dict) else None,
+                },
+            },
+        )
+        return {
+            "mission_run_id": mission_run_id,
+            "claim_id": claim_id,
+            "worker_id": worker_id,
+            "task_ids": task_ids,
+            "state": "released",
+            "already_released_in_registry": already_released,
+        }
