@@ -95,8 +95,13 @@ class MissionBrainContractTests(unittest.TestCase):
         from admin.mission_action_runtime import create_mission_action_runtime_bindings
 
         trace = [{"step": "knowledge_check", "result": "available"}]
+        verification_contract = {
+            "schema_version": "mission.verification.v1",
+            "checks": [{"check_id": "readme_exists", "type": "file_exists", "path": "README.md"}],
+        }
         contract = build_mission_brain_contract([{
             "id": "node-reuse",
+            "verification_contract": verification_contract,
             "status": "reuse_existing",
             "gap_type": "reuse_existing",
             "reasoning": [],
@@ -146,6 +151,7 @@ class MissionBrainContractTests(unittest.TestCase):
         self.assertEqual(action["mission_brain_decision"], "reuse_verified_knowledge_first")
         self.assertEqual(action["verified_skill_ids"], ["skill-a"])
         self.assertEqual(action["decision_trace"], trace)
+        self.assertEqual(action["verification_contract"], verification_contract)
         self.assertEqual(action["workforce_decision"]["recommended_worker_id"], "worker-a")
         self.assertFalse(action["workforce_dispatch_authorized"])
 
