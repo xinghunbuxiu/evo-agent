@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 
@@ -16,17 +17,33 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _load_memberships(raw: str | None) -> dict[str, Any] | None:
+    if raw is None:
+        path_value = os.getenv("EVO_TENANT_MEMBERSHIPS_FILE", "").strip()
+        if path_value:
+            try:
+                raw = Path(path_value).expanduser().read_text(encoding="utf-8")
+            except OSError:
+                return None
+        else:
+            raw = os.getenv("EVO_TENANT_MEMBERSHIPS_JSON", "")
+    try:
+        memberships = json.loads(raw, object_pairs_hook=_reject_duplicate_keys) if raw else {}
+    except (TypeError, ValueError):
+        return None
+    return memberships if isinstance(memberships, dict) else None
+
+
 def tenant_role_for_user(
     user: dict[str, Any] | None,
     tenant_id: str,
     *,
     memberships_json: str | None = None,
 ) -> str | None:
-    """Return the configured role for this authenticated user and tenant.
+    """Return a configured role; missing, malformed, or ambiguous config denies access.
 
-    Memberships are provisioned out-of-band through EVO_TENANT_MEMBERSHIPS_JSON.
-    The shape is {"password:<user-id>": {"<tenant-id>": "role"}, "gitee:<user-id>": {"<tenant-id>": "role"}}.
-    Missing, malformed, or ambiguous configuration denies access.
+    File-based provisioning uses EVO_TENANT_MEMBERSHIPS_FILE. The JSON environment
+    variable remains available for small deployments and tests.
     """
     if not isinstance(user, dict) or user.get("id") is None:
         return None
@@ -37,16 +54,9 @@ def tenant_role_for_user(
     if not normalized_tenant_id:
         return None
 
-    raw = memberships_json
-    if raw is None:
-        raw = os.getenv("EVO_TENANT_MEMBERSHIPS_JSON", "")
-    try:
-        memberships = json.loads(raw, object_pairs_hook=_reject_duplicate_keys) if raw else {}
-    except (TypeError, ValueError):
+    memberships = _load_memberships(memberships_json)
+    if memberships is None:
         return None
-    if not isinstance(memberships, dict):
-        return None
-
     subject_id = f"{provider}:{user.get('id')}"
     user_memberships = memberships.get(subject_id)
     if not isinstance(user_memberships, dict):
@@ -63,9 +73,7 @@ def user_can_access_tenant(
     *,
     memberships_json: str | None = None,
 ) -> bool:
-    return tenant_role_for_user(
-        user, tenant_id, memberships_json=memberships_json
-    ) is not None
+    return tenant_role_for_user(user, tenant_id, memberships_json=memberships_json) is not None
 
 
 __all__ = ["tenant_role_for_user", "user_can_access_tenant"]
