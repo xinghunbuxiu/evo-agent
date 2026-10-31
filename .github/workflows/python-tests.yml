@@ -41,8 +41,19 @@ jobs:
           timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://github.com/ -o /dev/null -w 'github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
           echo '--- HTTPS probe: api.github.com ---'
           timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://api.github.com/ -o /dev/null -w 'api.github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
-          echo '--- Git remote probe ---'
+          echo '--- Git remote probe (HTTP/1.1) ---'
           timeout 12s git -c http.version=HTTP/1.1 ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD || true
+          echo '--- GitHub delivery endpoints ---'
+          for host_url in \
+            'https://codeload.github.com/xinghunbuxiu/evo-agent/tar.gz/3bff386e7d5e909581389a53edb83f4d58265382' \
+            'https://raw.githubusercontent.com/xinghunbuxiu/evo-agent/3bff386e7d5e909581389a53edb83f4d58265382/README.md' \
+            'https://api.github.com/repos/xinghunbuxiu/evo-agent/tarball/3bff386e7d5e909581389a53edb83f4d58265382'; do
+            timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 "$host_url" -o /dev/null -w '%{url_effective} http_status=%{http_code} connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\\n' || true
+          done
+          echo '--- proxy configuration presence (values hidden) ---'
+          for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+            if printenv "$name" >/dev/null 2>&1; then echo "$name=set"; else echo "$name=unset"; fi
+          done
       - name: Probe isolated execution capabilities
         continue-on-error: true
         run: |
@@ -68,6 +79,12 @@ jobs:
           command -v bwrap || true
           command -v nsjail || true
           command -v systemd-run || true
+          echo '--- unprivileged namespace capability ---'
+          timeout 8s unshare --user --map-root-user --mount --pid --fork /usr/bin/true && echo 'unshare: usable' || echo 'unshare: unavailable'
+          echo '--- user systemd scope capability ---'
+          if command -v systemd-run >/dev/null 2>&1; then
+            timeout 8s systemd-run --user --scope --wait --pipe -p NoNewPrivileges=yes /usr/bin/true && echo 'systemd user scope: usable' || echo 'systemd user scope: unavailable'
+          fi
           echo '--- cgroup and security state ---'
           stat -fc 'filesystem=%T' /sys/fs/cgroup 2>/dev/null || true
           cat /proc/self/cgroup 2>/dev/null || true
