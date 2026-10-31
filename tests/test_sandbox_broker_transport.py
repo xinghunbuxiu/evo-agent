@@ -17,6 +17,7 @@ from core.execution_profiles import resolve_execution_profile
 from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
 from core.sandbox_broker_protocol import build_broker_request
 from core.sandbox_broker_transport import (
+    execute_via_broker,
     BrokerTransportError,
     handle_broker_connection,
     request_broker,
@@ -34,11 +35,11 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         (root / "tests" / "test_sample.py").write_text(
             "def test_sample():\n    assert True\n", encoding="utf-8"
         )
-        spec = resolve_execution_profile(root, {
+        self.spec = resolve_execution_profile(root, {
             "profile_id": "python.pytest", "target": "tests/test_sample.py",
         })
         self.request_id = str(uuid.uuid4())
-        request = build_broker_request("test-workspace", spec, request_id=self.request_id)
+        request = build_broker_request("test-workspace", self.spec, request_id=self.request_id)
         self.key = Ed25519PrivateKey.generate()
         self.service = SandboxBrokerService(
             workspace_roots={"test-workspace": root},
@@ -92,6 +93,30 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.assertIsNone(response)
         self.assertTrue(errors)
         self.assertIsInstance(errors[0], BrokerTransportError)
+
+    def test_execute_via_broker_verifies_signed_result(self):
+        import os
+        path = str(Path(self.temp.name) / "broker-verified.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        def serve():
+            conn, _ = listener.accept()
+            with conn:
+                handle_broker_connection(
+                    conn, service=self.service, allowed_uids=[os.getuid()],
+                )
+        thread = threading.Thread(target=serve)
+        thread.start()
+        public_key = self.key.public_key().public_bytes_raw()
+        result = execute_via_broker(
+            path, "test-workspace", self.spec,
+            public_key=public_key, expected_key_id="test-key",
+        )
+        thread.join(timeout=3)
+        listener.close()
+        self.assertTrue(result["execution_succeeded"])
+        self.assertEqual(result["target"], "tests/test_sample.py")
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")
