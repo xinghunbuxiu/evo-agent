@@ -17,7 +17,7 @@ DEFAULT_TIMEOUT_SECONDS = 60
 MAX_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_BYTES = 256 * 1024
 _PROFILE_FIELDS = {"profile_id", "target", "timeout_seconds"}
-_MODULE_RE = re.compile(r"^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*$")
+_MODULE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 
 
 @dataclass(frozen=True)
