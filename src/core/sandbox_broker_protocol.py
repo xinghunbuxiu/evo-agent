@@ -77,6 +77,8 @@ def verify_broker_response(
     public_key: bytes,
     expected_key_id: str,
     expected_request_id: str,
+    expected_profile_id: str,
+    expected_target: str,
 ) -> dict[str, Any]:
     """Verify broker attestation before returning its signed execution result."""
     if not isinstance(response, dict):
@@ -115,6 +117,8 @@ def verify_broker_response(
         raise ValueError("broker execution result success flag is inconsistent")
     if result.get("profile_id") not in {"python.unittest", "python.pytest"}:
         raise ValueError("broker execution result profile is invalid")
+    if result.get("profile_id") != expected_profile_id or result.get("target") != expected_target:
+        raise ValueError("broker result does not match the requested profile and target")
     for stream_name in ("stdout", "stderr"):
         stream = result.get(stream_name)
         if (not isinstance(stream, dict) or set(stream) != {"bytes", "sha256"}
