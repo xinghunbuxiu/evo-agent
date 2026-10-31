@@ -11,6 +11,7 @@ import binascii
 import json
 import re
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -45,6 +46,14 @@ def build_broker_request(
         raise ValueError("request_id must be a UUID")
     if spec.profile_id not in {"python.unittest", "python.pytest"}:
         raise ValueError("unsupported broker execution profile")
+    target = str(spec.target or "").strip()
+    if spec.profile_id == "python.pytest":
+        path = PurePosixPath(target)
+        if (not target or path.is_absolute() or "\\\\" in target or "\\x00" in target
+                or any(part in {"", ".", ".."} for part in path.parts)):
+            raise ValueError("pytest broker target must be a safe workspace-relative path")
+    elif not re.fullmatch(r"[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*", target):
+        raise ValueError("unittest broker target must be a dotted module name")
     if not isinstance(spec.timeout_seconds, int) or isinstance(spec.timeout_seconds, bool):
         raise ValueError("timeout_seconds must be an integer")
     if not 1 <= spec.timeout_seconds <= 300:
@@ -57,7 +66,7 @@ def build_broker_request(
         "request_id": request_id,
         "workspace_id": workspace_id,
         "profile_id": spec.profile_id,
-        "target": spec.target,
+        "target": target,
         "timeout_seconds": spec.timeout_seconds,
     }
 
@@ -83,6 +92,36 @@ def verify_broker_response(
     signature = response.get("signature")
     if not isinstance(result, dict) or result.get("schema_version") != EXECUTION_RESULT_SCHEMA:
         raise ValueError("broker response has an invalid execution result")
+    required_result_fields = {
+        "schema_version", "runner", "profile_id", "target", "exit_code",
+        "timed_out", "execution_succeeded", "stdout", "stderr",
+    }
+    if set(result) != required_result_fields:
+        raise ValueError("broker execution result has unsupported or missing fields")
+    runner = result.get("runner")
+    if (not isinstance(runner, dict) or set(runner) != {"id", "version"}
+            or not all(isinstance(runner.get(k), str) and runner[k].strip() for k in ("id", "version"))):
+        raise ValueError("broker execution result runner metadata is invalid")
+    timed_out = result.get("timed_out")
+    exit_code = result.get("exit_code")
+    succeeded = result.get("execution_succeeded")
+    if not isinstance(timed_out, bool) or not isinstance(succeeded, bool):
+        raise ValueError("broker execution result status fields are invalid")
+    if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code < 0):
+        raise ValueError("broker execution result exit_code is invalid")
+    if (timed_out and exit_code is not None) or (not timed_out and exit_code is None):
+        raise ValueError("broker execution result timeout and exit_code conflict")
+    if succeeded != (not timed_out and exit_code == 0):
+        raise ValueError("broker execution result success flag is inconsistent")
+    if result.get("profile_id") not in {"python.unittest", "python.pytest"}:
+        raise ValueError("broker execution result profile is invalid")
+    for stream_name in ("stdout", "stderr"):
+        stream = result.get(stream_name)
+        if (not isinstance(stream, dict) or set(stream) != {"bytes", "sha256"}
+                or isinstance(stream.get("bytes"), bool) or not isinstance(stream.get("bytes"), int)
+                or stream["bytes"] < 0 or not isinstance(stream.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", stream["sha256"])):
+            raise ValueError("broker execution result output digest is invalid")
     if not isinstance(signature, dict) or set(signature) != {"algorithm", "key_id", "value"}:
         raise ValueError("broker response signature metadata is invalid")
     if signature.get("algorithm") != BROKER_SIGNATURE_ALGORITHM:
