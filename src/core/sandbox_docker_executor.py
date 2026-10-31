@@ -137,7 +137,9 @@ class DockerSandboxExecutor:
                 cap_drop=["ALL"],
                 security_opt=["no-new-privileges:true"],
                 mem_limit=_MAX_MEMORY_BYTES,
+                memswap_limit=_MAX_MEMORY_BYTES,
                 nano_cpus=_MAX_CPU_NANOS,
+                shm_size=32 * 1024 * 1024,
                 pids_limit=_MAX_PIDS,
                 ipc_mode="private",
                 tmpfs={
