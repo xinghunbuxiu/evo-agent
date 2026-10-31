@@ -49,10 +49,10 @@ def build_broker_request(
     target = str(spec.target or "").strip()
     if spec.profile_id == "python.pytest":
         path = PurePosixPath(target)
-        if (not target or path.is_absolute() or "\\" in target or "\x00" in target
-                or any(part in {"", ".", ".."} for part in path.parts)):
+        if (not target or path.is_absolute() or ":" in target or "\\" in target or "\x00" in target
+                or any(part in {"", ".", ".."} for part in target.split("/"))):
             raise ValueError("pytest broker target must be a safe workspace-relative path")
-    elif not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", target):
+    elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
         raise ValueError("unittest broker target must be a dotted module name")
     if not isinstance(spec.timeout_seconds, int) or isinstance(spec.timeout_seconds, bool):
         raise ValueError("timeout_seconds must be an integer")
