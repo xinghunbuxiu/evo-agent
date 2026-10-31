@@ -45,9 +45,9 @@ jobs:
           timeout 12s git -c http.version=HTTP/1.1 ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD || true
           echo '--- GitHub delivery endpoints ---'
           for host_url in \
-            'https://codeload.github.com/xinghunbuxiu/evo-agent/tar.gz/3bff386e7d5e909581389a53edb83f4d58265382' \
-            'https://raw.githubusercontent.com/xinghunbuxiu/evo-agent/3bff386e7d5e909581389a53edb83f4d58265382/README.md' \
-            'https://api.github.com/repos/xinghunbuxiu/evo-agent/tarball/3bff386e7d5e909581389a53edb83f4d58265382'; do
+            'https://codeload.github.com/xinghunbuxiu/evo-agent/tar.gz/${GITHUB_SHA}' \
+            'https://raw.githubusercontent.com/xinghunbuxiu/evo-agent/${GITHUB_SHA}/README.md' \
+            'https://api.github.com/repos/xinghunbuxiu/evo-agent/tarball/${GITHUB_SHA}'; do
             timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 "$host_url" -o /dev/null -w '%{url_effective} http_status=%{http_code} connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\\n' || true
           done
           echo '--- proxy configuration presence (values hidden) ---'
@@ -91,7 +91,7 @@ jobs:
           test -r /sys/kernel/security/lsm && cat /sys/kernel/security/lsm || true
           grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status || true
       - name: Check out repository
-        timeout-minutes: 5
+        timeout-minutes: 12
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
