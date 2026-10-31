@@ -28,6 +28,18 @@ class BrokerTransportError(RuntimeError):
     """Transport framing, peer-authentication, or connection failure."""
 
 
+def _normalize_allowed_uids(values: Iterable[int]) -> frozenset[int]:
+    try:
+        entries = tuple(values)
+    except TypeError as exc:
+        raise ValueError("allowed_uids must be an iterable of non-negative integers") from exc
+    if any(isinstance(uid, bool) or not isinstance(uid, int) or uid < 0 for uid in entries):
+        raise ValueError("allowed_uids must contain only non-negative integer UIDs")
+    if len(set(entries)) != len(entries):
+        raise ValueError("allowed_uids must not contain duplicates")
+    return frozenset(entries)
+
+
 def _recv_exact(
     connection: socket.socket, length: int, *, deadline: float | None = None,
 ) -> bytes:
@@ -84,7 +96,7 @@ def handle_broker_connection(
     allowed_uids: Iterable[int],
 ) -> None:
     """Handle exactly one request; unauthorized peers are rejected before JSON parsing."""
-    allowed = frozenset(allowed_uids)
+    allowed = _normalize_allowed_uids(allowed_uids)
     connection.settimeout(5.0)
     try:
         peer_uid = _peer_uid(connection)
@@ -127,7 +139,7 @@ def serve_listener(
     """
     if isinstance(max_workers, bool) or not isinstance(max_workers, int) or not 1 <= max_workers <= 32:
         raise ValueError("max_workers must be between 1 and 32")
-    allowed = tuple(allowed_uids)
+    allowed = _normalize_allowed_uids(allowed_uids)
     slots = threading.BoundedSemaphore(max_workers)
     listener.settimeout(0.5)
 
