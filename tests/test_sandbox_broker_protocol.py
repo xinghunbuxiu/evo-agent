@@ -179,6 +179,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 response, public_key=self.public_key,
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
