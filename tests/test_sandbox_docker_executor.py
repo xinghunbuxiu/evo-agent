@@ -95,6 +95,8 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         self.assertEqual(config["cap_drop"], ["ALL"])
         self.assertEqual(config["security_opt"], ["no-new-privileges:true"])
         self.assertEqual(config["mem_limit"], 512 * 1024 * 1024)
+        self.assertEqual(config["memswap_limit"], 512 * 1024 * 1024)
+        self.assertEqual(config["shm_size"], 32 * 1024 * 1024)
         self.assertEqual(config["pids_limit"], 128)
         self.assertTrue(self.container.removed)
 
