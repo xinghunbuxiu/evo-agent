@@ -86,6 +86,18 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_listener_rejects_boolean_or_duplicate_uid_configuration(self):
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            for uids in ([True], [-1], [1, 1]):
+                with self.subTest(uids=uids), self.assertRaises(ValueError):
+                    serve_listener(
+                        listener, service=self.service, allowed_uids=uids,
+                        stop_event=threading.Event(), max_workers=1,
+                    )
+        finally:
+            listener.close()
+
     def test_authorized_peer_receives_signed_broker_response(self):
         import os
         response, errors, thread = self._exchange([os.getuid()])
