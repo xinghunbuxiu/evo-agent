@@ -169,10 +169,6 @@ def main() -> int:
         )
     finally:
         listener.close()
-        try:
-            service.replay_store
-        except Exception:
-            pass
         LOGGER.info("sandbox broker stopped")
     return 0
 
