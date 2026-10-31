@@ -115,6 +115,43 @@ running as the same OS user or one that can read/replace the key. Production iso
 still requires a separately protected secret or verifier service, plus language-specific
 sandboxed test runners.
 
+## Self-hosted runner isolation capability probe (2026-10-31)
+
+Workflow run [#583](https://github.com/xinghunbuxiu/evo-agent/actions/runs/41194270611)
+completed successfully on commit
+`eb55a00d54a9e20ef2d8d0d0d105fa5e4de99d0d` and ran 185 regression tests
+(185 passed, 0 failures, 0 errors, 0 skipped). The same run collected these
+host observations as the `evo-runner` account:
+
+- Docker CLI 29.1.3 is installed, but the account cannot access
+  `/var/run/docker.sock` (root:docker socket; permission denied). The Docker
+  daemon's server-side configuration therefore could not be inspected.
+- Podman is not installed.
+- `unshare --user --map-root-user --mount --pid` fails with
+  `Operation not permitted`; unprivileged user namespaces are unavailable to
+  this runner process.
+- `systemd-run --user --scope` is unavailable for this account/session.
+- The runner process reports `Seccomp: 0` and `NoNewPrivs: 0`.
+- GitHub main site/API and codeload probes succeeded in this run, while
+  raw.githubusercontent.com and PyPI showed intermittent timeouts/resets.
+
+These observations mean that **no usable per-job isolation mechanism has yet
+been demonstrated on this host**. Do not add `evo-runner` to the `docker`
+group: access to the Docker daemon is effectively host-administrator
+privilege and would undermine the intended boundary.
+
+A future deployment should use a narrow, root-owned sandbox broker (or a
+separate disposable VM service), not expose the Docker socket to the
+application/worker. The broker must accept only the versioned allowlisted
+execution profile, construct fixed container arguments itself, pin the image
+by digest, disable networking, mount source read-only, use a separate
+writable temporary filesystem, drop capabilities, enforce
+`no-new-privileges`, resource/PID/time/output limits, and return a bounded
+result envelope. Its signing key must not be readable by the runner account.
+Until such a broker is deployed and independently tested, the production
+sandbox adapter remains unconfigured and execution must continue to fail
+closed.
+
 ## Boundaries and remaining work
 
 1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
