@@ -53,6 +53,24 @@ def _workspace_target(workspace: Path, raw_target: Any) -> Path:
     return resolved
 
 
+def _workspace_module(workspace: Path, raw_target: Any) -> str:
+    module_name = str(raw_target or "").strip()
+    if not _MODULE_RE.fullmatch(module_name):
+        raise ValueError("python.unittest target must be a dotted Python module name")
+    root = Path(workspace).resolve(strict=True)
+    relative = Path(*module_name.split("."))
+    candidates = (root / relative.with_suffix(".py"), root / relative / "__init__.py")
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return module_name
+    raise ValueError("python.unittest target must resolve to a module file inside the workspace")
+
+
 def resolve_execution_profile(workspace: Path, request: Any) -> ExecutionProfileSpec:
     """Resolve a strict profile request; worker-supplied commands/args are rejected."""
     if not isinstance(request, dict):
@@ -72,9 +90,7 @@ def resolve_execution_profile(workspace: Path, request: Any) -> ExecutionProfile
         raise ValueError(f"timeout_seconds must be between 1 and {MAX_TIMEOUT_SECONDS}")
 
     if profile_id == "python.unittest":
-        target = str(request.get("target") or "").strip()
-        if not _MODULE_RE.fullmatch(target):
-            raise ValueError("python.unittest target must be a dotted Python module name")
+        target = _workspace_module(Path(workspace), request.get("target"))
         argv = (sys.executable, "-m", "unittest", target)
     elif profile_id == "python.pytest":
         target_path = _workspace_target(Path(workspace), request.get("target"))
