@@ -76,6 +76,15 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             self.service.handle_request(self.request)
         self.assertEqual(len(self.calls), 1)
 
+    def test_service_rejects_workspace_with_untrusted_writable_parent(self):
+        self.root.parent.chmod(0o777)
+        with self.assertRaisesRegex(ValueError, "parent"):
+            SandboxBrokerService(
+                workspace_roots={"project-test": self.root},
+                replay_store=self.store, executor=self._execute,
+                signing_key=self.key, key_id="broker-test-key",
+            )
+
     def test_replay_store_allows_only_one_concurrent_claim(self):
         outcomes = []
         barrier = threading.Barrier(4)
