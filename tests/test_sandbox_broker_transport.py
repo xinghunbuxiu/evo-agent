@@ -21,6 +21,7 @@ from core.sandbox_broker_transport import (
     BrokerTransportError,
     handle_broker_connection,
     request_broker,
+    serve_listener,
 )
 from core.sandbox_runner import RunnerProcessOutput
 
@@ -99,22 +100,28 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         path = str(Path(self.temp.name) / "broker-verified.sock")
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(path)
-        listener.listen(1)
-        def serve():
-            conn, _ = listener.accept()
-            with conn:
-                handle_broker_connection(
-                    conn, service=self.service, allowed_uids=[os.getuid()],
-                )
-        thread = threading.Thread(target=serve)
-        thread.start()
+        listener.listen(8)
+        stop = threading.Event()
+        server_thread = threading.Thread(
+            target=serve_listener,
+            kwargs={
+                "listener": listener,
+                "service": self.service,
+                "allowed_uids": [os.getuid()],
+                "stop_event": stop,
+                "max_workers": 2,
+            },
+        )
+        server_thread.start()
         public_key = self.key.public_key().public_bytes_raw()
         result = execute_via_broker(
             path, "test-workspace", self.spec,
             public_key=public_key, expected_key_id="test-key",
         )
-        thread.join(timeout=3)
+        stop.set()
+        server_thread.join(timeout=3)
         listener.close()
+        self.assertFalse(server_thread.is_alive())
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(result["target"], "tests/test_sample.py")
 
