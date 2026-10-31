@@ -329,3 +329,18 @@ completion evidence. Keep production execution fail-closed until the broker
 is installed, the image digest is built and pinned, a real container test
 confirms isolation, and a reviewed Mission adapter binds the signed response
 to the exact task and tenant.
+
+
+### Workspace mount-path ownership boundary
+
+Before the broker accepts a workspace root, it now checks the entire parent
+directory chain. Ancestors must be real directories (no symlinks), owned by
+root or the dedicated broker UID, and not group/world writable. The only
+writable-ancestor exception is a root-owned sticky directory such as
+`/tmp`; this permits isolated test fixtures without allowing another account
+to replace a workspace path before Docker resolves its bind mount. The
+workspace directory itself may remain writable by its owning application
+account, because it is mounted read-only inside the container.
+
+The Unix transport also rejects malformed UID allowlists, including booleans
+(which Python otherwise treats as integers) and duplicate or negative UIDs.
