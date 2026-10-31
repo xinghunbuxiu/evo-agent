@@ -10,6 +10,7 @@ import json
 import socket
 import struct
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
@@ -27,10 +28,17 @@ class BrokerTransportError(RuntimeError):
     """Transport framing, peer-authentication, or connection failure."""
 
 
-def _recv_exact(connection: socket.socket, length: int) -> bytes:
+def _recv_exact(
+    connection: socket.socket, length: int, *, deadline: float | None = None,
+) -> bytes:
     chunks = []
     remaining = length
     while remaining:
+        if deadline is not None:
+            remaining_time = deadline - time.monotonic()
+            if remaining_time <= 0:
+                raise BrokerTransportError("request frame receive deadline exceeded")
+            connection.settimeout(remaining_time)
         chunk = connection.recv(remaining)
         if not chunk:
             raise BrokerTransportError("connection closed during frame")
@@ -40,15 +48,17 @@ def _recv_exact(connection: socket.socket, length: int) -> bytes:
 
 
 def _recv_frame(connection: socket.socket, limit: int) -> bytes:
-    size = _FRAME.unpack(_recv_exact(connection, _FRAME.size))[0]
+    deadline = time.monotonic() + 5.0
+    size = _FRAME.unpack(_recv_exact(connection, _FRAME.size, deadline=deadline))[0]
     if size < 1 or size > limit:
         raise BrokerTransportError("frame length is outside the allowed range")
-    return _recv_exact(connection, size)
+    return _recv_exact(connection, size, deadline=deadline)
 
 
 def _send_frame(connection: socket.socket, payload: bytes, limit: int) -> None:
     if not payload or len(payload) > limit:
         raise BrokerTransportError("response frame exceeds the allowed size")
+    connection.settimeout(5.0)
     connection.sendall(_FRAME.pack(len(payload)) + payload)
 
 
@@ -70,6 +80,7 @@ def handle_broker_connection(
 ) -> None:
     """Handle exactly one request; unauthorized peers are rejected before JSON parsing."""
     allowed = frozenset(allowed_uids)
+    connection.settimeout(5.0)
     try:
         peer_uid = _peer_uid(connection)
         if peer_uid not in allowed:
@@ -79,6 +90,7 @@ def handle_broker_connection(
             request = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BrokerTransportError("request frame is not valid UTF-8 JSON") from exc
+        connection.settimeout(330.0)
         response = service.handle_request(request)
         payload = json.dumps(
             response, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
