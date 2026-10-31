@@ -1,6 +1,7 @@
 """Tests for broker-side request policy, replay prevention, and signing."""
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -73,6 +74,34 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(BrokerRequestRejected, "already been used"):
             self.service.handle_request(self.request)
         self.assertEqual(len(self.calls), 1)
+
+    def test_replay_store_allows_only_one_concurrent_claim(self):
+        outcomes = []
+        barrier = threading.Barrier(4)
+        def claim():
+            barrier.wait()
+            try:
+                self.store.claim(self.request_id, self.request)
+                outcomes.append("claimed")
+            except BrokerRequestRejected:
+                outcomes.append("rejected")
+        threads = [threading.Thread(target=claim) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertEqual(outcomes.count("claimed"), 1)
+        self.assertEqual(outcomes.count("rejected"), 3)
+
+    def test_service_rejects_symlink_workspace_root(self):
+        link = Path(self.temp.name) / "workspace-link"
+        link.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "unsafe entry"):
+            SandboxBrokerService(
+                workspace_roots={"project-test": link},
+                replay_store=self.store, executor=self._execute,
+                signing_key=self.key, key_id="broker-test-key",
+            )
 
     def test_replay_store_survives_service_reconstruction(self):
         self.service.handle_request(self.request)
