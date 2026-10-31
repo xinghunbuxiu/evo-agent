@@ -176,6 +176,7 @@ def execute_via_broker(
         public_key=public_key,
         expected_key_id=expected_key_id,
         expected_request_id=request["request_id"],
+        expected_workspace_id=workspace_id,
         expected_profile_id=spec.profile_id,
         expected_target=spec.target,
     )
