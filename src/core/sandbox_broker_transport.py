@@ -12,6 +12,8 @@ import struct
 from typing import Iterable
 
 from .sandbox_broker import BrokerRequestRejected, SandboxBrokerService
+from .sandbox_broker_protocol import build_broker_request, verify_broker_response
+from .execution_profiles import ExecutionProfileSpec
 
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -89,6 +91,29 @@ def handle_broker_connection(
     _send_frame(connection, payload, MAX_RESPONSE_BYTES)
 
 
+def execute_via_broker(
+    socket_path: str,
+    workspace_id: str,
+    spec: ExecutionProfileSpec,
+    *,
+    public_key: bytes,
+    expected_key_id: str,
+    timeout_seconds: float | None = None,
+) -> dict:
+    """Execute one fixed profile through the broker and verify its attestation."""
+    request = build_broker_request(workspace_id, spec)
+    timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
+    response = request_broker(socket_path, request, timeout_seconds=timeout)
+    return verify_broker_response(
+        response,
+        public_key=public_key,
+        expected_key_id=expected_key_id,
+        expected_request_id=request["request_id"],
+        expected_profile_id=spec.profile_id,
+        expected_target=spec.target,
+    )
+
+
 def request_broker(
     socket_path: str,
     request: dict,
@@ -129,4 +154,5 @@ __all__ = [
     "BrokerTransportError",
     "handle_broker_connection",
     "request_broker",
+    "execute_via_broker",
 ]
