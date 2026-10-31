@@ -4,7 +4,12 @@ Mission 运行态持久化、续跑与启动组装。
 
 from admin.worker_route_runtime import worker_supports_mission_follow_up
 import copy
+import hashlib
 import json
+import os
+import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -14,6 +19,91 @@ def mission_runs_file(workspace: Path) -> Path:
     path = workspace / ".admin" / "mission_runs.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+_MISSION_CLAIM_THREAD_LOCK = threading.RLock()
+_MISSION_CLAIM_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def exclusive_mission_claim_lock(workspace: Path):
+    """Serialize claim transitions across threads and processes; reentrant per thread."""
+    with _MISSION_CLAIM_THREAD_LOCK:
+        depth = getattr(_MISSION_CLAIM_LOCK_STATE, "depth", 0)
+        if depth:
+            _MISSION_CLAIM_LOCK_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                _MISSION_CLAIM_LOCK_STATE.depth -= 1
+            return
+
+        lock_path = workspace / ".admin" / ".mission-worker-claims.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 0
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_CLAIM_LOCK_STATE.depth = 0
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _write_mission_runs_atomic(workspace: Path, payload: dict) -> None:
+    path = mission_runs_file(workspace)
+    normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
+    normalized_items = _retain_mission_runs(normalized_items) if isinstance(normalized_items, list) else []
+    content = json.dumps({
+        "updated_at": datetime.now().isoformat(),
+        "items": normalized_items,
+    }, indent=2, ensure_ascii=False)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def load_mission_runs_strict(workspace: Path) -> dict:
+    """Read persisted Mission evidence without converting corruption into an empty history."""
+    path = mission_runs_file(workspace)
+    if not path.is_file():
+        return {"updated_at": None, "items": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Mission runs store must contain a JSON object")
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise ValueError("Mission runs store must contain an items array")
+    if any(not isinstance(item, dict) for item in items):
+        raise ValueError("Mission runs store contains a non-object run")
+    return {
+        "updated_at": data.get("updated_at"),
+        "items": items,
+    }
 
 
 def load_mission_runs(workspace: Path) -> dict:
@@ -31,15 +121,255 @@ def load_mission_runs(workspace: Path) -> dict:
     }
 
 
-def save_mission_runs(workspace: Path, payload: dict) -> None:
-    normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
-    mission_runs_file(workspace).write_text(
-        json.dumps({
-            "updated_at": datetime.now().isoformat(),
-            "items": normalized_items if isinstance(normalized_items, list) else [],
-        }, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+def _mission_run_has_active_worker_claim(mission_run: dict) -> bool:
+    """Keep runs that are the only durable evidence for a live worker reservation."""
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    return any(
+        isinstance(action, dict)
+        and isinstance(action.get("worker_claim"), dict)
+        and action["worker_claim"].get("state") == "claimed"
+        for action in actions
     )
+
+
+def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:
+    """Bound history without evicting runs that still own worker claims."""
+    valid = [item for item in items if isinstance(item, dict)]
+    retained_indexes = set(range(min(max(0, limit), len(valid))))
+    retained_indexes.update(
+        index for index, item in enumerate(valid)
+        if _mission_run_has_active_worker_claim(item)
+    )
+    result = []
+    seen_ids = set()
+    for index, item in enumerate(valid):
+        if index not in retained_indexes:
+            continue
+        run_id = str(item.get("mission_run_id") or "").strip()
+        if run_id:
+            if run_id in seen_ids:
+                continue
+            seen_ids.add(run_id)
+        result.append(item)
+    return result
+
+
+def _merge_release_markers(workspace: Path, incoming_items: list) -> list:
+    path = mission_runs_file(workspace)
+    if not path.is_file():
+        return incoming_items
+    persisted = load_mission_runs_strict(workspace)["items"]
+    markers = {}
+    for run in persisted:
+        for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            if not isinstance(claim, dict):
+                continue
+            claim_id = str(claim.get("claim_id") or "").strip()
+            operation = claim.get("release_operation")
+            tenant_id = str(run.get("tenant_id") or "default")
+            worker_id = str(claim.get("worker_id") or "").strip()
+            marker_key = (tenant_id, claim_id, worker_id)
+            if claim_id and worker_id and isinstance(operation, dict) and operation.get("status") in {"requested", "applied"}:
+                markers[marker_key] = {
+                    "state": claim.get("state"),
+                    "released_at": claim.get("released_at"),
+                    "recovery_status": claim.get("recovery_status"),
+                    "recovery_reason": claim.get("recovery_reason"),
+                    "recovery_checked_at": claim.get("recovery_checked_at"),
+                    "release_operation": copy.deepcopy(operation),
+                }
+    for run in incoming_items:
+        for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            if not isinstance(claim, dict):
+                continue
+            run_tenant_id = str(run.get("tenant_id") or "default")
+            worker_id = str(claim.get("worker_id") or "").strip()
+            marker = markers.get((run_tenant_id, str(claim.get("claim_id") or "").strip(), worker_id))
+            if marker is None:
+                continue
+            current_operation = claim.get("release_operation")
+            if claim.get("state") == "released":
+                continue
+            if not isinstance(current_operation, dict) or current_operation.get("status") != "applied":
+                claim["release_operation"] = copy.deepcopy(marker["release_operation"])
+            if marker["state"] == "released":
+                for key in ("state", "released_at", "recovery_status", "recovery_reason", "recovery_checked_at"):
+                    claim[key] = marker[key]
+    return incoming_items
+
+
+def save_mission_runs(workspace: Path, payload: dict) -> None:
+    with exclusive_mission_claim_lock(workspace):
+        normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
+        normalized_items = [item for item in normalized_items if isinstance(item, dict)] if isinstance(normalized_items, list) else []
+        normalized_items = _merge_release_markers(workspace, normalized_items)
+        _write_mission_runs_atomic(workspace, {"items": normalized_items})
+
+
+def reconcile_worker_claims_on_startup(*, workspace: Path, task_queue, organization_registry) -> dict:
+    with exclusive_mission_claim_lock(workspace):
+        return _reconcile_worker_claims_on_startup_locked(
+            workspace=workspace,
+            task_queue=task_queue,
+            organization_registry=organization_registry,
+        )
+
+
+def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, organization_registry) -> dict:
+    """Recover only durable worker claims; never refresh plans or dispatch new work."""
+    state = load_mission_runs(workspace)
+    items = state.get("items", []) if isinstance(state, dict) else []
+    groups: dict[str, dict] = {}
+    checked = 0
+    held = 0
+    released = 0
+    changed = False
+    for run in items:
+        if not isinstance(run, dict):
+            continue
+        actions = run.get("actions", []) if isinstance(run.get("actions"), list) else []
+        for index, action in enumerate(actions):
+            if not isinstance(action, dict):
+                continue
+            claim = action.get("worker_claim")
+            if not isinstance(claim, dict) or claim.get("state") != "claimed":
+                continue
+            claim_id = str(claim.get("claim_id") or "").strip()
+            worker_id = str(claim.get("worker_id") or "").strip()
+            task_id = str(action.get("task_id") or "").strip()
+            if not claim_id or not worker_id or not task_id:
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = "claim_or_task_identity_missing"
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+                held += 1
+                changed = True
+                if claim_id:
+                    group = groups.setdefault(claim_id, {
+                        "worker_id": worker_id,
+                        "task_ids": set(),
+                        "actions": [],
+                    })
+                    group["identity_conflict"] = True
+                    group["actions"].append(action)
+                continue
+            group = groups.setdefault(claim_id, {
+                "worker_id": worker_id,
+                "task_ids": set(),
+                "actions": [],
+            })
+            if group["worker_id"] != worker_id:
+                group["identity_conflict"] = True
+            group["task_ids"].add(task_id)
+            group["actions"].append(action)
+
+    for claim_id, group in groups.items():
+        checked += 1
+        reason = None
+        if group.get("identity_conflict"):
+            reason = "worker_identity_conflict"
+        else:
+            for task_id in sorted(group["task_ids"]):
+                try:
+                    task = task_queue.get_task(task_id)
+                except Exception:
+                    reason = "queue_lookup_failed"
+                    break
+                if task is None:
+                    reason = "queue_task_missing"
+                    break
+                status = str(getattr(getattr(task, "status", None), "value", "") or "")
+                if status not in {"success", "completed", "failed", "cancelled"}:
+                    reason = "queue_task_not_terminal"
+                    break
+        if reason:
+            for action in group["actions"]:
+                claim = action["worker_claim"]
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = reason
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+            held += 1
+            changed = True
+            continue
+        try:
+            organization_registry.release_worker_task(
+                worker_id=group["worker_id"],
+                task_id=claim_id,
+            )
+        except Exception as exc:
+            for action in group["actions"]:
+                claim = action["worker_claim"]
+                claim["recovery_status"] = "needs_review"
+                claim["recovery_reason"] = "worker_release_failed"
+                claim["release_error_type"] = type(exc).__name__
+                claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
+            held += 1
+            changed = True
+            continue
+        released_at = datetime.now().astimezone().isoformat()
+        for action in group["actions"]:
+            claim = action["worker_claim"]
+            claim["state"] = "released"
+            claim["released_at"] = released_at
+            claim["recovery_status"] = "recovered"
+            claim["recovery_reason"] = None
+            claim["recovery_checked_at"] = released_at
+            release_operation = claim.get("release_operation")
+            if isinstance(release_operation, dict) and release_operation.get("status") == "requested":
+                release_operation["status"] = "applied"
+                release_operation["applied_at"] = released_at
+        released += 1
+        changed = True
+
+    if changed:
+        save_mission_runs(workspace, {"items": items})
+
+    # Complete the audit side of any persisted release intent. This also repairs
+    # a crash after the Mission/Registry transition but before release_applied.
+    for run in items:
+        if not isinstance(run, dict):
+            continue
+        actions = run.get("actions", []) if isinstance(run.get("actions"), list) else []
+        for action in actions:
+            claim = action.get("worker_claim") if isinstance(action, dict) else None
+            operation = claim.get("release_operation") if isinstance(claim, dict) else None
+            if not isinstance(operation, dict) or operation.get("status") != "applied":
+                continue
+            operation_id = str(operation.get("operation_id") or "").strip()
+            if not operation_id:
+                continue
+            worker_id = str(claim.get("worker_id") or "").strip()
+            worker = organization_registry.get_worker(worker_id) if worker_id else None
+            _append_worker_claim_recovery_audit(
+                workspace,
+                {
+                    "event_id": f"{operation_id}:release_applied",
+                    "timestamp": str(operation.get("applied_at") or claim.get("released_at") or datetime.now().astimezone().isoformat()),
+                    "event": "release_applied",
+                    "tenant_id": str(operation.get("tenant_id") or run.get("tenant_id") or "default"),
+                    "mission_run_id": str(operation.get("mission_run_id") or run.get("mission_run_id") or ""),
+                    "claim_id": str(claim.get("claim_id") or ""),
+                    "worker_id": worker_id,
+                    "task_ids": operation.get("task_ids") if isinstance(operation.get("task_ids"), list) else [],
+                    "reason": str(operation.get("reason") or ""),
+                    "actor_provider": str(operation.get("actor_provider") or ""),
+                    "actor_id": str(operation.get("actor_id") or ""),
+                    "before": {"mission_claim_state": "claimed"},
+                    "after": {
+                        "mission_claim_state": "released",
+                        "worker_status": worker.get("status") if isinstance(worker, dict) else None,
+                        "worker_active_task_ids": worker.get("active_task_ids") if isinstance(worker, dict) else None,
+                    },
+                },
+            )
+
+    return {
+        "mission_runs": len([item for item in items if isinstance(item, dict)]),
+        "claims_checked": checked,
+        "claims_released": released,
+        "claims_held_for_review": held,
+    }
 
 
 def find_mission_run(workspace: Path, mission_run_id: str) -> dict | None:
@@ -298,7 +628,7 @@ def refresh_mission_runs(
         )
         if isinstance(synced, list):
             refreshed_items = [item for item in synced if isinstance(item, dict)]
-    save_mission_runs(workspace, {"items": refreshed_items[:50]})
+    save_mission_runs(workspace, {"items": refreshed_items})
     return load_mission_runs(workspace)
 
 
@@ -346,6 +676,13 @@ def create_start_mission(
         goal = str(prepared.get("goal") or "").strip()
         mission_kind = prepared.get("mission_kind")
         context = prepared.get("context", {})
+        if not isinstance(context, dict):
+            context = {}
+        prepared_route = prepared.get("runtime_route", {})
+        if isinstance(prepared_route, dict):
+            route_worker_id = str(prepared_route.get("primary_worker_id") or "").strip()
+            if route_worker_id:
+                context.setdefault("runtime_primary_worker_id", route_worker_id)
         validation = prepared.get("work_type_validation", {})
         if not goal:
             return None, error_response("goal 不能为空", 400)
@@ -382,7 +719,7 @@ def create_start_mission(
         items = state.get("items", []) if isinstance(state, dict) else []
         items = [item for item in items if isinstance(item, dict)]
         items.insert(0, mission_run)
-        save_mission_runs(workspace, {"items": items[:50]})
+        save_mission_runs(workspace, {"items": items})
         if refresh_runs:
             refreshed = refresh_mission_runs_fn(
                 workspace=workspace,
@@ -397,3 +734,236 @@ def create_start_mission(
         return latest, None
 
     return start_mission
+
+
+def _append_worker_claim_recovery_audit(workspace: Path, event: dict) -> None:
+    path = workspace / ".admin" / "worker_claim_recovery_audit.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event_id = str(event.get("event_id") or "").strip()
+    if event_id and path.is_file():
+        with path.open("r", encoding="utf-8") as existing:
+            for raw_line in existing:
+                try:
+                    prior = json.loads(raw_line)
+                except ValueError:
+                    continue
+                if isinstance(prior, dict) and prior.get("event_id") == event_id:
+                    return
+    line = json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def release_worker_claim_for_review(
+    *,
+    workspace: Path,
+    mission_run_id: str,
+    tenant_id: str,
+    claim_id: str,
+    actor: dict,
+    reason: str,
+    task_queue,
+    organization_registry,
+) -> dict:
+    """Release a reviewed claim using a durable intent-before-side-effect sequence."""
+    from datetime import timezone
+
+    now = lambda: datetime.now(timezone.utc).isoformat()
+    with exclusive_mission_claim_lock(workspace):
+        state = load_mission_runs_strict(workspace)
+        items = state["items"]
+        selected_run = next((
+            item for item in items
+            if str(item.get("mission_run_id") or "") == str(mission_run_id or "")
+        ), None)
+        if not isinstance(selected_run, dict):
+            raise KeyError("mission_run_not_found")
+        if str(selected_run.get("tenant_id") or "default") != str(tenant_id):
+            raise PermissionError("mission_run_tenant_mismatch")
+
+        matches = []
+        for run in items:
+            for action in run.get("actions", []) if isinstance(run.get("actions"), list) else []:
+                claim = action.get("worker_claim") if isinstance(action, dict) else None
+                if isinstance(claim, dict) and str(claim.get("claim_id") or "") == str(claim_id):
+                    matches.append((run, action, claim))
+        if not matches:
+            raise KeyError("worker_claim_not_found")
+
+        worker_ids = {str(claim.get("worker_id") or "").strip() for _, _, claim in matches}
+        tenant_ids = {str(run.get("tenant_id") or "default") for run, _, _ in matches}
+        if len(worker_ids) != 1 or not next(iter(worker_ids)):
+            raise ValueError("worker_claim_identity_conflict")
+        if tenant_ids != {str(tenant_id)}:
+            raise PermissionError("worker_claim_tenant_mismatch")
+        if not any(run is selected_run for run, _, _ in matches):
+            raise ValueError("worker_claim_not_attached_to_selected_run")
+
+        worker_id = next(iter(worker_ids))
+        if all(
+            claim.get("state") == "released"
+            and isinstance(claim.get("release_operation"), dict)
+            and claim["release_operation"].get("status") == "applied"
+            for _, _, claim in matches
+        ):
+            worker = organization_registry.get_worker(worker_id)
+            active = worker.get("active_task_ids", []) if isinstance(worker, dict) else []
+            released = worker.get("released_task_ids", []) if isinstance(worker, dict) else []
+            if claim_id in released and claim_id not in active:
+                operation = matches[0][2].get("release_operation") or {}
+                operation_id = str(operation.get("operation_id") or "").strip()
+                if operation_id:
+                    task_ids = sorted({
+                        str(action.get("task_id") or "").strip()
+                        for _, action, _ in matches
+                        if str(action.get("task_id") or "").strip()
+                    })
+                    actor_provider = str(operation.get("actor_provider") or "")
+                    actor_id = str(operation.get("actor_id") or "")
+                    applied_at = str(operation.get("applied_at") or operation.get("requested_at") or now())
+                    _append_worker_claim_recovery_audit(
+                        workspace,
+                        {
+                            "event_id": f"{operation_id}:release_applied",
+                            "timestamp": applied_at,
+                            "event": "release_applied",
+                            "tenant_id": tenant_id,
+                            "mission_run_id": mission_run_id,
+                            "claim_id": claim_id,
+                            "worker_id": worker_id,
+                            "task_ids": task_ids,
+                            "reason": str(operation.get("reason") or ""),
+                            "actor_provider": actor_provider,
+                            "actor_id": actor_id,
+                            "before": {"mission_claim_state": "claimed"},
+                            "after": {
+                                "mission_claim_state": "released",
+                                "worker_status": worker.get("status"),
+                                "worker_active_task_ids": active,
+                            },
+                        },
+                    )
+                return {
+                    "mission_run_id": mission_run_id,
+                    "claim_id": claim_id,
+                    "worker_id": worker_id,
+                    "state": "released",
+                    "already_released": True,
+                }
+            raise ValueError("worker_registry_claim_state_conflict")
+
+        if any(claim.get("state") != "claimed" or claim.get("recovery_status") != "needs_review"
+               for _, _, claim in matches):
+            raise ValueError("worker_claim_not_pending_review")
+
+        task_ids = sorted({str(action.get("task_id") or "").strip() for _, action, _ in matches})
+        if not task_ids or any(not task_id for task_id in task_ids):
+            raise ValueError("worker_claim_task_identity_missing")
+        for task_id in task_ids:
+            task = task_queue.get_task(task_id)
+            if task is None:
+                raise ValueError("worker_claim_task_missing")
+            status_value = getattr(getattr(task, "status", None), "value", None)
+            status = str(status_value or getattr(task, "status", "") or "")
+            if status not in {"success", "completed", "failed", "cancelled"}:
+                raise ValueError("worker_claim_task_not_terminal")
+
+        worker = organization_registry.get_worker(worker_id)
+        if not isinstance(worker, dict):
+            raise ValueError("worker_registry_entry_missing")
+        active = worker.get("active_task_ids")
+        released = worker.get("released_task_ids")
+        if not isinstance(active, list) or not isinstance(released, list):
+            raise ValueError("worker_registry_claim_state_invalid")
+        if claim_id in active and claim_id in released:
+            raise ValueError("worker_registry_claim_state_conflict")
+        # A registry-side release without a matching released Mission record is drift,
+        # not an idempotent retry. The fully released/idempotent case is handled above.
+        if claim_id not in active:
+            raise ValueError("worker_registry_claim_mismatch")
+        already_released = False
+
+        actor_provider = str(actor.get("auth_provider") or "")
+        actor_id = str(actor.get("id") or "")
+        requested_at = now()
+        operation_id = hashlib.sha256(
+            f"{tenant_id}:{mission_run_id}:{claim_id}:{requested_at}".encode("utf-8")
+        ).hexdigest()
+        event_base = {
+            "event_id": operation_id,
+            "timestamp": requested_at,
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "claim_id": claim_id,
+            "worker_id": worker_id,
+            "task_ids": task_ids,
+            "reason": reason,
+            "actor_provider": actor_provider,
+            "actor_id": actor_id,
+            "before": {"mission_claim_state": "claimed", "worker_active_task_ids": list(active)},
+        }
+        _append_worker_claim_recovery_audit(
+            workspace,
+            {**event_base, "event_id": f"{operation_id}:release_requested", "event": "release_requested", "after": None},
+        )
+
+        for _, _, claim in matches:
+            claim["release_operation"] = {
+                "status": "requested",
+                "operation_id": operation_id,
+                "reason": reason,
+                "requested_at": requested_at,
+                "actor_provider": actor_provider,
+                "actor_id": actor_id,
+                "tenant_id": tenant_id,
+                "mission_run_id": mission_run_id,
+                "task_ids": task_ids,
+            }
+        save_mission_runs(workspace, {"items": items})
+
+        if not already_released:
+            organization_registry.release_worker_task(worker_id=worker_id, task_id=claim_id)
+
+        released_at = now()
+        for _, _, claim in matches:
+            claim["state"] = "released"
+            claim["released_at"] = released_at
+            claim["recovery_status"] = "manually_released"
+            claim["recovery_reason"] = "tenant_admin_manual_release"
+            claim["recovery_checked_at"] = released_at
+            claim["release_operation"]["status"] = "applied"
+            claim["release_operation"]["applied_at"] = released_at
+        save_mission_runs(workspace, {"items": items})
+
+        final_worker = organization_registry.get_worker(worker_id)
+        _append_worker_claim_recovery_audit(
+            workspace,
+            {
+                **event_base,
+                "event_id": f"{operation_id}:release_applied",
+                "timestamp": released_at,
+                "event": "release_applied",
+                "after": {
+                    "mission_claim_state": "released",
+                    "worker_status": final_worker.get("status") if isinstance(final_worker, dict) else None,
+                    "worker_active_task_ids": final_worker.get("active_task_ids") if isinstance(final_worker, dict) else None,
+                },
+            },
+        )
+        return {
+            "mission_run_id": mission_run_id,
+            "claim_id": claim_id,
+            "worker_id": worker_id,
+            "task_ids": task_ids,
+            "state": "released",
+            "already_released_in_registry": already_released,
+        }

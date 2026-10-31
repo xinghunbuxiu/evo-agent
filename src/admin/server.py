@@ -42,6 +42,8 @@ from core import (
 )
 from core.tenant import TenantManager
 from core.task_queue import get_task_queue, TaskPriority, TaskStatus
+from core.organization_runtime import OrganizationRegistry, sync_worker_catalog
+from core.verification import verify_workspace_artifacts
 from admin.database import db, MYSQL_AVAILABLE
 from admin.mission_runtime import (
     derive_follow_up_context,
@@ -92,6 +94,7 @@ from admin.runtime_state import (
     save_autonomy_runtime as _save_autonomy_runtime,
     save_learning_tasks as _save_learning_tasks,
 )
+from admin.tenant_access_runtime import tenant_role_for_user as _tenant_role_for_user, user_can_access_tenant as _user_can_access_tenant
 from admin.session_runtime import (
     create_session as _create_session_entry,
     delete_session as _delete_session_entry,
@@ -1102,14 +1105,25 @@ def create_app() -> FastAPI:
         if env_has_local_executor:
             workspace = env_path
     workspace.mkdir(parents=True, exist_ok=True)
+    organization_registry = OrganizationRegistry(workspace)
+    worker_manifests = builtin_worker_manifests(workspace)
+    worker_config = load_worker_registry_config(workspace)
+    worker_states = worker_config.get("workers", {}) if isinstance(worker_config.get("workers"), dict) else {}
+    enabled_worker_ids = {
+        str(worker_id)
+        for worker_id, state in worker_states.items()
+        if isinstance(state, dict) and bool(state.get("enabled"))
+    }
+    sync_worker_catalog(organization_registry, worker_manifests, enabled_worker_ids)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
-    _mission_action_runtime_ref["build_mission_actions"] = create_mission_action_runtime_bindings(
+    _mission_action_runtime_ref.update(create_mission_action_runtime_bindings(
         normalize_string_list=lambda value: [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else [],
         task_priority_cls=TaskPriority,
         mission_action_handlers=register_builtin_worker_mission_action_handlers(workspace=workspace),
         context_resolvers=build_mission_context_resolvers(workspace),
-    )["build_mission_actions"]
+        organization_registry=organization_registry,
+    ))
     _load_sessions()
     
     # 自动初始化 MySQL 表（如果不存在）
@@ -1632,6 +1646,21 @@ def create_app() -> FastAPI:
     async def start_background_research():
         purge_preset_finance_data(workspace)
         purge_preset_project_packages(workspace)
+        # Reconcile persisted Mission/Worker reservations before background work
+        # begins. Unknown or missing queue tasks remain claimed by design.
+        try:
+            recovery = _mission_bootstrap["reconcile_worker_claims_on_startup"]()
+            print(
+                "[mission-recovery] startup reconciliation complete "
+                f"mission_runs={recovery.get('mission_runs', 0)} "
+                f"claims_checked={recovery.get('claims_checked', 0)} "
+                f"claims_released={recovery.get('claims_released', 0)} "
+                f"claims_held_for_review={recovery.get('claims_held_for_review', 0)}"
+            )
+        except Exception as exc:
+            # Recovery failure must be visible but must not silently release claims
+            # or prevent the admin service from starting.
+            print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
         if not autonomy_thread.is_alive():
             autonomy_thread.start()
 
@@ -1727,6 +1756,10 @@ def create_app() -> FastAPI:
         effective_platform_promotion_status=_effective_platform_promotion_status,
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
+        resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
+        # The verifier reads declared artifacts inside the workspace; it never executes worker commands.
+        independent_verifier=verify_workspace_artifacts,
+        organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
 
@@ -2315,6 +2348,7 @@ def create_app() -> FastAPI:
     _mission_bootstrap = create_mission_bootstrap_runtime_bindings(
         workspace=workspace,
         task_queue=task_queue,
+        organization_registry=organization_registry,
         tenant_manager=tenant_manager,
         mission_planner=mission_planner,
         upsert_plan_learning_tasks=_upsert_plan_learning_tasks,
@@ -2354,6 +2388,10 @@ def create_app() -> FastAPI:
         derive_follow_up_context=derive_follow_up_context,
         success_response=success_response,
         error_response=error_response,
+        get_session_user=_get_session_user,
+        authorize_tenant=_user_can_access_tenant,
+        tenant_role=_tenant_role_for_user,
+        organization_registry=organization_registry,
     )
 
     register_self_media_routes(

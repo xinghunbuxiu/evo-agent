@@ -2,7 +2,7 @@ name: Python regression tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "automation/**", "infra/**"]
   pull_request:
   workflow_dispatch:
 
@@ -10,36 +10,110 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-regression-${{ github.workflow }}-${{ github.ref }}
+  group: python-regression-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # Persistent self-hosted runners must not execute untrusted fork PR code.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Use the runner's installed Python to avoid a slow/unreliable Python download from GitHub Releases.
+    # Setup instructions: docs/SELF_HOSTED_CI_CN.md
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     steps:
+      - name: Diagnose self-hosted runner before checkout
+        continue-on-error: true
+        run: |
+          set -u
+          date -u
+          uname -a
+          id
+          git --version
+          python3 --version
+          df -h
+          df -i
+          printf 'GITHUB_WORKSPACE=%s\n' "$GITHUB_WORKSPACE"
+          ls -ld "$GITHUB_WORKSPACE" || true
+          echo '--- DNS lookup ---'
+          timeout 5s getent hosts github.com || true
+          echo '--- HTTPS probe: github.com ---'
+          timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://github.com/ -o /dev/null -w 'github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
+          echo '--- HTTPS probe: api.github.com ---'
+          timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://api.github.com/ -o /dev/null -w 'api.github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
+          echo '--- Git remote probe (HTTP/1.1) ---'
+          timeout 12s git -c http.version=HTTP/1.1 ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD || true
+          echo '--- GitHub delivery endpoints ---'
+          for host_url in \
+            'https://codeload.github.com/xinghunbuxiu/evo-agent/tar.gz/${GITHUB_SHA}' \
+            'https://raw.githubusercontent.com/xinghunbuxiu/evo-agent/${GITHUB_SHA}/README.md' \
+            'https://api.github.com/repos/xinghunbuxiu/evo-agent/tarball/${GITHUB_SHA}'; do
+            timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 "$host_url" -o /dev/null -w '%{url_effective} http_status=%{http_code} connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\\n' || true
+          done
+          echo '--- proxy configuration presence (values hidden) ---'
+          for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+            if printenv "$name" >/dev/null 2>&1; then echo "$name=set"; else echo "$name=unset"; fi
+          done
+      - name: Probe isolated execution capabilities
+        continue-on-error: true
+        run: |
+          set -u
+          echo '--- container engines ---'
+          if command -v docker >/dev/null 2>&1; then
+            docker --version
+            timeout 8s docker info --format 'server={{.ServerVersion}} security={{json .SecurityOptions}} cgroup={{.CgroupVersion}} driver={{.Driver}}' || true
+          else
+            echo 'docker: not installed'
+          fi
+          if command -v podman >/dev/null 2>&1; then
+            podman --version
+            timeout 8s podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}}' || true
+          else
+            echo 'podman: not installed'
+          fi
+          echo '--- runtime permissions ---'
+          id
+          test -S /var/run/docker.sock && ls -l /var/run/docker.sock || echo 'docker socket: unavailable'
+          echo '--- kernel isolation primitives ---'
+          command -v unshare || true
+          command -v bwrap || true
+          command -v nsjail || true
+          command -v systemd-run || true
+          echo '--- unprivileged namespace capability ---'
+          timeout 8s unshare --user --map-root-user --mount --pid --fork /usr/bin/true && echo 'unshare: usable' || echo 'unshare: unavailable'
+          echo '--- user systemd scope capability ---'
+          if command -v systemd-run >/dev/null 2>&1; then
+            timeout 8s systemd-run --user --scope --wait --pipe -p NoNewPrivileges=yes /usr/bin/true && echo 'systemd user scope: usable' || echo 'systemd user scope: unavailable'
+          fi
+          echo '--- cgroup and security state ---'
+          stat -fc 'filesystem=%T' /sys/fs/cgroup 2>/dev/null || true
+          cat /proc/self/cgroup 2>/dev/null || true
+          test -r /sys/kernel/security/lsm && cat /sys/kernel/security/lsm || true
+          grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status || true
       - name: Check out repository
+        timeout-minutes: 12
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
+          fetch-depth: 1
+          clean: true
+          show-progress: true
+      - name: Verify Python and create virtual environment
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m venv .venv
+          .venv/bin/python -m pip --version
       - name: Install runtime dependencies
         run: |
           set -o pipefail
-          python -m pip install -r requirements.txt 2>&1 | tee dependency-install-output.txt
-
+          .venv/bin/python -m pip install -r requirements.txt 2>&1 | tee dependency-install-output.txt
       - name: Run regression suite
         run: |
           set -o pipefail
-          python -m unittest discover -s tests -v 2>&1 | tee regression-test-output.txt
-
+          .venv/bin/python scripts/run_regression_with_tree.py 2>&1 | tee regression-test-output.txt
       - name: Upload regression output
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: python-regression-output

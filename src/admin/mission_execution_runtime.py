@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Callable
 
 from core.tenant import TenantManager
+from core.organization_runtime import OrganizationRegistry
+from core.verification import sign_verification_evidence
 
 
 def create_mission_execution_bindings(
@@ -32,6 +34,9 @@ def create_mission_execution_bindings(
     effective_platform_promotion_status: Callable,
     mission_post_action_handlers: dict[str, Callable] | None = None,
     mission_summary_handlers: dict[str, Callable] | None = None,
+    resume_mission_dependency_nodes: Callable | None = None,
+    organization_registry: OrganizationRegistry | None = None,
+    independent_verifier: Callable[..., dict | None] | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -99,6 +104,7 @@ def create_mission_execution_bindings(
             "reconstruct": {},
             "role_reflection_context": role_reflection_context,
             "decision_trace": action["decision_trace"],
+            "dispatch_authorization": action.get("mission_runtime_authorization"),
         }
         if role_summary:
             diagnosis["role_reflection_summary"] = role_summary
@@ -150,8 +156,10 @@ def create_mission_execution_bindings(
         )
         learning_task["source"] = "mission_failure"
         learning_task["source_task_id"] = failed_task.id
-        learning_task["mission_run_id"] = mission_run.get("mission_run_id")
-        learning_task["mission_node_id"] = action.get("node_id")
+        learning_task["mission_run_id"] = mission_run["mission_run_id"]
+        learning_task["mission_node_id"] = action["node_id"]
+        learning_task["decision_trace"] = action["decision_trace"]
+        learning_task["dispatch_authorization"] = action.get("mission_runtime_authorization")
         learning_task["goal"] = mission_run.get("goal")
         learning_task["updated_at"] = datetime.now().isoformat()
 
@@ -159,6 +167,194 @@ def create_mission_execution_bindings(
         tasks[learning_task_id] = learning_task
         save_learning_tasks(workspace, {"tasks": tasks})
         return learning_task_id
+
+    def verify_mission_task(*, workspace, tenant_id: str, mission_run: dict, action: dict, task) -> dict | None:
+        """Create trusted verification evidence only through the injected verifier.
+
+        Existing action evidence is discarded first: persisted or worker-supplied
+        dictionaries are claims, not proof. The verifier callback must inspect
+        execution artifacts independently and return verifier identity plus checks.
+        """
+        if not isinstance(action, dict):
+            return None
+        action.pop("independent_verification", None)
+        action["verification_state"] = "unavailable"
+        if not callable(independent_verifier):
+            action["verification_reason"] = "verifier_not_configured"
+            return None
+
+        task_id = str(getattr(task, "id", "") or "").strip()
+        completed_at = str(getattr(task, "completed_at", "") or "").strip()
+        task_tenant_id = str(getattr(task, "tenant_id", "") or "").strip()
+        if task_tenant_id and task_tenant_id != tenant_id:
+            action["verification_reason"] = "task_tenant_mismatch"
+            return None
+        if not task_id or not completed_at:
+            action["verification_reason"] = "execution_event_missing"
+            return None
+        try:
+            result = independent_verifier(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                mission_run=mission_run,
+                action=action,
+                task=task,
+            )
+        except Exception as exc:
+            action["verification_state"] = "error"
+            action["verification_reason"] = "verifier_execution_failed"
+            action["verification_error_type"] = type(exc).__name__
+            return None
+
+        if not isinstance(result, dict):
+            action["verification_reason"] = "verifier_result_missing"
+            return None
+        verifier_id = str(result.get("verifier_id") or "").strip()
+        verifier_version = str(result.get("verifier_version") or "").strip()
+        checks = result.get("checks")
+        if (
+            not verifier_id
+            or not verifier_version
+            or not isinstance(checks, list)
+            or not checks
+            or any(
+                not isinstance(check, dict)
+                or not str(check.get("check_id") or "").strip()
+                or not isinstance(check.get("passed"), bool)
+                for check in checks
+            )
+        ):
+            action["verification_reason"] = "verifier_result_invalid"
+            return None
+
+        # Identity, task binding, event identity and status are runtime-owned.
+        # The callback cannot choose another task or mark failed checks as passed.
+        task_status_value = getattr(getattr(task, "status", None), "value", getattr(task, "status", ""))
+        task_succeeded = str(task_status_value or "").strip().lower() in {"success", "completed"}
+        if not task_succeeded:
+            checks = [*checks, {"check_id": "task_execution_succeeded", "passed": False}]
+        status = "passed" if task_succeeded and all(check["passed"] for check in checks) else "failed"
+        evidence = {
+            "source": "mission_independent_verifier",
+            "task_id": task_id,
+            "execution_event_id": f"task-completion:{task_id}:{completed_at}",
+            "verifier_id": verifier_id,
+            "verifier_version": verifier_version,
+            "status": status,
+            "checks": checks,
+        }
+        evidence = sign_verification_evidence(workspace, tenant_id, evidence)
+        action["independent_verification"] = evidence
+        action["verification_state"] = status
+        action.pop("verification_reason", None)
+        return evidence
+
+    def record_strategy_execution_feedback(*, workspace, tenant_id: str, action: dict, task, execution_success: bool) -> bool:
+        """Record outcome only when the worker explicitly confirms it used a recommended strategy.
+
+        Recommendation is not usage. The action marker makes refresh idempotent because
+        mission runs are refreshed repeatedly after queue tasks become terminal.
+        """
+        if not isinstance(action, dict) or action.get("strategy_feedback_recorded") is True:
+            return False
+        result = getattr(task, "result", None)
+        result = result if isinstance(result, dict) else {}
+        usage = result.get("strategy_usage")
+        if not isinstance(usage, dict) or usage.get("strategy_used") is not True:
+            return False
+        strategy_id = str(usage.get("strategy_id") or "").strip()
+        task_id = str(getattr(task, "id", "") or "").strip()
+        verification = action.get("independent_verification")
+        checks = verification.get("checks") if isinstance(verification, dict) else None
+        verification_status = (
+            str(verification.get("status") or "").strip()
+            if isinstance(verification, dict) else ""
+        )
+        # Verification must be attached by the Mission runtime's verifier, not
+        # accepted from the worker's result payload. Worker-reported booleans are
+        # retained as claims only and can never update strategy outcome statistics.
+        if (
+            not task_id
+            or not isinstance(verification, dict)
+            or verification.get("source") != "mission_independent_verifier"
+            or str(verification.get("task_id") or "").strip() != task_id
+            or not str(verification.get("execution_event_id") or "").strip()
+            or not str(verification.get("verifier_id") or "").strip()
+            or not str(verification.get("verifier_version") or "").strip()
+            or verification_status not in {"passed", "failed"}
+            or not isinstance(checks, list)
+            or not checks
+            or any(
+                not isinstance(check, dict)
+                or not str(check.get("check_id") or "").strip()
+                or not isinstance(check.get("passed"), bool)
+                for check in checks
+            )
+            or (verification_status == "passed" and not all(check["passed"] for check in checks))
+            or (verification_status == "failed" and all(check["passed"] for check in checks))
+        ):
+            return False
+        execution_success = verification_status == "passed"
+        if not strategy_id:
+            return False
+
+        # A worker may only report usage for a strategy that was actually included
+        # in this action's planner recommendation contract. Existence in the tenant
+        # strategy store alone is not evidence that this task used that strategy.
+        recommendations = action.get("recommended_strategies")
+        if not isinstance(recommendations, list) or not any(
+            isinstance(item, dict) and str(item.get("id") or "").strip() == strategy_id
+            for item in recommendations
+        ):
+            return False
+
+        # Import locally so the execution runtime remains usable by lightweight tests
+        # and callers that do not need strategy learning.
+        from core.learning import Experience, StrategyEngine
+
+        engine = StrategyEngine(workspace, tenant_id=tenant_id)
+        if not any(item.id == strategy_id for item in engine.strategies):
+            return False
+        domain = str(usage.get("domain") or action.get("strategy_domain") or "general")
+        experience = Experience(
+            id=f"mission-strategy-feedback-{task_id}",
+            domain=domain,
+            task_type=str(action.get("task_type") or "mission"),
+            input_summary=str(action.get("title") or action.get("node_id") or "Mission task"),
+            output_summary=str(result.get("summary") or getattr(task, "error", "") or ""),
+            quality_score=1.0 if execution_success else 0.0,
+            metadata={
+                "strategy_id": strategy_id,
+                "execution_success": bool(execution_success),
+                "source": "mission_execution_feedback",
+                "task_id": task_id,
+                "mission_run_id": str(action.get("mission_run_id") or ""),
+                "verification_evidence": verification,
+                "worker_reported_verification_passed": usage.get("verification_passed") is True,
+            },
+        )
+        updated = engine.evolve_strategy(experience)
+        if updated is None:
+            return False
+        action["strategy_feedback_recorded"] = True
+        action["strategy_feedback_task_id"] = task_id
+        action["strategy_feedback"] = {
+            "strategy_id": strategy_id,
+            "execution_success": bool(execution_success),
+            "verification": {
+                "status": verification_status,
+                "source": "mission_independent_verifier",
+                "execution_event_id": str(verification.get("execution_event_id") or ""),
+                "verifier_id": str(verification.get("verifier_id") or ""),
+                "verifier_version": str(verification.get("verifier_version") or ""),
+            },
+            "verification_claim": {
+                "passed": usage.get("verification_passed") is True,
+                "source": "worker_reported_unverified",
+            },
+            "recorded_at": datetime.now().astimezone().isoformat(),
+        }
+        return True
 
     def refresh_mission_learning_action(
         *,
@@ -268,10 +464,13 @@ def create_mission_execution_bindings(
             "success": 0,
             "failed": 0,
             "running": 0,
+            "cancelled": 0,
             "learning_validating": 0,
             "learning_improved": 0,
             "learning_regressed": 0,
             "learning_completed": 0,
+            "dependency_waiting": 0,
+            "dependency_replan_required": 0,
         }
 
         goal = str(mission_run.get("goal") or "")
@@ -307,7 +506,23 @@ def create_mission_execution_bindings(
                     continue
 
                 task_status = str(task.status.value or "")
-                if task_status == "completed":
+                if task_status in {"success", "completed", "failed", "cancelled"}:
+                    verify_mission_task(
+                        workspace=workspace,
+                        tenant_id=tenant_id,
+                        mission_run=mission_run,
+                        action=current,
+                        task=task,
+                    )
+                if task_status in {"success", "completed", "failed"}:
+                    record_strategy_execution_feedback(
+                        workspace=workspace,
+                        tenant_id=tenant_id,
+                        action=current,
+                        task=task,
+                        execution_success=task_status in {"success", "completed"},
+                    )
+                if task_status in {"success", "completed"}:
                     current["status"] = "completed"
                     current["detail"] = trim_candidate_text(
                         (task.result or {}).get("summary") or current.get("detail") or f"{current.get('task_type') or 'task'} 已完成"
@@ -329,6 +544,10 @@ def create_mission_execution_bindings(
                             action=current,
                             failed_task=task,
                         )
+                        # Keep the original failed task action (including its worker claim)
+                        # in the refreshed run. The learning ticket is an additional action, not
+                        # a replacement; otherwise claim reconciliation cannot release the worker.
+                        refreshed_actions.append(current)
                         refreshed_actions.append({
                             "node_id": node_id,
                             "title": current.get("title"),
@@ -352,11 +571,16 @@ def create_mission_execution_bindings(
                             ],
                             "role_reflection_context": role_reflection_context,
                             "decision_trace": current["decision_trace"],
+                            "dispatch_authorization": current.get("mission_runtime_authorization"),
                         })
                         existing_failure_learning.add(failure_key)
                 elif task_status == "running":
                     current["status"] = "running"
                     counts["running"] += 1
+                elif task_status == "cancelled":
+                    current["status"] = "cancelled"
+                    current["detail"] = "任务已取消，员工占用将在确认所有关联任务终止后释放"
+                    counts["cancelled"] += 1
                 else:
                     current["status"] = "submitted"
                     counts["submitted"] += 1
@@ -447,13 +671,257 @@ def create_mission_execution_bindings(
                 continue
 
             refreshed_actions.append(current)
-            if action_type == "failure_learning_ticket":
+            if action_type in {"failure_learning_ticket", "learning_ticket"}:
                 counts["needs_learning"] += 1
             elif action_type == "needs_input":
                 counts["needs_input"] += 1
-            elif action_type == "planned_only":
+            elif action_type in {"planned_only", "knowledge_reuse_pending"}:
                 counts["planned_only"] += 1
 
+        # Release a worker only after every queue task attached to its claim is terminal.
+        # Claims are durable leases, not plan recommendations; missing task records keep the lease.
+        if organization_registry is not None:
+            claims: dict[str, dict] = {}
+            for action_index, item in enumerate(refreshed_actions):
+                if not isinstance(item, dict):
+                    continue
+                claim = item.get("worker_claim")
+                if not isinstance(claim, dict) or claim.get("state") != "claimed":
+                    continue
+                claim_id = str(claim.get("claim_id") or "").strip()
+                worker_id = str(claim.get("worker_id") or "").strip()
+                task_id = str(item.get("task_id") or "").strip()
+                if not claim_id or not worker_id or not task_id:
+                    continue
+                group = claims.setdefault(claim_id, {
+                    "worker_id": worker_id,
+                    "task_ids": set(),
+                    "action_indexes": [],
+                })
+                if group["worker_id"] != worker_id:
+                    continue
+                group["task_ids"].add(task_id)
+                group["action_indexes"].append(action_index)
+
+            for claim_id, group in claims.items():
+                task_ids = sorted(group["task_ids"])
+                if not task_ids:
+                    continue
+                all_terminal = True
+                for task_id in task_ids:
+                    task = task_queue.get_task(task_id)
+                    if task is None or str(getattr(getattr(task, "status", None), "value", "")) not in {
+                        "success", "completed", "failed", "cancelled",
+                    }:
+                        all_terminal = False
+                        break
+                if not all_terminal:
+                    continue
+                try:
+                    organization_registry.release_worker_task(
+                        worker_id=group["worker_id"],
+                        task_id=claim_id,
+                    )
+                except Exception as exc:  # keep the mission visible if durable release fails
+                    for action_index in group["action_indexes"]:
+                        claim = dict(refreshed_actions[action_index].get("worker_claim", {}))
+                        claim["release_error_type"] = type(exc).__name__
+                        refreshed_actions[action_index]["worker_claim"] = claim
+                    continue
+                released_at = datetime.now().astimezone().isoformat()
+                for action_index in group["action_indexes"]:
+                    claim = dict(refreshed_actions[action_index].get("worker_claim", {}))
+                    claim["state"] = "released"
+                    claim["released_at"] = released_at
+                    refreshed_actions[action_index]["worker_claim"] = claim
+
+        # Reconcile persisted dependency-blocked actions against real execution outcomes.
+        # Only successful prerequisite actions release downstream work; recommendations alone never do.
+        dependency_decisions: list[dict] = []
+        previous_dependency_runtime = mission_run.get("dependency_runtime", {})
+        previous_dependency_decisions = (
+            previous_dependency_runtime.get("decisions", [])
+            if isinstance(previous_dependency_runtime, dict)
+            and isinstance(previous_dependency_runtime.get("decisions"), list)
+            else []
+        )
+        dependency_history = list(previous_dependency_decisions)
+        node_status_by_id: dict[str, str] = {}
+        for item in refreshed_actions:
+            if not isinstance(item, dict):
+                continue
+            if item.get("action_type") == "failure_learning_ticket" or item.get("status") == "superseded":
+                continue
+            item_node_id = str(item.get("node_id") or "").strip()
+            if item_node_id:
+                node_status_by_id[item_node_id] = str(item.get("status") or "").strip()
+
+        completed_node_ids = sorted(
+            node_id for node_id, node_status in node_status_by_id.items()
+            if node_status in {"completed", "improved"}
+        )
+        failed_node_ids = sorted(
+            node_id for node_id, node_status in node_status_by_id.items()
+            if node_status in {"failed", "regressed"}
+        )
+        completed_node_set = set(completed_node_ids)
+        failed_node_set = set(failed_node_ids)
+        eligible_nodes: list[str] = []
+        eligible_action_indexes: dict[str, int] = {}
+
+        for action_index, item in enumerate(refreshed_actions):
+            if not isinstance(item, dict) or item.get("action_type") != "dependency_blocked":
+                continue
+            if item.get("status") != "blocked":
+                continue
+            node_id = str(item.get("node_id") or "").strip()
+            dependencies = item.get("depends_on", []) if isinstance(item.get("depends_on"), list) else []
+            dependencies = [str(value).strip() for value in dependencies if str(value).strip()]
+            prior_state = str(item.get("dependency_state") or "waiting")
+            failed_dependencies = [dependency for dependency in dependencies if dependency in failed_node_set]
+            if failed_dependencies:
+                item["dependency_state"] = "failed"
+                item["dependency_blockers"] = failed_dependencies
+                item["replan_required"] = True
+                item["replan_reason_code"] = "dependency_failed"
+                item["detail"] = "前置节点执行失败；下游节点保持阻塞，等待 Mission 主脑重新规划，不自动绕过依赖"
+                if prior_state != "failed":
+                    dependency_decisions.append({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.failure_replan.v1",
+                        "result": "replan_required",
+                        "evidence": {
+                            "failed_dependency_ids": failed_dependencies,
+                            "completed_node_ids": completed_node_ids,
+                        },
+                    })
+                continue
+
+            if dependencies and all(dependency in completed_node_set for dependency in dependencies):
+                if prior_state in {"resume_failed", "ready_for_replan", "failed"}:
+                    continue
+                eligible_nodes.append(node_id)
+                eligible_action_indexes[node_id] = action_index
+            else:
+                item["dependency_state"] = "waiting"
+                item["dependency_blockers"] = [dependency for dependency in dependencies if dependency not in completed_node_set]
+                item["replan_required"] = False
+
+        if eligible_nodes:
+            if callable(resume_mission_dependency_nodes):
+                for node_id in eligible_nodes:
+                    blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                    blocked_action["status"] = "superseded"
+                    blocked_action["dependency_state"] = "released"
+                    blocked_action["replan_required"] = False
+                    blocked_action["detail"] = "所有前置节点已成功完成；此阻塞记录已被后续派发动作取代"
+                try:
+                    resumed = resume_mission_dependency_nodes(
+                        task_queue=task_queue,
+                        mission_run=mission_run,
+                        node_ids=eligible_nodes,
+                        completed_node_ids=completed_node_ids,
+                    )
+                    resumed = resumed if isinstance(resumed, dict) else {}
+                    resumed_actions = resumed.get("actions", []) if isinstance(resumed.get("actions"), list) else []
+                    resumed_ids = {str(item.get("node_id") or "").strip() for item in resumed_actions if isinstance(item, dict)}
+                    if (
+                        not resumed_actions
+                        or resumed_ids != set(eligible_nodes)
+                        or len(resumed_ids) != len(resumed_actions)
+                    ):
+                        raise ValueError("dependency resume must return exactly one action per released node")
+                    if any(item.get("action_type") == "dependency_blocked" for item in resumed_actions if isinstance(item, dict)):
+                        raise ValueError("dependency resume still reports unmet prerequisites")
+                    for resumed_action in resumed_actions:
+                        if (
+                            resumed_action.get("action_type") == "dispatch_denied"
+                            and resumed_action.get("status") == "blocked"
+                            and resumed_action.get("depends_on")
+                        ):
+                            resumed_action["replan_required"] = True
+                            resumed_action["replan_reason_code"] = "released_node_dispatch_denied"
+                    refreshed_actions.extend(resumed_actions)
+                    resumed_task_ids = resumed.get("submitted_task_ids", [])
+                    if not isinstance(resumed_task_ids, list):
+                        resumed_task_ids = []
+                    for task_id in resumed_task_ids:
+                        task_id = str(task_id).strip()
+                        if task_id and task_id not in submitted_task_ids:
+                            submitted_task_ids.append(task_id)
+                    resumed_counts = resumed.get("counts", {}) if isinstance(resumed.get("counts"), dict) else {}
+                    for key in ("submitted", "needs_learning", "needs_input", "planned_only"):
+                        counts[key] = counts.get(key, 0) + int(resumed_counts.get(key, 0) or 0)
+                    dependency_decisions.extend({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.release_after_success.v1",
+                        "result": "released_for_mission_reevaluation",
+                        "evidence": {"completed_dependency_ids": [
+                            dependency for dependency in (refreshed_actions[eligible_action_indexes[node_id]].get("depends_on", []))
+                            if dependency in completed_node_set
+                        ]},
+                    } for node_id in eligible_nodes)
+                except Exception as exc:  # fail closed; preserve an auditable manual-replan state
+                    for node_id in eligible_nodes:
+                        blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                        blocked_action["status"] = "blocked"
+                        blocked_action["dependency_state"] = "resume_failed"
+                        blocked_action["replan_required"] = True
+                        blocked_action["replan_reason_code"] = "dependency_resume_failed"
+                        blocked_action["resume_error"] = str(exc)[:240]
+                        blocked_action["detail"] = "前置节点已完成，但下游重新派发失败；保留阻塞并要求 Mission 主脑重规划"
+                        dependency_decisions.append({
+                            "node_id": node_id,
+                            "rule_id": "mission.dependency.resume_failure.v1",
+                            "result": "replan_required",
+                            "evidence": {"error": str(exc)[:240]},
+                        })
+            else:
+                for node_id in eligible_nodes:
+                    blocked_action = refreshed_actions[eligible_action_indexes[node_id]]
+                    blocked_action["dependency_state"] = "ready_for_replan"
+                    blocked_action["replan_required"] = True
+                    blocked_action["replan_reason_code"] = "dependency_resume_handler_missing"
+                    blocked_action["detail"] = "前置节点已完成，但当前运行时未注册下游派发回调；需要 Mission 主脑重规划"
+                    dependency_decisions.append({
+                        "node_id": node_id,
+                        "rule_id": "mission.dependency.resume_handler_missing.v1",
+                        "result": "replan_required",
+                        "evidence": {"completed_dependency_ids": completed_node_ids},
+                    })
+
+        dependency_replan_nodes = sorted({
+            str(item.get("node_id") or "").strip()
+            for item in refreshed_actions
+            if isinstance(item, dict)
+            and item.get("replan_required") is True
+            and (
+                item.get("action_type") == "dependency_blocked"
+                or (item.get("action_type") == "dispatch_denied" and bool(item.get("depends_on")))
+            )
+            and str(item.get("node_id") or "").strip()
+        })
+        waiting_dependency_nodes = sorted({
+            str(item.get("node_id") or "").strip()
+            for item in refreshed_actions
+            if isinstance(item, dict)
+            and item.get("action_type") == "dependency_blocked"
+            and item.get("status") == "blocked"
+            and item.get("dependency_state") == "waiting"
+            and str(item.get("node_id") or "").strip()
+        })
+        dependency_history.extend(dependency_decisions)
+        counts["dependency_waiting"] = len(waiting_dependency_nodes)
+        counts["dependency_replan_required"] = len(dependency_replan_nodes)
+        mission_run["dependency_runtime"] = {
+            "schema_version": "mission.dependency.runtime.v1",
+            "completed_node_ids": completed_node_ids,
+            "failed_node_ids": failed_node_ids,
+            "waiting_node_ids": waiting_dependency_nodes,
+            "replan_required_node_ids": dependency_replan_nodes,
+            "decisions": dependency_history[-100:],
+        }
+        mission_run["submitted_task_ids"] = submitted_task_ids
         mission_run["actions"] = refreshed_actions
         mission_run["counts"] = counts
 
@@ -474,11 +942,18 @@ def create_mission_execution_bindings(
             overall_status = "running"
         elif counts["submitted"]:
             overall_status = "submitted"
-        elif counts["success"] and counts["needs_learning"] == 0 and counts["needs_input"] == 0:
-            overall_status = "completed"
         elif counts["failed"]:
             overall_status = "needs_learning"
-        elif counts["needs_input"]:
+        elif dependency_replan_nodes or waiting_dependency_nodes:
+            overall_status = "blocked"
+        elif counts["success"] and counts["needs_learning"] == 0 and counts["needs_input"] == 0:
+            overall_status = "completed"
+        elif counts["needs_input"] or any(
+            isinstance(item, dict)
+            and item.get("action_type") == "dispatch_denied"
+            and item.get("status") == "blocked"
+            for item in refreshed_actions
+        ):
             overall_status = "blocked"
         elif counts["success"]:
             overall_status = "partially_completed"
@@ -488,6 +963,32 @@ def create_mission_execution_bindings(
         mission_run["status"] = overall_status
         mission_run["updated_at"] = datetime.now().isoformat()
         next_cycle_plan = build_mission_next_cycle_plan(mission_run, refreshed_actions)
+        if dependency_replan_nodes:
+            next_cycle_plan = dict(next_cycle_plan) if isinstance(next_cycle_plan, dict) else {}
+            next_steps = next_cycle_plan.get("next_steps", []) if isinstance(next_cycle_plan.get("next_steps"), list) else []
+            focus_points = next_cycle_plan.get("focus_points", []) if isinstance(next_cycle_plan.get("focus_points"), list) else []
+            replan_step = (
+                "Mission 主脑重新评估依赖失败节点 "
+                + ", ".join(dependency_replan_nodes)
+                + "：检查失败学习结果，选择修复、替代路径或停止；未重新授权前不得派发下游节点"
+            )
+            if replan_step not in next_steps:
+                next_steps.insert(0, replan_step)
+            replan_focus = "依赖失败已阻断下游任务，需要基于执行证据重新规划"
+            if replan_focus not in focus_points:
+                focus_points.insert(0, replan_focus)
+            next_cycle_plan.update({
+                "title": next_cycle_plan.get("title") or "Mission 依赖失败重规划",
+                "status": "ready",
+                "next_steps": next_steps[:6],
+                "focus_points": focus_points[:4],
+                "dependency_replan": {
+                    "required": True,
+                    "decision_owner": "mission",
+                    "node_ids": dependency_replan_nodes,
+                    "automatic_dispatch": False,
+                },
+            })
         mission_growth_timeline = build_mission_growth_timeline(refreshed_actions)
         mission_run["summary"] = {
             "goal": goal,
@@ -529,6 +1030,7 @@ def create_mission_execution_bindings(
                 ),
             ),
             "next_cycle_plan": next_cycle_plan,
+            "dependency_runtime": mission_run.get("dependency_runtime", {}),
             "growth_timeline": mission_growth_timeline,
         }
         runtime_route = mission_run.get("runtime_route", {}) if isinstance(mission_run.get("runtime_route"), dict) else {}
@@ -555,5 +1057,7 @@ def create_mission_execution_bindings(
         "build_mission_failure_diagnosis": build_mission_failure_diagnosis,
         "upsert_mission_failure_learning_task": upsert_mission_failure_learning_task,
         "refresh_mission_learning_action": refresh_mission_learning_action,
+        "verify_mission_task": verify_mission_task,
+        "record_strategy_execution_feedback": record_strategy_execution_feedback,
         "refresh_mission_run": refresh_mission_run,
     }

@@ -1,0 +1,33 @@
+[Unit]
+Description=Evo privileged sandbox broker
+Requires=evo-sandbox-broker.socket docker.service
+After=docker.service
+
+[Service]
+Type=simple
+User=evo-broker
+Group=evo-broker
+SupplementaryGroups=docker
+WorkingDirectory=/opt/evo-agent
+Environment=PYTHONPATH=/opt/evo-agent/src
+Environment=EVO_BROKER_CONFIG=/etc/evo-sandbox-broker/config.json
+ExecStart=/opt/evo-agent-broker/venv/bin/python -m core.sandbox_broker_daemon
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+StateDirectory=evo-sandbox-broker
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/evo-sandbox-broker /run/evo-sandbox-broker
+
+[Install]
+WantedBy=multi-user.target

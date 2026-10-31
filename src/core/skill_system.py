@@ -201,10 +201,18 @@ class SkillRegistry:
         min_success_rate: float = 0.8
     ) -> bool:
         """
-        验证技能（提升到 verified 级别）
-        
-        通过测试后，技能从草稿升级为本地验证通过
+        验证技能（提升到 verified 级别）。
+
+        Fail closed: arbitrary dictionaries and in-memory success counts are not
+        proof of execution. Promotion remains disabled until this registry checks
+        a persisted replay-validation record created by the trusted executor and
+        independent validator. Keep this guard here so callers cannot bypass the
+        knowledge-runtime checks by invoking the registry directly.
         """
+        return False
+
+        # Legacy implementation retained temporarily; unreachable until trusted
+        # persisted replay-validation records are integrated.
         # 加载草稿
         skill = self._load_local_draft(skill_id)
         if not skill:
@@ -241,6 +249,12 @@ class SkillRegistry:
         
         只有验证通过的技能才能发布到云端
         """
+        # Fail closed at the publication boundary too. A JSON file under the
+        # local_verified directory is not itself proof that a trusted replay
+        # executor and independent validator approved this exact skill version.
+        # Re-enable only after publication checks a persisted validation record.
+        return False
+
         # 加载本地验证通过的技能
         skill = self._load_local_verified(skill_id)
         if not skill:
@@ -465,10 +479,25 @@ class SkillExecutor:
         auto_publish: bool = True
     ) -> Dict[str, Any]:
         """
-        验证并发布技能
-        
-        简化流程：基于执行历史自动验证并发布
+        验证并发布技能。
+
+        Disabled until the executor produces real, persisted replay evidence and
+        independent validation checks. The current _execute_skill_code method is
+        a placeholder that always reports success; its in-memory history must not
+        be treated as proof that a skill works or be allowed to publish a skill.
         """
+        return {
+            "success": False,
+            "verified": False,
+            "published": False,
+            "message": (
+                "Skill verification is disabled: the current executor is a "
+                "placeholder and does not produce independently validated replay evidence."
+            ),
+        }
+
+        # Kept below temporarily for reference; unreachable until the real replay
+        # executor and independent validator are connected.
         # 获取该技能的执行历史
         history = self.get_execution_history(skill_id)
         

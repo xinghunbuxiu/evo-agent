@@ -1,0 +1,11 @@
+{
+  "workspace_roots": {
+    "evo-agent": "/srv/evo/workspaces/evo-agent"
+  },
+  "replay_database": "/var/lib/evo-sandbox-broker/replay.sqlite3",
+  "signing_key": "/etc/evo-sandbox-broker/signing-key.pem",
+  "key_id": "evo-broker-2026-01",
+  "image": "registry.example/evo/python-runner@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "allowed_uids": [1001],
+  "max_workers": 2
+}
