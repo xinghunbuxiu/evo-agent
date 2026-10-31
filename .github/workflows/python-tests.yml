@@ -43,6 +43,36 @@ jobs:
           timeout 12s curl -sSIL --connect-timeout 5 --max-time 10 https://api.github.com/ -o /dev/null -w 'api.github.com http_status=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' || true
           echo '--- Git remote probe ---'
           timeout 12s git -c http.version=HTTP/1.1 ls-remote https://github.com/xinghunbuxiu/evo-agent.git HEAD || true
+      - name: Probe isolated execution capabilities
+        continue-on-error: true
+        run: |
+          set -u
+          echo '--- container engines ---'
+          if command -v docker >/dev/null 2>&1; then
+            docker --version
+            timeout 8s docker info --format 'server={{.ServerVersion}} security={{json .SecurityOptions}} cgroup={{.CgroupVersion}} driver={{.Driver}}' || true
+          else
+            echo 'docker: not installed'
+          fi
+          if command -v podman >/dev/null 2>&1; then
+            podman --version
+            timeout 8s podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}}' || true
+          else
+            echo 'podman: not installed'
+          fi
+          echo '--- runtime permissions ---'
+          id
+          test -S /var/run/docker.sock && ls -l /var/run/docker.sock || echo 'docker socket: unavailable'
+          echo '--- kernel isolation primitives ---'
+          command -v unshare || true
+          command -v bwrap || true
+          command -v nsjail || true
+          command -v systemd-run || true
+          echo '--- cgroup and security state ---'
+          stat -fc 'filesystem=%T' /sys/fs/cgroup 2>/dev/null || true
+          cat /proc/self/cgroup 2>/dev/null || true
+          test -r /sys/kernel/security/lsm && cat /sys/kernel/security/lsm || true
+          grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status || true
       - name: Check out repository
         timeout-minutes: 5
         uses: actions/checkout@v4
