@@ -1,6 +1,6 @@
 [Unit]
 Description=Evo privileged sandbox broker
-Requires=evo-sandbox-broker.socket
+Requires=evo-sandbox-broker.socket docker.service
 After=docker.service
 
 [Service]
