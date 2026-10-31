@@ -135,3 +135,22 @@ Prioritize a separately protected signing secret and an isolated test-runner bou
 - Keep multi-host worker lease guarantees out of scope until backed by a shared transactional store.
 
 The goal is to preserve the invariant: **never double-dispatch a worker, and never free a worker whose task may still be running.**
+
+
+## Allowlisted execution-profile contract (2026-10-31)
+
+The new src/core/execution_profiles.py module resolves a strict declarative request
+into a fixed process specification for a future trusted sandbox adapter:
+
+- python.unittest accepts only a dotted Python module name.
+- python.pytest accepts only an existing test file resolved inside the workspace.
+- Requests may select a registered profile and target, plus a bounded timeout (1–300 seconds).
+- The resolver owns the executable, fixed arguments, working directory, output cap (256 KiB), and network-disabled intent.
+- Worker-supplied command, argv, env, or cwd fields are rejected.
+- Absolute paths, traversal, Windows drive/UNC paths, NUL bytes, and symlink escapes are rejected for file targets.
+
+This is only a profile contract and command-spec builder. It does not spawn a process
+and does not provide OS-level network, CPU, memory, or filesystem isolation. The
+network_access=False field is policy metadata, not a firewall. No production Mission
+dispatch is connected to these profiles yet. A future adapter must execute the spec
+inside an independently enforced sandbox and produce runtime-owned, signed evidence.
