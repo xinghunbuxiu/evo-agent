@@ -52,7 +52,7 @@ class DockerSandboxExecutor:
                 or ":" in target or any(part in {"", ".", ".."} for part in target.split("/"))
             ):
                 raise DockerSandboxConfigurationError("pytest target is not workspace-relative")
-            return ["/usr/local/bin/python", "-m", "pytest", "/workspace/" + target]
+            return ["/usr/local/bin/python", "-m", "pytest", "-p", "no:cacheprovider", "/workspace/" + target]
         if spec.profile_id == "python.unittest":
             target = spec.target
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
@@ -114,6 +114,8 @@ class DockerSandboxExecutor:
                     "PYTHONDONTWRITEBYTECODE": "1",
                     "PYTHONUNBUFFERED": "1",
                     "HOME": "/tmp",
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
                 },
                 volumes={
                     str(workspace): {"bind": "/workspace", "mode": "ro"},
@@ -142,6 +144,7 @@ class DockerSandboxExecutor:
                 auto_remove=False,
                 stdin_open=False,
                 tty=False,
+                init=True,
             )
             container.start()
             try:
