@@ -37,8 +37,8 @@ def _workspace_target(workspace: Path, raw_target: Any) -> Path:
         or Path(target).is_absolute()
         or PureWindowsPath(target).is_absolute()
         or PureWindowsPath(target).drive
-        or "\\\\" in target
-        or "\\x00" in target
+        or "\\" in target
+        or "\x00" in target
         or any(part in {"", ".", ".."} for part in Path(target).parts)
     ):
         raise ValueError("execution target must be a portable workspace-relative path")
