@@ -68,6 +68,11 @@ class ExecutionProfileTests(unittest.TestCase):
                 "profile_id": "python.shell",
                 "target": "anything",
             })
+        with self.assertRaises(ValueError):
+            resolve_execution_profile(self.workspace, {
+                "profile_id": "python.unittest",
+                "target": "os",
+            })
         for timeout in (0, 301, True, "30"):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                 resolve_execution_profile(self.workspace, {
