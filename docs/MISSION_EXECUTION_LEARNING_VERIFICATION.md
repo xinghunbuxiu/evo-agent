@@ -154,3 +154,19 @@ and does not provide OS-level network, CPU, memory, or filesystem isolation. The
 network_access=False field is policy metadata, not a firewall. No production Mission
 dispatch is connected to these profiles yet. A future adapter must execute the spec
 inside an independently enforced sandbox and produce runtime-owned, signed evidence.
+
+
+## Trusted runner result envelope (2026-10-31)
+
+The new src/core/execution_results.py normalizes a result captured by a trusted
+runner adapter into mission.execution-result.v1. It records runner ID/version,
+profile and target, timeout/exit status, and SHA-256 digests plus byte counts for
+stdout/stderr. Raw output is not copied into the learning evidence envelope.
+Non-zero exits and timeouts cannot be marked as execution success; output beyond
+the profile cap and malformed runner metadata are rejected.
+
+This is still a result-normalization contract, not runner authentication. The
+function must only be called by a trusted adapter that actually observed the
+process. It does not spawn the process, enforce a sandbox, or sign the envelope.
+The Mission runtime must later authenticate the adapter and sign the normalized
+record before strategy feedback or task completion can rely on it.
