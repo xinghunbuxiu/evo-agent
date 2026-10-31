@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import socket
 import struct
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 from .sandbox_broker import BrokerRequestRejected, SandboxBrokerService
@@ -91,6 +93,54 @@ def handle_broker_connection(
     _send_frame(connection, payload, MAX_RESPONSE_BYTES)
 
 
+
+def serve_listener(
+    listener: socket.socket,
+    *,
+    service: SandboxBrokerService,
+    allowed_uids: Iterable[int],
+    stop_event: threading.Event | None = None,
+    max_workers: int = 4,
+) -> None:
+    """Serve a pre-bound socket (for example systemd socket activation).
+
+    The caller owns socket creation, filesystem permissions, and lifecycle.
+    Concurrency is bounded; when all worker slots are occupied new connections
+    are closed instead of accumulating an unbounded execution queue.
+    """
+    if isinstance(max_workers, bool) or not isinstance(max_workers, int) or not 1 <= max_workers <= 32:
+        raise ValueError("max_workers must be between 1 and 32")
+    allowed = tuple(allowed_uids)
+    slots = threading.BoundedSemaphore(max_workers)
+    listener.settimeout(0.5)
+
+    def handle(connection: socket.socket) -> None:
+        try:
+            with connection:
+                handle_broker_connection(
+                    connection, service=service, allowed_uids=allowed,
+                )
+        except BrokerTransportError:
+            pass
+        finally:
+            slots.release()
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="sandbox-broker") as pool:
+        while stop_event is None or not stop_event.is_set():
+            try:
+                connection, _address = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                raise
+            if not slots.acquire(blocking=False):
+                connection.close()
+                continue
+            pool.submit(handle, connection)
+
+
 def execute_via_broker(
     socket_path: str,
     workspace_id: str,
@@ -153,6 +203,7 @@ def request_broker(
 __all__ = [
     "BrokerTransportError",
     "handle_broker_connection",
+    "serve_listener",
     "request_broker",
     "execute_via_broker",
 ]
