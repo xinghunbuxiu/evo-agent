@@ -82,7 +82,7 @@ class ExecutionProfileTests(unittest.TestCase):
                 })
 
     def test_pytest_rejects_traversal_and_symlink_escape(self):
-        outside = Path(self.temp.name).parent / "outside-test-target.py"
+        outside = self.workspace.parent / f"{self.workspace.name}-outside-test-target.py"
         outside.write_text("def test_outside(): pass\n", encoding="utf-8")
         try:
             with self.assertRaises(ValueError):
