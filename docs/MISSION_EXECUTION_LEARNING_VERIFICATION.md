@@ -240,3 +240,35 @@ unavailable. This boundary is not yet wired into Mission production dispatch.
 - The broker's private signing key must remain root/service-account-only; the application receives only a pinned public key.
 
 This is deliberately only a protocol and signature-verification library. It does not provide a Unix socket transport, broker daemon, Docker access, container isolation, or production Mission integration. The broker must independently validate every request, resolve `workspace_id` through a root-owned allowlist, construct fixed container arguments, and sign only observed execution results. Until that separately deployed service exists, the existing sandbox adapter remains unavailable and must fail closed.
+
+
+## Broker service core and Unix socket transport (2026-10-31)
+
+The broker implementation is now split into three testable layers:
+
+- `src/core/sandbox_broker.py` validates the exact request schema, maps only
+  registered opaque workspace IDs, resolves the target again inside that
+  workspace, claims request IDs in a persistent SQLite ledger, invokes only an
+  injected executor, normalizes the observed process result, and signs it with
+  the broker's Ed25519 private key. Replayed request IDs are rejected even
+  after service reconstruction/restart.
+- `src/core/sandbox_broker_transport.py` implements bounded length-prefixed
+  JSON frames over Unix-domain sockets. The server-side connection handler
+  checks Linux kernel `SO_PEERCRED` UID before parsing the request; platforms
+  without peer credential support fail closed. The client helper verifies the
+  returned signature against a pinned public key and checks the exact profile
+  and target requested.
+- The broker replay database and its containing directory are restricted to
+  owner-only permissions. The service returns generic transport errors rather
+  than leaking filesystem paths or exception details.
+
+Regression coverage includes request replay after restart, unknown workspace
+IDs, invalid targets, peer UID rejection, bounded socket exchange, and signed
+response verification.
+
+This still is **not a deployed sandbox**: the repository does not yet provide
+the systemd socket unit, root-owned workspace registry provisioning, container
+executor, image digest policy, cgroup limits, or production Mission dispatch
+integration. The injected executor must not use host subprocess execution as a
+fallback. Until a separately reviewed deployment provides those controls, the
+broker remains an unconfigured component and Mission execution must fail closed.
