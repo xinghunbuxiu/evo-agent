@@ -272,3 +272,42 @@ executor, image digest policy, cgroup limits, or production Mission dispatch
 integration. The injected executor must not use host subprocess execution as a
 fallback. Until a separately reviewed deployment provides those controls, the
 broker remains an unconfigured component and Mission execution must fail closed.
+
+
+## Digest-pinned Docker executor and systemd broker deployment (2026-10-31)
+
+The broker now includes a Docker SDK executor and a systemd socket-activated
+daemon entry point:
+
+- `src/core/sandbox_docker_executor.py` accepts only an immutable
+  `image@sha256:<64 hex>` reference. It does not pull images or accept a
+  worker-selected image, command, mount, environment, or Docker option.
+- The executor constructs commands from the two registered profiles itself.
+  Pytest caching and automatic third-party plugin discovery are disabled so
+  test runs do not attempt to write into the read-only source tree or load
+  arbitrary image-installed plugins.
+- Each container uses a read-only root filesystem and read-only workspace
+  bind mount, no network, UID/GID 65532, no capabilities, no-new-privileges,
+  512 MiB memory, one CPU, 128 PIDs, a 64 MiB no-exec temporary filesystem,
+  bounded daemon log rotation, and forced cleanup.
+- The Docker SDK dependency is isolated in `requirements-broker.txt`; it is
+  not added to the normal application requirements.
+- `src/core/sandbox_broker_daemon.py` loads a root-owned configuration,
+  validates canonical workspace roots, loads a service-only Ed25519 key, and
+  requires exactly one systemd-activated Unix stream socket.
+- `deploy/systemd/` contains socket and service unit templates. The socket
+  grants access only to the configured application group, while the daemon
+  separately checks the connecting process UID using kernel peer credentials.
+
+The daemon service account must be a member of the Docker socket's privileged
+group to invoke the Docker API. That permission is effectively host-admin
+authority; it must be granted only to the dedicated broker account, never to
+the general Mission/Worker or GitHub Actions runner account. The systemd
+hardening settings reduce the broker process' ambient access but do not make
+Docker daemon access non-privileged.
+
+These files are deployment scaffolding, not a claim that a production broker
+is installed. The image digest, workspace registry, broker key, app UID/group,
+Docker daemon policy, and host directory permissions must be provisioned and
+reviewed on the target host. No host permissions or services were changed by
+this repository update.
