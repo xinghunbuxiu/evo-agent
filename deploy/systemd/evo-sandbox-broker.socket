@@ -1,0 +1,14 @@
+[Unit]
+Description=Evo sandbox broker Unix socket
+
+[Socket]
+ListenStream=/run/evo-sandbox-broker/broker.sock
+SocketUser=evo-broker
+SocketGroup=evo-app
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=true
+Service=evo-sandbox-broker.service
+
+[Install]
+WantedBy=sockets.target
