@@ -23,6 +23,7 @@ _MODULE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 @dataclass(frozen=True)
 class ExecutionProfileSpec:
     profile_id: str
+    target: str
     argv: tuple[str, ...]
     cwd: Path
     timeout_seconds: int
@@ -94,12 +95,14 @@ def resolve_execution_profile(workspace: Path, request: Any) -> ExecutionProfile
         argv = (sys.executable, "-m", "unittest", target)
     elif profile_id == "python.pytest":
         target_path = _workspace_target(Path(workspace), request.get("target"))
+        target = str(request.get("target")).strip()
         argv = (sys.executable, "-m", "pytest", str(target_path))
     else:
         raise ValueError("unsupported execution profile")
 
     return ExecutionProfileSpec(
         profile_id=profile_id,
+        target=target,
         argv=argv,
         cwd=Path(workspace).resolve(strict=True),
         timeout_seconds=timeout,
