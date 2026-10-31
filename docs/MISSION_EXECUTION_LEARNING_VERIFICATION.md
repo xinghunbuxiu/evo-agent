@@ -311,3 +311,21 @@ is installed. The image digest, workspace registry, broker key, app UID/group,
 Docker daemon policy, and host directory permissions must be provisioned and
 reviewed on the target host. No host permissions or services were changed by
 this repository update.
+
+
+### Broker implementation verification status
+
+The Docker executor and systemd daemon now have unit-level policy coverage.
+Those tests use a fake Docker client and validate the exact container creation
+configuration; they do not start a real Docker container. The host's previously
+observed `evo-runner` account still lacks Docker socket access and must not be
+granted it. The dedicated `evo-broker` account and its Docker group membership
+are deployment-only and have not been created on the VPS.
+
+The broker is not yet wired into Mission's production task completion path.
+A successful broker response can be independently verified by the client
+helper, but no Mission action currently consumes that response as task
+completion evidence. Keep production execution fail-closed until the broker
+is installed, the image digest is built and pinned, a real container test
+confirms isolation, and a reviewed Mission adapter binds the signed response
+to the exact task and tenant.
