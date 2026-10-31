@@ -170,3 +170,25 @@ function must only be called by a trusted adapter that actually observed the
 process. It does not spawn the process, enforce a sandbox, or sign the envelope.
 The Mission runtime must later authenticate the adapter and sign the normalized
 record before strategy feedback or task completion can rely on it.
+
+
+## Fail-closed sandbox adapter boundary (2026-10-31)
+
+The new `src/core/sandbox_runner.py` defines the integration boundary for a
+deployment-provided isolated runner:
+
+- `execute_with_sandbox` resolves the allowlisted profile before invoking an adapter.
+- If no runner is injected, it raises `SandboxRunnerUnavailable`; there is no
+  subprocess, TaskQueue-handler, shell, or in-process execution fallback.
+- The adapter receives only the resolved fixed `ExecutionProfileSpec` and must
+  return a structured `RunnerProcessOutput` containing observed exit status,
+  stdout/stderr bytes, and timeout state.
+- The wrapper normalizes that observation with `mission.execution-result.v1`.
+
+This is an interface and fail-closed policy gate, **not an implementation of a
+sandbox**. The protocol type, runner ID/version, and result envelope do not
+authenticate an adapter or prove that it enforced isolation. A production
+deployment must inject only a separately trusted adapter backed by an OS/container
+boundary with enforced filesystem, network, CPU, memory, process-count, timeout,
+and output limits. Until such an adapter is configured, execution is intentionally
+unavailable. This boundary is not yet wired into Mission production dispatch.
