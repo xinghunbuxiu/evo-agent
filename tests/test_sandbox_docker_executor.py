@@ -114,6 +114,14 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         with self.assertRaises(DockerSandboxConfigurationError):
             self.executor(forged)
 
+    def test_timeout_kills_container_and_returns_timed_out_observation(self):
+        self.container.wait_error = TimeoutError("wait timed out")
+        result = self.executor(self.spec)
+        self.assertTrue(result.timed_out)
+        self.assertIsNone(result.exit_code)
+        self.assertTrue(self.container.killed)
+        self.assertTrue(self.container.removed)
+
     def test_nonzero_exit_is_preserved(self):
         self.container.wait_result = {"StatusCode": 3}
         result = self.executor(self.spec)
