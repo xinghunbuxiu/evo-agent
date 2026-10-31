@@ -58,6 +58,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
         payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,
             "request_id": self.request_id,
+            "workspace_id": "project-evo-os",
             "result": result,
         }
         canonical = json.dumps(
@@ -104,6 +105,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             public_key=self.public_key,
             expected_key_id="broker-key-2026-01",
             expected_request_id=self.request_id,
+            expected_workspace_id="project-evo-os",
             expected_profile_id="python.pytest",
             expected_target="tests/test_sample.py",
         )
@@ -126,6 +128,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                     candidate, public_key=key,
                     expected_key_id="broker-key-2026-01",
                     expected_request_id=request_id,
+                    expected_workspace_id="project-evo-os",
                     expected_profile_id="python.pytest",
                     expected_target="tests/test_sample.py",
                 )
@@ -138,6 +141,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 response, public_key=self.public_key,
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
@@ -148,6 +152,20 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 response, public_key=self.public_key,
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_response_from_another_workspace(self):
+        response = self._signed_response()
+        response["workspace_id"] = "other-workspace"
+        with self.assertRaisesRegex(ValueError, "workspace_id"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
