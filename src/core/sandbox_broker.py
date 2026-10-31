@@ -51,6 +51,7 @@ class BrokerReplayStore:
         self.database_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.database_path.parent.is_symlink():
             raise ValueError("broker replay directory must not be a symlink")
+        os.chmod(self.database_path.parent, 0o700)
         self._initialize()
 
     def _connect(self):
