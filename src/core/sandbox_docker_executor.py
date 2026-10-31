@@ -74,6 +74,23 @@ class DockerSandboxExecutor:
         stderr = stderr[:max(0, limit - len(stdout))]
         return stdout, stderr
 
+    @staticmethod
+    def connect_docker_socket(socket_path: str = "/var/run/docker.sock") -> Any:
+        """Create an SDK client bound to the broker-only Unix socket."""
+        if socket_path != "/var/run/docker.sock":
+            raise DockerSandboxConfigurationError("Docker socket path is fixed by broker policy")
+        try:
+            import docker
+        except ImportError as exc:
+            raise DockerSandboxConfigurationError(
+                "Docker SDK is missing; install requirements-broker.txt in the broker environment"
+            ) from exc
+        client = docker.DockerClient(
+            base_url="unix:///var/run/docker.sock", version="auto", timeout=10,
+        )
+        client.ping()
+        return client
+
     def __call__(self, spec: ExecutionProfileSpec) -> RunnerProcessOutput:
         if not isinstance(spec, ExecutionProfileSpec):
             raise TypeError("Docker sandbox requires an ExecutionProfileSpec")
