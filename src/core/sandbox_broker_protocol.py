@@ -77,18 +77,22 @@ def verify_broker_response(
     public_key: bytes,
     expected_key_id: str,
     expected_request_id: str,
+    expected_workspace_id: str,
     expected_profile_id: str,
     expected_target: str,
 ) -> dict[str, Any]:
     """Verify broker attestation before returning its signed execution result."""
     if not isinstance(response, dict):
         raise ValueError("broker response must be an object")
-    if set(response) != {"schema_version", "request_id", "result", "signature"}:
+    if set(response) != {"schema_version", "request_id", "workspace_id", "result", "signature"}:
         raise ValueError("broker response has unsupported or missing fields")
     if response.get("schema_version") != BROKER_RESPONSE_SCHEMA:
         raise ValueError("unsupported broker response schema")
     if response.get("request_id") != expected_request_id:
         raise ValueError("broker response request_id does not match the request")
+
+    if response.get("workspace_id") != expected_workspace_id:
+        raise ValueError("broker response workspace_id does not match the request")
 
     result = response.get("result")
     signature = response.get("signature")
@@ -144,6 +148,7 @@ def verify_broker_response(
             _canonical_json({
                 "schema_version": BROKER_RESPONSE_SCHEMA,
                 "request_id": expected_request_id,
+                "workspace_id": expected_workspace_id,
                 "result": result,
             }),
         )
