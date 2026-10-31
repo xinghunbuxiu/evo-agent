@@ -58,13 +58,13 @@ class BrokerReplayStore:
         connection = sqlite3.connect(
             str(self.database_path), timeout=10, isolation_level=None,
         )
-        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
         return connection
 
     def _initialize(self):
         connection = self._connect()
         try:
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS broker_requests (
@@ -145,9 +145,18 @@ class SandboxBrokerService:
     ):
         if not key_id or len(key_id) > 128:
             raise ValueError("broker key_id must be a non-empty bounded value")
-        self.workspace_roots = {
-            str(workspace_id): Path(root) for workspace_id, root in workspace_roots.items()
-        }
+        normalized_roots = {}
+        for workspace_id, raw_root in workspace_roots.items():
+            workspace_id = str(workspace_id)
+            root = Path(raw_root)
+            if (not _WORKSPACE_ID_RE.fullmatch(workspace_id) or not root.is_absolute()
+                    or root.is_symlink()):
+                raise ValueError("broker workspace registry contains an unsafe entry")
+            resolved = root.resolve(strict=True)
+            if resolved != root or not resolved.is_dir():
+                raise ValueError("broker workspace registry requires canonical directories")
+            normalized_roots[workspace_id] = resolved
+        self.workspace_roots = normalized_roots
         self.replay_store = replay_store
         self.executor = executor
         self.signing_key = signing_key
