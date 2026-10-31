@@ -63,6 +63,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             public_key=public_key,
             expected_key_id="broker-test-key",
             expected_request_id=self.request_id,
+            expected_workspace_id="project-test",
             expected_profile_id="python.pytest",
             expected_target="tests/test_sample.py",
         )
