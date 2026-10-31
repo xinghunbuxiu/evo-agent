@@ -39,7 +39,12 @@ def _recv_exact(
             if remaining_time <= 0:
                 raise BrokerTransportError("request frame receive deadline exceeded")
             connection.settimeout(remaining_time)
-        chunk = connection.recv(remaining)
+        try:
+            chunk = connection.recv(remaining)
+        except socket.timeout as exc:
+            raise BrokerTransportError("request frame receive deadline exceeded") from exc
+        except OSError as exc:
+            raise BrokerTransportError("socket receive failed") from exc
         if not chunk:
             raise BrokerTransportError("connection closed during frame")
         chunks.append(chunk)
@@ -132,7 +137,7 @@ def serve_listener(
                 handle_broker_connection(
                     connection, service=service, allowed_uids=allowed,
                 )
-        except BrokerTransportError:
+        except (BrokerTransportError, OSError, socket.timeout):
             pass
         finally:
             slots.release()
