@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
-import uuid
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping
 
@@ -48,7 +48,9 @@ class BrokerReplayStore:
         self.database_path = Path(database_path)
         if self.database_path.is_symlink():
             raise ValueError("broker replay database must not be a symlink")
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.database_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.database_path.parent.is_symlink():
+            raise ValueError("broker replay directory must not be a symlink")
         self._initialize()
 
     def _connect(self):
@@ -60,7 +62,8 @@ class BrokerReplayStore:
         return connection
 
     def _initialize(self):
-        with self._connect() as connection:
+        connection = self._connect()
+        try:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS broker_requests (
@@ -70,6 +73,10 @@ class BrokerReplayStore:
                 )
                 """
             )
+        finally:
+            connection.close()
+        if self.database_path.exists():
+            os.chmod(self.database_path, 0o600)
 
     def claim(self, request_id: str, request: dict) -> None:
         digest = hashlib.sha256(_canonical_json(request)).hexdigest()
