@@ -263,7 +263,10 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             for process in processes:
                 self.assertFalse(process.is_alive(), "feedback worker timed out")
                 self.assertEqual(process.exitcode, 0)
-            self.assertEqual([results.get(timeout=2) for _ in processes], [True] * worker_count)
+            outcomes = [results.get(timeout=2) for _ in processes]
+            # Exactly one process applies the feedback. The remaining processes
+            # safely observe the duplicate and report no new update.
+            self.assertEqual(sum(outcomes), 1)
 
             persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
             self.assertEqual(persisted.usage_count, 1 + worker_count)
