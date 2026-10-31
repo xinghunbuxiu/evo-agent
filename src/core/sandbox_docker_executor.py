@@ -42,6 +42,14 @@ class DockerSandboxExecutor:
             raise DockerSandboxConfigurationError("workspace mount path is fixed")
         self.docker_client = docker_client
         self.image = image
+        try:
+            from docker.types import LogConfig
+            self.log_config = LogConfig(
+                type="json-file", config={"max-size": "1m", "max-file": "1"},
+            )
+        except ImportError:
+            # Unit tests can inject a fake Docker client without installing the SDK.
+            self.log_config = {"type": "json-file", "config": {"max-size": "1m", "max-file": "1"}}
 
     @staticmethod
     def _command(spec: ExecutionProfileSpec) -> list[str]:
@@ -97,6 +105,9 @@ class DockerSandboxExecutor:
         workspace = Path(spec.cwd).resolve(strict=True)
         if not workspace.is_dir():
             raise DockerSandboxConfigurationError("workspace root must be a directory")
+        if (isinstance(spec.max_output_bytes, bool) or not isinstance(spec.max_output_bytes, int)
+                or not 1 <= spec.max_output_bytes <= 256 * 1024):
+            raise DockerSandboxConfigurationError("output limit is outside the broker policy")
         command = self._command(spec)
         container = None
         timed_out = False
@@ -135,10 +146,7 @@ class DockerSandboxExecutor:
                         "mode=1777"
                     ),
                 },
-                log_config={
-                    "type": "json-file",
-                    "config": {"max-size": "1m", "max-file": "1"},
-                },
+                log_config=self.log_config,
                 labels={"com.evo-agent.sandbox": "true"},
                 detach=True,
                 auto_remove=False,
