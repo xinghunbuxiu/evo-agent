@@ -117,8 +117,8 @@ def validate_broker_request(request: object) -> dict:
         raise BrokerRequestRejected("execution target is invalid")
     if profile_id == "python.pytest":
         path = PurePosixPath(target)
-        if path.is_absolute() or "\\" in target or any(
-            part in {"", ".", ".."} for part in path.parts
+        if path.is_absolute() or ":" in target or "\\" in target or any(
+            part in {"", ".", ".."} for part in target.split("/")
         ):
             raise BrokerRequestRejected("pytest target must be workspace-relative")
     elif not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", target):
