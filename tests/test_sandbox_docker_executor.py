@@ -84,7 +84,8 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(config["image"], IMAGE)
         self.assertEqual(config["command"], [
-            "/usr/local/bin/python", "-m", "pytest", "/workspace/test_sample.py",
+            "/usr/local/bin/python", "-m", "pytest", "-p", "no:cacheprovider",
+            "/workspace/test_sample.py",
         ])
         self.assertEqual(config["network_mode"], "none")
         self.assertTrue(config["init"])
