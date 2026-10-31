@@ -229,3 +229,14 @@ deployment must inject only a separately trusted adapter backed by an OS/contain
 boundary with enforced filesystem, network, CPU, memory, process-count, timeout,
 and output limits. Until such an adapter is configured, execution is intentionally
 unavailable. This boundary is not yet wired into Mission production dispatch.
+
+
+## Privileged sandbox broker wire contract (2026-10-31)
+
+`src/core/sandbox_broker_protocol.py` defines the first client-side protocol contract for a separately installed privileged broker:
+
+- Requests use `mission.sandbox-broker-request.v1` and carry only a registered opaque `workspace_id`, allowlisted profile ID, workspace-relative target, bounded timeout, and request UUID. They never carry caller-selected argv, cwd, environment, host paths, mounts, or Docker options.
+- Responses use `mission.sandbox-broker-response.v1` and contain a `mission.execution-result.v1` envelope signed with Ed25519. The client verifies the configured key ID, public key, request UUID, result schema, status consistency, output digests, profile, and exact requested target.
+- The broker's private signing key must remain root/service-account-only; the application receives only a pinned public key.
+
+This is deliberately only a protocol and signature-verification library. It does not provide a Unix socket transport, broker daemon, Docker access, container isolation, or production Mission integration. The broker must independently validate every request, resolve `workspace_id` through a root-owned allowlist, construct fixed container arguments, and sign only observed execution results. Until that separately deployed service exists, the existing sandbox adapter remains unavailable and must fail closed.
