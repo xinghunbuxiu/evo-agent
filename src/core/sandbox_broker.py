@@ -121,7 +121,7 @@ def validate_broker_request(request: object) -> dict:
             part in {"", ".", ".."} for part in target.split("/")
         ):
             raise BrokerRequestRejected("pytest target must be workspace-relative")
-    elif not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", target):
+    elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
         raise BrokerRequestRejected("unittest target must be a dotted module name")
     timeout = request.get("timeout_seconds")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
