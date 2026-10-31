@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping
 
@@ -129,6 +130,36 @@ def validate_broker_request(request: object) -> dict:
     return dict(request)
 
 
+def _validate_workspace_root(raw_root: Path) -> Path:
+    """Require a canonical root whose parent chain cannot be replaced by app users.
+
+    The workspace itself may be writable by its owning application account;
+    every ancestor must be controlled by root or this dedicated broker UID.
+    A root-owned sticky directory (for example /tmp) is allowed as an ancestor.
+    """
+    root = Path(raw_root)
+    if not root.is_absolute() or root.is_symlink():
+        raise ValueError("broker workspace root must be absolute and non-symlink")
+    resolved = root.resolve(strict=True)
+    if resolved != root or not resolved.is_dir():
+        raise ValueError("broker workspace root must be a canonical directory")
+    parent = resolved.parent
+    while True:
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            raise ValueError("broker workspace parent chain contains a non-directory or symlink")
+        if info.st_uid not in {0, os.geteuid()}:
+            raise ValueError("broker workspace parent must be controlled by root or broker")
+        writable_by_others = bool(info.st_mode & 0o022)
+        root_sticky = info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+        if writable_by_others and not root_sticky:
+            raise ValueError("broker workspace parent is writable by group or other users")
+        if parent == Path("/"):
+            break
+        parent = parent.parent
+    return resolved
+
+
 class SandboxBrokerService:
     """Validate, de-duplicate, execute through an injected isolated runner, sign."""
 
@@ -148,14 +179,9 @@ class SandboxBrokerService:
         normalized_roots = {}
         for workspace_id, raw_root in workspace_roots.items():
             workspace_id = str(workspace_id)
-            root = Path(raw_root)
-            if (not _WORKSPACE_ID_RE.fullmatch(workspace_id) or not root.is_absolute()
-                    or root.is_symlink()):
+            if not _WORKSPACE_ID_RE.fullmatch(workspace_id):
                 raise ValueError("broker workspace registry contains an unsafe entry")
-            resolved = root.resolve(strict=True)
-            if resolved != root or not resolved.is_dir():
-                raise ValueError("broker workspace registry requires canonical directories")
-            normalized_roots[workspace_id] = resolved
+            normalized_roots[workspace_id] = _validate_workspace_root(Path(raw_root))
         self.workspace_roots = normalized_roots
         self.replay_store = replay_store
         self.executor = executor
