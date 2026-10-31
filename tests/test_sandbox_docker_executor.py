@@ -87,6 +87,9 @@ class DockerSandboxExecutorTests(unittest.TestCase):
             "/usr/local/bin/python", "-m", "pytest", "/workspace/test_sample.py",
         ])
         self.assertEqual(config["network_mode"], "none")
+        self.assertTrue(config["init"])
+        self.assertIn("-p", config["command"])
+        self.assertEqual(config["environment"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"], "1")
         self.assertTrue(config["read_only"])
         self.assertEqual(config["volumes"][str(self.root.resolve())]["mode"], "ro")
         self.assertEqual(config["cap_drop"], ["ALL"])
