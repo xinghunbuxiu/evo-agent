@@ -67,7 +67,11 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         thread = threading.Thread(target=serve)
         thread.start()
         payload = json.dumps(self.request, separators=(",", ":")).encode()
-        client.sendall(struct.pack("!I", len(payload)) + payload)
+        try:
+            client.sendall(struct.pack("!I", len(payload)) + payload)
+        except (BrokenPipeError, ConnectionResetError):
+            # Unauthorized peers are closed before the server reads request bytes.
+            pass
         try:
             header = client.recv(4)
             if len(header) != 4:
@@ -77,6 +81,8 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             while sum(map(len, chunks)) < size:
                 chunks.append(client.recv(size - sum(map(len, chunks))))
             return json.loads(b"".join(chunks)), errors, thread
+        except (ConnectionResetError, OSError):
+            return None, errors, thread
         finally:
             client.close()
 
