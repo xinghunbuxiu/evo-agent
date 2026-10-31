@@ -98,6 +98,8 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             public_key=self.public_key,
             expected_key_id="broker-key-2026-01",
             expected_request_id=self.request_id,
+            expected_profile_id="python.pytest",
+            expected_target="tests/test_sample.py",
         )
         self.assertTrue(result["execution_succeeded"])
 
@@ -118,6 +120,8 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                     candidate, public_key=key,
                     expected_key_id="broker-key-2026-01",
                     expected_request_id=request_id,
+                    expected_profile_id="python.pytest",
+                    expected_target="tests/test_sample.py",
                 )
 
     def test_rejects_unknown_signature_key_id_and_extra_fields(self):
