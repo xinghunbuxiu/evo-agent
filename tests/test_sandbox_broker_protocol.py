@@ -1,5 +1,6 @@
 """Tests for the path-free sandbox broker request and attestation contract."""
 import base64
+from dataclasses import replace
 import json
 import sys
 import tempfile
@@ -86,6 +87,11 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             {"schema_version", "request_id", "workspace_id", "profile_id", "target", "timeout_seconds"},
         )
 
+    def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
+        for target in ("../escape.py", "/etc/passwd", "tests\\\\escape.py", "tests/../escape.py"):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                build_broker_request("project-evo-os", replace(self.spec, target=target))
+
     def test_rejects_path_like_or_invalid_workspace_identifiers(self):
         for value in ("../workspace", "/tmp/workspace", "a/b", "", " "):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -132,6 +138,8 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 response, public_key=self.public_key,
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
             )
         response = self._signed_response()
         response["caller_command"] = "rm -rf /"
@@ -140,6 +148,21 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 response, public_key=self.public_key,
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_signed_result_for_different_target(self):
+        result = self._signed_response()["result"]
+        result["target"] = "tests/other.py"
+        response = self._signed_response(result=result)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
             )
 
 
