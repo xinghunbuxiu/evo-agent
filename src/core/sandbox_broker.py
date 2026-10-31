@@ -193,6 +193,7 @@ class SandboxBrokerService:
         signed_payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,
             "request_id": request_id,
+            "workspace_id": workspace_id,
             "result": result,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
