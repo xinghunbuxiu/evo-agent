@@ -264,9 +264,9 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 self.assertFalse(process.is_alive(), "feedback worker timed out")
                 self.assertEqual(process.exitcode, 0)
             outcomes = [results.get(timeout=2) for _ in processes]
-            # Exactly one process applies the feedback. The remaining processes
-            # safely observe the duplicate and report no new update.
-            self.assertEqual(sum(outcomes), 1)
+            # Distinct task IDs are independent feedback events: every process
+            # must apply exactly one update without losing concurrent writes.
+            self.assertEqual(outcomes, [True] * worker_count)
 
             persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
             self.assertEqual(persisted.usage_count, 1 + worker_count)
@@ -295,7 +295,10 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             for process in processes:
                 self.assertFalse(process.is_alive(), "feedback worker timed out")
                 self.assertEqual(process.exitcode, 0)
-            self.assertEqual([results.get(timeout=2) for _ in processes], [True] * worker_count)
+            # The same task ID is a duplicate event: exactly one process
+            # applies it and all other processes report no new update.
+            outcomes = [results.get(timeout=2) for _ in processes]
+            self.assertEqual(sum(outcomes), 1)
 
             persisted = StrategyEngine(workspace, tenant_id="tenant-a").strategies[0]
             self.assertEqual(persisted.usage_count, 2)
