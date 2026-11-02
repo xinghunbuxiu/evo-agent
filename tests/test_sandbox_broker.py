@@ -106,7 +106,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def test_service_rejects_symlink_workspace_root(self):
         link = Path(self.temp.name) / "workspace-link"
         link.symlink_to(self.root, target_is_directory=True)
-        with self.assertRaisesRegex(ValueError, "unsafe entry"):
+        with self.assertRaisesRegex(ValueError, "absolute and non-symlink"):
             SandboxBrokerService(
                 workspace_roots={"project-test": link},
                 replay_store=self.store, executor=self._execute,
