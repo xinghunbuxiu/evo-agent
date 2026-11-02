@@ -107,7 +107,8 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.assertEqual(response["signature"]["key_id"], "test-key")
 
     def test_unauthorized_peer_is_rejected_before_execution(self):
-        response, errors, thread = self._exchange([-1])
+        import os
+        response, errors, thread = self._exchange([os.getuid() + 1])
         thread.join(timeout=3)
         self.assertIsNone(response)
         self.assertTrue(errors)
