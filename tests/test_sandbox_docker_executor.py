@@ -118,6 +118,35 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         result = self.executor(spec)
         self.assertEqual(len(result.stdout) + len(result.stderr), 256)
 
+    def test_bounded_streams_preserves_both_streams_when_stdout_is_larger(self):
+        stdout, stderr = DockerSandboxExecutor._bounded_streams(
+            (b"o" * 200, b"e" * 200), 100,
+        )
+        self.assertEqual(len(stdout), 50)
+        self.assertEqual(len(stderr), 50)
+        self.assertEqual(stdout, b"o" * 50)
+        self.assertEqual(stderr, b"e" * 50)
+
+    def test_bounded_streams_borrows_unused_stderr_capacity(self):
+        stdout, stderr = DockerSandboxExecutor._bounded_streams(
+            (b"o" * 100, b"e" * 10), 100,
+        )
+        self.assertEqual(stdout, b"o" * 90)
+        self.assertEqual(stderr, b"e" * 10)
+
+    def test_bounded_streams_borrows_unused_stdout_capacity(self):
+        stdout, stderr = DockerSandboxExecutor._bounded_streams(
+            (b"o" * 10, b"e" * 100), 100,
+        )
+        self.assertEqual(stdout, b"o" * 10)
+        self.assertEqual(stderr, b"e" * 90)
+
+    def test_bounded_streams_never_exceeds_limit(self):
+        stdout, stderr = DockerSandboxExecutor._bounded_streams(
+            (b"o" * 500, b"e" * 500), 127,
+        )
+        self.assertEqual(len(stdout) + len(stderr), 127)
+
     def test_rejects_tag_only_image(self):
         with self.assertRaises(DockerSandboxConfigurationError):
             DockerSandboxExecutor(docker_client=self.client, image="python:3.12")
