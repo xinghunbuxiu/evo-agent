@@ -21,12 +21,17 @@ class FakeContainer:
         self.wait_result = wait_result or {"StatusCode": 0}
         self.logs_result = logs
         self.wait_error = wait_error
+        self.start_error = None
+        self.logs_error = None
+        self.remove_error = None
         self.started = False
         self.killed = False
         self.removed = False
         self.create_config = None
 
     def start(self):
+        if self.start_error:
+            raise self.start_error
         self.started = True
 
     def wait(self, timeout):
@@ -37,6 +42,8 @@ class FakeContainer:
 
     def logs(self, **kwargs):
         self.logs_kwargs = kwargs
+        if self.logs_error:
+            raise self.logs_error
         return self.logs_result
 
     def kill(self):
@@ -44,6 +51,8 @@ class FakeContainer:
 
     def remove(self, **kwargs):
         self.removed = True
+        if self.remove_error:
+            raise self.remove_error
 
 
 class FakeContainers:
@@ -132,6 +141,30 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         self.container.wait_result = {"StatusCode": 3}
         result = self.executor(self.spec)
         self.assertEqual(result.exit_code, 3)
+
+    def test_start_failure_still_removes_created_container(self):
+        self.container.start_error = RuntimeError("start failed")
+        with self.assertRaisesRegex(RuntimeError, "start failed"):
+            self.executor(self.spec)
+        self.assertTrue(self.container.removed)
+
+    def test_invalid_wait_status_fails_closed_and_removes_container(self):
+        self.container.wait_result = {"StatusCode": True}
+        with self.assertRaisesRegex(RuntimeError, "invalid wait result"):
+            self.executor(self.spec)
+        self.assertTrue(self.container.removed)
+
+    def test_log_collection_failure_does_not_return_execution_result(self):
+        self.container.logs_error = RuntimeError("logs unavailable")
+        with self.assertRaisesRegex(RuntimeError, "logs unavailable"):
+            self.executor(self.spec)
+        self.assertTrue(self.container.removed)
+
+    def test_cleanup_failure_prevents_success_result(self):
+        self.container.remove_error = RuntimeError("cleanup failed")
+        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+            self.executor(self.spec)
+        self.assertTrue(self.container.removed)
 
 
 if __name__ == "__main__":
