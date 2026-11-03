@@ -53,7 +53,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             "timed_out": False,
             "execution_succeeded": True,
             "stdout": {"bytes": 0, "available_bytes": 0, "capture_truncated": False, "sha256": "0" * 64},
-            "stderr": {"bytes": 0, "total_bytes": 0, "truncated": False, "sha256": "0" * 64},
+            "stderr": {"bytes": 0, "available_bytes": 0, "capture_truncated": False, "sha256": "0" * 64},
         }
         payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,

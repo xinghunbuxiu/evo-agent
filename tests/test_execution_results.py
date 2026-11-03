@@ -74,9 +74,9 @@ class ExecutionResultTests(unittest.TestCase):
     def test_truncation_metadata_records_original_stream_lengths(self):
         result = build_execution_result(self.spec, runner_id="runner", runner_version="1", exit_code=0, stdout=b"abc", stderr=b"x", stdout_available_bytes=10, stderr_available_bytes=1)
         self.assertEqual(result["stdout"]["bytes"], 3)
-        self.assertEqual(result["stdout"]["total_bytes"], 10)
-        self.assertTrue(result["stdout"]["truncated"])
-        self.assertFalse(result["stderr"]["truncated"])
+        self.assertEqual(result["stdout"]["available_bytes"], 10)
+        self.assertTrue(result["stdout"]["capture_truncated"])
+        self.assertFalse(result["stderr"]["capture_truncated"])
         for invalid in (True, -1, 2, "10"):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 build_execution_result(self.spec, runner_id="runner", runner_version="1", exit_code=0, stdout=b"abc", stderr=b"", stdout_available_bytes=invalid)
