@@ -11,7 +11,7 @@ from typing import Any
 from .execution_profiles import ExecutionProfileSpec
 
 
-EXECUTION_RESULT_SCHEMA = "mission.execution-result.v1"
+EXECUTION_RESULT_SCHEMA = "mission.execution-result.v2"
 
 
 def _required_label(value: Any, field: str) -> str:
@@ -30,6 +30,8 @@ def build_execution_result(
     stdout: bytes,
     stderr: bytes,
     timed_out: bool = False,
+    stdout_total_bytes: int | None = None,
+    stderr_total_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Build a digest-only record from output captured by a trusted runner adapter."""
     runner_id = _required_label(runner_id, "runner_id")
@@ -46,6 +48,14 @@ def build_execution_result(
         raise ValueError("completed executions require an exit_code")
     if not isinstance(stdout, bytes) or not isinstance(stderr, bytes):
         raise ValueError("stdout and stderr must be captured as bytes")
+    totals = {"stdout": stdout_total_bytes, "stderr": stderr_total_bytes}
+    for name, stream in (("stdout", stdout), ("stderr", stderr)):
+        total = totals[name]
+        if total is None:
+            total = len(stream)
+        if isinstance(total, bool) or not isinstance(total, int) or total < len(stream):
+            raise ValueError(f"{name}_total_bytes must be an integer at least as large as captured output")
+        totals[name] = total
     output_size = len(stdout) + len(stderr)
     if output_size > spec.max_output_bytes:
         raise ValueError("captured process output exceeds the configured output limit")
@@ -58,8 +68,8 @@ def build_execution_result(
         "exit_code": exit_code,
         "timed_out": timed_out,
         "execution_succeeded": not timed_out and exit_code == 0,
-        "stdout": {"bytes": len(stdout), "sha256": hashlib.sha256(stdout).hexdigest()},
-        "stderr": {"bytes": len(stderr), "sha256": hashlib.sha256(stderr).hexdigest()},
+        "stdout": {"bytes": len(stdout), "total_bytes": totals["stdout"], "truncated": totals["stdout"] > len(stdout), "sha256": hashlib.sha256(stdout).hexdigest()},
+        "stderr": {"bytes": len(stderr), "total_bytes": totals["stderr"], "truncated": totals["stderr"] > len(stderr), "sha256": hashlib.sha256(stderr).hexdigest()},
     }
 
 

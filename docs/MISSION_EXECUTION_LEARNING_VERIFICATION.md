@@ -196,11 +196,15 @@ inside an independently enforced sandbox and produce runtime-owned, signed evide
 ## Trusted runner result envelope (2026-10-31)
 
 The new src/core/execution_results.py normalizes a result captured by a trusted
-runner adapter into mission.execution-result.v1. It records runner ID/version,
-profile and target, timeout/exit status, and SHA-256 digests plus byte counts for
-stdout/stderr. Raw output is not copied into the learning evidence envelope.
-Non-zero exits and timeouts cannot be marked as execution success; output beyond
-the profile cap and malformed runner metadata are rejected.
+runner adapter into mission.execution-result.v2. It records runner ID/version,
+profile and target, timeout/exit status, and SHA-256 digests plus captured byte
+counts, original byte counts, and an explicit per-stream `truncated` flag for
+stdout/stderr. The digest covers captured bytes only. Raw output is not copied
+into the learning evidence envelope. Non-zero exits and timeouts cannot be marked
+as execution success; captured output beyond the profile cap and malformed
+runner metadata are rejected. The Docker adapter records original stream lengths
+before applying the combined output cap, so reviewers can distinguish complete
+logs from truncated evidence.
 
 This is still a result-normalization contract, not runner authentication. The
 function must only be called by a trusted adapter that actually observed the

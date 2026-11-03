@@ -125,11 +125,15 @@ def verify_broker_response(
         raise ValueError("broker result does not match the requested profile and target")
     for stream_name in ("stdout", "stderr"):
         stream = result.get(stream_name)
-        if (not isinstance(stream, dict) or set(stream) != {"bytes", "sha256"}
+        if (not isinstance(stream, dict) or set(stream) != {"bytes", "total_bytes", "truncated", "sha256"}
                 or isinstance(stream.get("bytes"), bool) or not isinstance(stream.get("bytes"), int)
-                or stream["bytes"] < 0 or not isinstance(stream.get("sha256"), str)
+                or stream["bytes"] < 0 or isinstance(stream.get("total_bytes"), bool)
+                or not isinstance(stream.get("total_bytes"), int) or stream["total_bytes"] < stream["bytes"]
+                or not isinstance(stream.get("truncated"), bool)
+                or stream["truncated"] != (stream["total_bytes"] > stream["bytes"])
+                or not isinstance(stream.get("sha256"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", stream["sha256"])):
-            raise ValueError("broker execution result output digest is invalid")
+            raise ValueError("broker execution result output metadata is invalid")
     if not isinstance(signature, dict) or set(signature) != {"algorithm", "key_id", "value"}:
         raise ValueError("broker response signature metadata is invalid")
     if signature.get("algorithm") != BROKER_SIGNATURE_ALGORITHM:

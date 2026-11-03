@@ -69,7 +69,7 @@ class DockerSandboxExecutor:
         raise DockerSandboxConfigurationError("unsupported sandbox execution profile")
 
     @staticmethod
-    def _bounded_streams(logs: Any, limit: int) -> tuple[bytes, bytes]:
+    def _bounded_streams(logs: Any, limit: int) -> tuple[bytes, bytes, int, int]:
         if isinstance(logs, tuple) and len(logs) == 2:
             stdout, stderr = logs
         else:
@@ -91,7 +91,7 @@ class DockerSandboxExecutor:
             remaining -= len(stdout_extra)
         if remaining:
             stderr_kept += stderr[stderr_budget:stderr_budget + remaining]
-        return stdout_kept, stderr_kept
+        return stdout_kept, stderr_kept, len(stdout), len(stderr)
 
     @staticmethod
     def connect_docker_socket(socket_path: str = "/var/run/docker.sock") -> Any:
@@ -191,12 +191,14 @@ class DockerSandboxExecutor:
                 except Exception:
                     pass
             logs = container.logs(stdout=True, stderr=True, demux=True)
-            stdout, stderr = self._bounded_streams(logs, spec.max_output_bytes)
+            stdout, stderr, stdout_total, stderr_total = self._bounded_streams(logs, spec.max_output_bytes)
             return RunnerProcessOutput(
                 exit_code=None if timed_out else exit_code,
                 stdout=stdout,
                 stderr=stderr,
                 timed_out=timed_out,
+                stdout_total_bytes=stdout_total,
+                stderr_total_bytes=stderr_total,
             )
         finally:
             if container is not None:

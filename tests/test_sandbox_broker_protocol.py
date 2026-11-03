@@ -45,15 +45,15 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
 
     def _signed_response(self, result=None):
         result = result or {
-            "schema_version": "mission.execution-result.v1",
+            "schema_version": "mission.execution-result.v2",
             "runner": {"id": "root-broker", "version": "1"},
             "profile_id": "python.pytest",
             "target": "tests/test_sample.py",
             "exit_code": 0,
             "timed_out": False,
             "execution_succeeded": True,
-            "stdout": {"bytes": 0, "sha256": "0" * 64},
-            "stderr": {"bytes": 0, "sha256": "0" * 64},
+            "stdout": {"bytes": 0, "total_bytes": 0, "truncated": False, "sha256": "0" * 64},
+            "stderr": {"bytes": 0, "total_bytes": 0, "truncated": False, "sha256": "0" * 64},
         }
         payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,
@@ -169,6 +169,14 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
+
+    def test_rejects_inconsistent_output_truncation_metadata(self):
+        for changes in ({"total_bytes": 2}, {"total_bytes": -1}, {"truncated": True}, {"bytes": True}):
+            result = self._signed_response()["result"]
+            result["stdout"] = dict(result["stdout"], **changes)
+            response = self._signed_response(result=result)
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "output metadata"):
+                verify_broker_response(response, public_key=self.public_key, expected_key_id="broker-key-2026-01", expected_request_id=self.request_id, expected_workspace_id="project-evo-os", expected_profile_id="python.pytest", expected_target="tests/test_sample.py")
 
     def test_rejects_signed_result_for_different_target(self):
         result = self._signed_response()["result"]

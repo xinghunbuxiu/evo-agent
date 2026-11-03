@@ -40,6 +40,8 @@ class ExecutionResultTests(unittest.TestCase):
         self.assertEqual(result["target"], "tests/test_sample.py")
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(result["stdout"]["bytes"], 8)
+        self.assertEqual(result["stdout"]["total_bytes"], 8)
+        self.assertFalse(result["stdout"]["truncated"])
         self.assertEqual(len(result["stdout"]["sha256"]), 64)
         self.assertNotIn("1 passed", str(result))
 
@@ -68,6 +70,16 @@ class ExecutionResultTests(unittest.TestCase):
                     self.spec, runner_id="runner", runner_version="1",
                     stdout=b"", stderr=b"", **values,
                 )
+
+    def test_truncation_metadata_records_original_stream_lengths(self):
+        result = build_execution_result(self.spec, runner_id="runner", runner_version="1", exit_code=0, stdout=b"abc", stderr=b"x", stdout_total_bytes=10, stderr_total_bytes=1)
+        self.assertEqual(result["stdout"]["bytes"], 3)
+        self.assertEqual(result["stdout"]["total_bytes"], 10)
+        self.assertTrue(result["stdout"]["truncated"])
+        self.assertFalse(result["stderr"]["truncated"])
+        for invalid in (True, -1, 2, "10"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                build_execution_result(self.spec, runner_id="runner", runner_version="1", exit_code=0, stdout=b"abc", stderr=b"", stdout_total_bytes=invalid)
 
     def test_output_limit_and_runner_identity_are_enforced(self):
         with self.assertRaises(ValueError):
