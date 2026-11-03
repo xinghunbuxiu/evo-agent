@@ -198,11 +198,11 @@ inside an independently enforced sandbox and produce runtime-owned, signed evide
 The new src/core/execution_results.py normalizes a result captured by a trusted
 runner adapter into mission.execution-result.v2. It records runner ID/version,
 profile and target, timeout/exit status, and SHA-256 digests plus captured byte
-counts, original byte counts, and an explicit per-stream `truncated` flag for
-stdout/stderr. The digest covers captured bytes only. Raw output is not copied
+counts, Docker-available byte counts, and an explicit per-stream `capture_truncated` flag for
+stdout/stderr. The digest covers captured bytes only. `available_bytes` means bytes returned by the runner's log source, not guaranteed total process output. Docker's post-exit log API may expose only retained logs after daemon log rotation; completeness beyond returned data is unknown and must not be inferred from `capture_truncated=false`. Raw output is not copied
 into the learning evidence envelope. Non-zero exits and timeouts cannot be marked
 as execution success; captured output beyond the profile cap and malformed
-runner metadata are rejected. The Docker adapter records original stream lengths
+runner metadata are rejected. The Docker adapter records bytes available from the log API
 before applying the combined output cap, so reviewers can distinguish complete
 logs from truncated evidence.
 
@@ -223,8 +223,8 @@ deployment-provided isolated runner:
   subprocess, TaskQueue-handler, shell, or in-process execution fallback.
 - The adapter receives only the resolved fixed `ExecutionProfileSpec` and must
   return a structured `RunnerProcessOutput` containing observed exit status,
-  stdout/stderr bytes, and timeout state.
-- The wrapper normalizes that observation with `mission.execution-result.v1`.
+  stdout/stderr bytes, available byte counts, and timeout state.
+- The wrapper normalizes that observation with `mission.execution-result.v2`.
 
 This is an interface and fail-closed policy gate, **not an implementation of a
 sandbox**. The protocol type, runner ID/version, and result envelope do not
@@ -240,7 +240,7 @@ unavailable. This boundary is not yet wired into Mission production dispatch.
 `src/core/sandbox_broker_protocol.py` defines the first client-side protocol contract for a separately installed privileged broker:
 
 - Requests use `mission.sandbox-broker-request.v1` and carry only a registered opaque `workspace_id`, allowlisted profile ID, workspace-relative target, bounded timeout, and request UUID. They never carry caller-selected argv, cwd, environment, host paths, mounts, or Docker options.
-- Responses use `mission.sandbox-broker-response.v1` and contain the opaque workspace ID plus a `mission.execution-result.v1` envelope signed with Ed25519. The client verifies the configured key ID, public key, request UUID, exact workspace ID, result schema, status consistency, output digests, profile, and exact requested target. The workspace ID is part of the signed payload to prevent a valid result for one registered workspace from being replayed as a result for another.
+- Responses use `mission.sandbox-broker-response.v1` and contain the opaque workspace ID plus a `mission.execution-result.v1` envelope signed with Ed25519. The client verifies the configured key ID, public key, request UUID, exact workspace ID, result schema, status consistency, output capture metadata and digests, profile, and exact requested target. The workspace ID is part of the signed payload to prevent a valid result for one registered workspace from being replayed as a result for another.
 - The broker's private signing key must remain root/service-account-only; the application receives only a pinned public key.
 
 This is deliberately only a protocol and signature-verification library. It does not provide a Unix socket transport, broker daemon, Docker access, container isolation, or production Mission integration. The broker must independently validate every request, resolve `workspace_id` through a root-owned allowlist, construct fixed container arguments, and sign only observed execution results. Until that separately deployed service exists, the existing sandbox adapter remains unavailable and must fail closed.

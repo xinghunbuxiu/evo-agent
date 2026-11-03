@@ -215,8 +215,8 @@ class SandboxBrokerService:
             stdout=output.stdout,
             stderr=output.stderr,
             timed_out=output.timed_out,
-            stdout_total_bytes=output.stdout_total_bytes,
-            stderr_total_bytes=output.stderr_total_bytes,
+            stdout_available_bytes=output.stdout_available_bytes,
+            stderr_available_bytes=output.stderr_available_bytes,
         )
         signed_payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,

@@ -52,7 +52,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             "exit_code": 0,
             "timed_out": False,
             "execution_succeeded": True,
-            "stdout": {"bytes": 0, "total_bytes": 0, "truncated": False, "sha256": "0" * 64},
+            "stdout": {"bytes": 0, "available_bytes": 0, "capture_truncated": False, "sha256": "0" * 64},
             "stderr": {"bytes": 0, "total_bytes": 0, "truncated": False, "sha256": "0" * 64},
         }
         payload = {
@@ -171,7 +171,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             )
 
     def test_rejects_inconsistent_output_truncation_metadata(self):
-        for changes in ({"total_bytes": 2}, {"total_bytes": -1}, {"truncated": True}, {"bytes": True}):
+        for changes in ({"available_bytes": 2}, {"available_bytes": -1}, {"capture_truncated": True}, {"bytes": True}):
             result = self._signed_response()["result"]
             result["stdout"] = dict(result["stdout"], **changes)
             response = self._signed_response(result=result)

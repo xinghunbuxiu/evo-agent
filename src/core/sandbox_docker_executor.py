@@ -197,8 +197,8 @@ class DockerSandboxExecutor:
                 stdout=stdout,
                 stderr=stderr,
                 timed_out=timed_out,
-                stdout_total_bytes=stdout_total,
-                stderr_total_bytes=stderr_total,
+                stdout_available_bytes=stdout_total,
+                stderr_available_bytes=stderr_total,
             )
         finally:
             if container is not None:

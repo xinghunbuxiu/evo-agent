@@ -125,12 +125,12 @@ def verify_broker_response(
         raise ValueError("broker result does not match the requested profile and target")
     for stream_name in ("stdout", "stderr"):
         stream = result.get(stream_name)
-        if (not isinstance(stream, dict) or set(stream) != {"bytes", "total_bytes", "truncated", "sha256"}
+        if (not isinstance(stream, dict) or set(stream) != {"bytes", "available_bytes", "capture_truncated", "sha256"}
                 or isinstance(stream.get("bytes"), bool) or not isinstance(stream.get("bytes"), int)
-                or stream["bytes"] < 0 or isinstance(stream.get("total_bytes"), bool)
-                or not isinstance(stream.get("total_bytes"), int) or stream["total_bytes"] < stream["bytes"]
-                or not isinstance(stream.get("truncated"), bool)
-                or stream["truncated"] != (stream["total_bytes"] > stream["bytes"])
+                or stream["bytes"] < 0 or isinstance(stream.get("available_bytes"), bool)
+                or not isinstance(stream.get("total_bytes"), int) or stream["available_bytes"] < stream["bytes"]
+                or not isinstance(stream.get("capture_truncated"), bool)
+                or stream["capture_truncated"] != (stream["total_bytes"] > stream["bytes"])
                 or not isinstance(stream.get("sha256"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", stream["sha256"])):
             raise ValueError("broker execution result output metadata is invalid")

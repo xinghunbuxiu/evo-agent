@@ -27,8 +27,8 @@ class RunnerProcessOutput:
     stdout: bytes
     stderr: bytes
     timed_out: bool = False
-    stdout_total_bytes: int | None = None
-    stderr_total_bytes: int | None = None
+    stdout_available_bytes: int | None = None
+    stderr_available_bytes: int | None = None
 
 
 class SandboxRunnerAdapter(Protocol):
@@ -77,8 +77,8 @@ def execute_with_sandbox(
         stdout=output.stdout,
         stderr=output.stderr,
         timed_out=output.timed_out,
-        stdout_total_bytes=output.stdout_total_bytes,
-        stderr_total_bytes=output.stderr_total_bytes,
+        stdout_available_bytes=output.stdout_available_bytes,
+        stderr_available_bytes=output.stderr_available_bytes,
     )
 
 
