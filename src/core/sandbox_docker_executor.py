@@ -78,9 +78,20 @@ class DockerSandboxExecutor:
         stderr = stderr or b""
         if not isinstance(stdout, bytes) or not isinstance(stderr, bytes):
             raise TypeError("Docker logs must be bytes")
-        stdout = stdout[:limit]
-        stderr = stderr[:max(0, limit - len(stdout))]
-        return stdout, stderr
+        # Reserve capacity for both streams so a verbose stdout cannot hide
+        # all stderr diagnostics. Unused capacity is borrowed by the other stream.
+        stdout_budget = limit // 2
+        stderr_budget = limit - stdout_budget
+        stdout_kept = stdout[:stdout_budget]
+        stderr_kept = stderr[:stderr_budget]
+        remaining = limit - len(stdout_kept) - len(stderr_kept)
+        if remaining:
+            stdout_extra = stdout[stdout_budget:stdout_budget + remaining]
+            stdout_kept += stdout_extra
+            remaining -= len(stdout_extra)
+        if remaining:
+            stderr_kept += stderr[stderr_budget:stderr_budget + remaining]
+        return stdout_kept, stderr_kept
 
     @staticmethod
     def connect_docker_socket(socket_path: str = "/var/run/docker.sock") -> Any:
