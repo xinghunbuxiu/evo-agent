@@ -490,7 +490,9 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             action = {
                 "task_type": "analyze",
                 "title": "Analyze source",
-                "mission_run_id": "mission-first",
+                "mission_run_id": "mission-1",
+                "tenant_id": "tenant-a",
+                "node_id": "node-1",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
             action["independent_verification"] = self._verification("task-e2e", workspace=workspace)
@@ -598,7 +600,12 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 self.assertEqual(first["nodes"][0]["recommended_strategies"], [])
 
                 self._seed_strategy(workspace)
-                action = {"recommended_strategies": [{"id": "strategy-a"}]}
+                action = {
+                    "mission_run_id": "mission-1",
+                    "tenant_id": "tenant-a",
+                    "node_id": "node-1",
+                    "recommended_strategies": [{"id": "strategy-a"}],
+                }
                 action["independent_verification"] = self._verification("task-after-plan", workspace=workspace)
                 task = SimpleNamespace(
                     id="task-after-plan",
