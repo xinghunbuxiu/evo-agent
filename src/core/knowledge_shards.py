@@ -143,6 +143,42 @@ class KnowledgeShardRegistry:
             self._write_registry(data)
             return dict(shard)
 
+    def reserve_or_get_provisioning_shard(self, domain: str, *, provider: str = "gitee") -> dict[str, Any]:
+        """Atomically reuse an in-flight reservation or allocate exactly one new shard."""
+        code = self._domain_code(domain)
+        with self._locked():
+            data = self._read_registry()
+            group = data["domains"].setdefault(domain, {"code": code, "shards": []})
+            if group.get("code") != code:
+                raise RuntimeError(f"domain code mismatch for {domain}")
+            pending = [
+                item for item in group["shards"]
+                if item.get("status") == "provisioning"
+            ]
+            if pending:
+                return dict(pending[-1])
+            numbers = [
+                int(match.group(1))
+                for item in group["shards"]
+                if (match := re.fullmatch(rf"{code}-([0-9]+)", str(item.get("repository_id", ""))))
+            ]
+            shard = {
+                "repository_id": f"{code}-{max(numbers, default=0) + 1:02d}",
+                "domain": domain,
+                "provider": provider,
+                "status": "provisioning",
+                "writable": False,
+                "created_at": int(time.time()),
+                "capacity_policy": {
+                    "warning_ratio": self.policy.warning_ratio,
+                    "stop_writes_ratio": self.policy.stop_writes_ratio,
+                    "hard_limit_ratio": self.policy.hard_limit_ratio,
+                },
+            }
+            group["shards"].append(shard)
+            self._write_registry(data)
+            return dict(shard)
+
     def activate_shard(
         self,
         repository_id: str,
