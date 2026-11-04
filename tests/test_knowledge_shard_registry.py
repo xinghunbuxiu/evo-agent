@@ -39,6 +39,24 @@ class KnowledgeShardRegistryTests(unittest.TestCase):
                          ["A-01", "A-02", "D-01"])
         self.assertEqual(len(self.registry.list_shards("mission")), 2)
 
+    def test_concurrent_provisioners_reuse_one_pending_reservation(self):
+        results = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(
+                    self.registry.reserve_or_get_provisioning_shard("mission")["repository_id"]
+                )
+            )
+            for _ in range(12)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(results, ["A-01"] * 12)
+        self.assertEqual(len(self.registry.list_shards("mission")), 1)
+
     def test_concurrent_reservations_never_allocate_duplicate_ids(self):
         results = []
         errors = []
