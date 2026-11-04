@@ -161,8 +161,11 @@ The first capacity-aware shard control-plane slice is now implemented:
 - Usage metrics can be recorded by bytes and file count; reaching the configured write threshold seals the shard. Existing sealed shards remain addressable in the catalog.
 - Artifact catalog entries include tenant, domain, repository, branch, path, version, and SHA-256. Duplicate artifact IDs are idempotent only when their location and digest match.
 - `GET /api/tenants/{tenant_id}/knowledge-shards` exposes the tenant shard inventory; the Knowledge page now displays numbered repositories, status, latest measured capacity ratio, and file count.
+- `src/admin/experience_shard_runtime.py` now provisions the tenant's numbered `D-*` experience shard, uploads a complete work-node archive batch, reads every file back, and only then appends artifact catalog records with SHA-256 digests.
+- Both the initial work-node archive and local-archive retry paths use the same verified shard writer. Failed provisioning, upload, readback, or catalog registration keeps the local snapshot and does not report remote archival success.
+- The experience archive runtime has focused tests for allocation, full readback/catalog behavior, idempotent retry, and refusing to catalog tampered remote content.
 
-This is the registry/provisioning foundation, not yet the complete production write path. Existing skill sync and work-node archive routes still need to call the allocator, report fresh provider capacity metrics, and record catalog entries only after remote readback verification. Cross-shard search and catalog reconstruction also remain follow-up work. Do not describe automatic capacity rotation as globally active until those integrations and end-to-end tests are complete.
+This is the first integrated production write path, not yet the complete knowledge write path. `ExperienceStore.save()` still writes the local learning store; skill, strategy, mission-trace and worker-profile writers are not yet routed through numbered shards. Fresh provider capacity measurement, cross-shard search and catalog reconstruction also remain follow-up work. Do not describe automatic capacity rotation as globally active until usage measurement and the remaining writer integrations are complete.
 
 Do not bypass tenant policies, skill promotion guards, or existing archive integrity checks.
 
