@@ -31,6 +31,44 @@ export interface KnowledgeSkillsPayload {
   skills: KnowledgeSkill[]
 }
 
+export interface KnowledgeShard {
+  repository_id: string
+  domain: string
+  provider: string
+  status: string
+  writable: boolean
+  full_name?: string
+  url?: string
+  branch?: string
+  capacity_ratio?: number
+  capacity_warning?: boolean
+  usage?: {
+    used_bytes?: number
+    file_count?: number
+    largest_file_bytes?: number
+    measured_at?: number
+  }
+}
+
+export interface KnowledgeShardInventory {
+  tenant_id: string
+  shards: KnowledgeShard[]
+  total: number
+  domains: Record<string, {
+    total: number
+    active: number
+    sealed: number
+    provisioning: number
+  }>
+  registry_path: string
+}
+
+export function getKnowledgeShards(tenantId: string) {
+  return get<KnowledgeShardInventory>(
+    `/api/tenants/${encodeURIComponent(tenantId)}/knowledge-shards`
+  )
+}
+
 export function getKnowledgeSkills(tenantId: string) {
   return get<KnowledgeSkillsPayload>(`/api/knowledge/skills?tenant_id=${encodeURIComponent(tenantId)}`)
 }
