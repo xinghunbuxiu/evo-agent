@@ -453,6 +453,37 @@ class OrganizationRegistry:
             self._write(self.workers_path, workers)
             return worker
 
+    def recover_worker_task_lease(
+        self, *, worker_id: str, task_id: str, lease_seconds: int = 300
+    ) -> dict[str, Any]:
+        """Re-establish a lease only after trusted queue reconciliation proves the task is non-terminal.
+
+        This is an internal recovery operation for Mission startup/runtime reconciliation.
+        Unlike normal heartbeats it may extend an expired lease, but it never creates a
+        missing claim or changes the worker/task ownership identity.
+        """
+        worker_id = _validate_id(worker_id, "worker_id")
+        task_id = _validate_id(task_id, "task_id")
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or not 15 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be an integer between 15 and 3600")
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            leases = worker.get("task_leases", {})
+            lease = leases.get(task_id) if isinstance(leases, dict) else None
+            if task_id not in worker.get("active_task_ids", []) or not isinstance(lease, dict):
+                raise ValueError("Cannot recover a lease without an existing active worker claim")
+            if not str(lease.get("lease_token") or "").strip():
+                raise ValueError("Cannot recover a lease without its existing fencing token")
+            now = datetime.now(timezone.utc)
+            lease["heartbeat_at"] = now.isoformat()
+            lease["expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            worker["updated_at"] = now.isoformat()
+            self._write(self.workers_path, workers)
+            return worker
+
     def list_expired_worker_task_leases(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
         """Report expired leases without releasing claims or making dispatch decisions."""
         current = now or datetime.now(timezone.utc)
