@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from admin.experience_shard_runtime import archive_verified_experience_files  # noqa: E402
+from admin.experience_shard_runtime import (
+    archive_verified_experience_files,
+    rebuild_experience_artifact_catalog,
+)  # noqa: E402
+from core.knowledge_shards import KnowledgeShardRegistry
+import hashlib
 
 
 class FakeProvider:
@@ -35,6 +40,21 @@ class FakeProvider:
 
     async def read_text_file(self, *, token, repo_full_name, file_path, branch):
         return self.files.get((repo_full_name, branch, file_path))
+
+    async def list_directory(self, *, token, repo_full_name, path, branch):
+        prefix = path.rstrip("/") + "/"
+        result = []
+        for (repo, file_branch, file_path), _content in self.files.items():
+            if repo != repo_full_name or file_branch != branch or not file_path.startswith(prefix):
+                continue
+            remainder = file_path[len(prefix):]
+            if "/" not in remainder:
+                result.append({"type": "file", "path": file_path})
+            else:
+                directory = prefix + remainder.split("/", 1)[0]
+                if not any(item.get("path") == directory for item in result):
+                    result.append({"type": "dir", "path": directory})
+        return result
 
 
 class ExperienceShardArchiveTests(unittest.TestCase):
@@ -102,6 +122,46 @@ class ExperienceShardArchiveTests(unittest.TestCase):
                     files={"../outside.json": "no"},
                 )
             self.assertEqual(provider.created, [])
+
+    def test_rebuild_catalog_from_remote_manifest_after_local_catalog_loss(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            provider = FakeProvider()
+            self.run_archive(workspace, provider)
+            registry_root = workspace / ".tenants" / "tenant-a" / "knowledge_shards"
+            registry = KnowledgeShardRegistry(registry_root)
+            (registry_root / "artifact_catalog.jsonl").unlink()
+
+            result = asyncio.run(rebuild_experience_artifact_catalog(
+                registry=registry, provider=provider, token="test-token", tenant_id="tenant-a"
+            ))
+
+            self.assertEqual(result["inspected_manifests"], 2)
+            self.assertEqual(result["restored_artifacts"], 2)
+            self.assertTrue(result["integrity_verified"])
+            artifact_id = "tenant-a:tenants/tenant-a/nodes/task-1/manifest.json:" + hashlib.sha256(b'{"ok":true}').hexdigest()
+            self.assertEqual(len(registry.find_artifact(artifact_id)), 1)
+
+    def test_rebuild_skips_tampered_remote_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            provider = FakeProvider()
+            self.run_archive(workspace, provider)
+            registry = KnowledgeShardRegistry(workspace / ".tenants" / "tenant-a" / "knowledge_shards")
+            original_read = provider.read_text_file
+
+            async def tampered_read(**kwargs):
+                value = await original_read(**kwargs)
+                if kwargs["file_path"].endswith("manifest.json"):
+                    return "tampered"
+                return value
+
+            provider.read_text_file = tampered_read
+            result = asyncio.run(rebuild_experience_artifact_catalog(
+                registry=registry, provider=provider, token="test-token", tenant_id="tenant-a"
+            ))
+            self.assertEqual(result["restored_artifacts"], 1)
+            self.assertTrue(any(item["reason"] == "artifact_digest_mismatch" for item in result["skipped"]))
 
 
 if __name__ == "__main__":
