@@ -268,7 +268,7 @@ async def rebuild_experience_artifact_catalog(
         "restored_artifacts": len(restored),
         "artifacts": restored,
         "skipped": skipped,
-        "integrity_verified": all(item.get("sha256") for item in restored),
+        "integrity_verified": inspected > 0 and not skipped and len(restored) == inspected and all(item.get("sha256") for item in restored),
     }
 
 
