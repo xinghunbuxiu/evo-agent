@@ -92,12 +92,12 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
     def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
         for target in ("../escape.py", "/etc/passwd", "tests\\\\escape.py", "tests/../escape.py"):
             with self.subTest(target=target), self.assertRaises(ValueError):
-                build_broker_request("project-evo-os", replace(self.spec, target=target))
+                build_broker_request("project-evo-os", replace(self.spec, target=target), mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"})
 
     def test_rejects_path_like_or_invalid_workspace_identifiers(self):
         for value in ("../workspace", "/tmp/workspace", "a/b", "", " "):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                build_broker_request(value, self.spec)
+                build_broker_request(value, self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"})
 
     def test_verifies_ed25519_attestation(self):
         response = self._signed_response()
@@ -145,6 +145,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
                 expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
@@ -194,6 +195,24 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
+
+    def test_rejects_signed_response_bound_to_another_task(self):
+        response = self._signed_response()
+        with self.assertRaisesRegex(ValueError, "mission_context"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "task_id": "different-task"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_incomplete_or_malformed_mission_context(self):
+        for context in ({}, {**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "task_id": "../other"}, {**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "tenant_id": ""}):
+            with self.subTest(context=context), self.assertRaises(ValueError):
+                build_broker_request("project-evo-os", self.spec, mission_context=context)
 
 
 if __name__ == "__main__":
