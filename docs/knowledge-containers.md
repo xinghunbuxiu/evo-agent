@@ -161,7 +161,7 @@ The first capacity-aware shard control-plane slice is now implemented:
 - Usage metrics can be recorded by bytes and file count; reaching the configured write threshold seals the shard. Existing sealed shards remain addressable in the catalog.
 - Artifact catalog entries include tenant, domain, repository, branch, path, version, and SHA-256. Duplicate artifact IDs are idempotent only when their location and digest match.
 - `GET /api/tenants/{tenant_id}/knowledge-shards` exposes the tenant shard inventory; the Knowledge page now displays numbered repositories, status, latest measured capacity ratio, and file count.
-- `src/admin/experience_shard_runtime.py` now provisions the tenant's numbered `D-*` experience shard, uploads a complete work-node archive batch, reads every file back, and only then appends artifact catalog records with SHA-256 digests.
+- `src/admin/experience_shard_runtime.py` now provisions the tenant's numbered `D-*` experience shard, uploads a complete work-node archive batch, reads every file back, writes and verifies per-artifact manifests under `.evo/catalog/experience/` in Gitee, and only then appends local artifact catalog records with SHA-256 digests. The remote manifests allow the local catalog to be rebuilt after local registry loss.
 - Both the initial work-node archive and local-archive retry paths use the same verified shard writer. Failed provisioning, upload, readback, or catalog registration keeps the local snapshot and does not report remote archival success.
 - The experience archive runtime has focused tests for allocation, full readback/catalog behavior, idempotent retry, and refusing to catalog tampered remote content.
 
