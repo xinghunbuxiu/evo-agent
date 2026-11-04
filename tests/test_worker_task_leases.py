@@ -69,8 +69,15 @@ class WorkerLeaseTests(unittest.TestCase):
             worker_id="android-worker", task_id="task-3"
         )
         lease = claimed["task_leases"]["task-3"]
-        future = datetime.now(timezone.utc) + timedelta(hours=2)
-        expired = self.registry.list_expired_worker_task_leases(now=future)
+        # Make the persisted lease genuinely expired. Passing a future clock to
+        # list_expired_worker_task_leases only affects reporting; it must not
+        # change the clock used by renew_worker_task_lease.
+        workers = self.registry._read(self.registry.workers_path)
+        workers["android-worker"]["task_leases"]["task-3"]["expires_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        self.registry._write(self.registry.workers_path, workers)
+        expired = self.registry.list_expired_worker_task_leases()
         self.assertEqual(
             [(item["worker_id"], item["task_id"]) for item in expired],
             [("android-worker", "task-3")],
