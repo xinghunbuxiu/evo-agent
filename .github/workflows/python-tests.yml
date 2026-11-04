@@ -90,13 +90,26 @@ jobs:
           cat /proc/self/cgroup 2>/dev/null || true
           test -r /sys/kernel/security/lsm && cat /sys/kernel/security/lsm || true
           grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status || true
-      - name: Check out repository
-        timeout-minutes: 12
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          clean: true
-          show-progress: true
+      - name: Download source archive through GitHub API
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/evo-agent-$GITHUB_SHA.tar.gz"
+          curl --fail --show-error --location \
+            --retry 3 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 15 --max-time 180 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/tarball/$GITHUB_SHA" \
+            --output "$archive"
+          mkdir -p "$GITHUB_WORKSPACE"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          tar -xzf "$archive" --strip-components=1 -C "$GITHUB_WORKSPACE"
+          test -f "$GITHUB_WORKSPACE/requirements.txt"
+          echo "Prepared source archive for commit $GITHUB_SHA"
       - name: Verify Python and create virtual environment
         run: |
           set -euo pipefail
