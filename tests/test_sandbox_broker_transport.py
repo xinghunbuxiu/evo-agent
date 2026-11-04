@@ -18,6 +18,7 @@ from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
 from core.sandbox_broker_protocol import build_broker_request
 from core.sandbox_broker_transport import (
     execute_via_broker,
+    execute_via_broker_attested,
     BrokerTransportError,
     handle_broker_connection,
     request_broker,
@@ -144,6 +145,47 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.assertFalse(server_thread.is_alive())
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(result["target"], "tests/test_sample.py")
+
+    def test_execute_via_broker_attested_preserves_signed_envelope_for_durable_evidence(self):
+        import os
+        path = str(Path(self.temp.name) / "broker-attested.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(8)
+        stop = threading.Event()
+        server_thread = threading.Thread(
+            target=serve_listener,
+            kwargs={
+                "listener": listener,
+                "service": self.service,
+                "allowed_uids": [os.getuid()],
+                "stop_event": stop,
+                "max_workers": 2,
+            },
+        )
+        server_thread.start()
+        try:
+            evidence = execute_via_broker_attested(
+                path, "test-workspace", self.spec,
+                mission_context={
+                    "tenant_id": "tenant-test",
+                    "mission_run_id": "mission-test",
+                    "node_id": "node-test",
+                    "task_id": "task-test",
+                },
+                public_key=self.key.public_key().public_bytes_raw(),
+                expected_key_id="test-key",
+            )
+        finally:
+            stop.set()
+            server_thread.join(timeout=3)
+            listener.close()
+        self.assertFalse(server_thread.is_alive())
+        self.assertEqual(evidence["schema_version"], "mission.sandbox-broker-attestation.v1")
+        self.assertEqual(evidence["attestation"]["mission_context"]["task_id"], "task-test")
+        self.assertEqual(evidence["attestation"]["signature"]["key_id"], "test-key")
+        self.assertTrue(evidence["result"]["execution_succeeded"])
+        self.assertEqual(evidence["result"]["target"], "tests/test_sample.py")
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")

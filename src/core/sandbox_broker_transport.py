@@ -170,6 +170,41 @@ def serve_listener(
             pool.submit(handle, connection)
 
 
+def execute_via_broker_attested(
+    socket_path: str,
+    workspace_id: str,
+    spec: ExecutionProfileSpec,
+    *,
+    mission_context: dict[str, str],
+    public_key: bytes,
+    expected_key_id: str,
+    timeout_seconds: float | None = None,
+) -> dict:
+    """Execute and return both the signed envelope and its verified result.
+
+    Persist the complete attestation envelope, not only the result, so the
+    Mission verifier can re-check the original signature after task reload.
+    """
+    request = build_broker_request(workspace_id, spec, mission_context=mission_context)
+    timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
+    response = request_broker(socket_path, request, timeout_seconds=timeout)
+    result = verify_broker_response(
+        response,
+        public_key=public_key,
+        expected_key_id=expected_key_id,
+        expected_request_id=request["request_id"],
+        expected_workspace_id=workspace_id,
+        expected_mission_context=mission_context,
+        expected_profile_id=spec.profile_id,
+        expected_target=spec.target,
+    )
+    return {
+        "schema_version": "mission.sandbox-broker-attestation.v1",
+        "attestation": response,
+        "result": result,
+    }
+
+
 def execute_via_broker(
     socket_path: str,
     workspace_id: str,
@@ -181,19 +216,15 @@ def execute_via_broker(
     timeout_seconds: float | None = None,
 ) -> dict:
     """Execute one fixed profile through the broker and verify its attestation."""
-    request = build_broker_request(workspace_id, spec, mission_context=mission_context)
-    timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
-    response = request_broker(socket_path, request, timeout_seconds=timeout)
-    return verify_broker_response(
-        response,
+    return execute_via_broker_attested(
+        socket_path,
+        workspace_id,
+        spec,
+        mission_context=mission_context,
         public_key=public_key,
         expected_key_id=expected_key_id,
-        expected_request_id=request["request_id"],
-        expected_workspace_id=workspace_id,
-        expected_mission_context=mission_context,
-        expected_profile_id=spec.profile_id,
-        expected_target=spec.target,
-    )
+        timeout_seconds=timeout_seconds,
+    )["result"]
 
 
 def request_broker(
@@ -238,4 +269,5 @@ __all__ = [
     "serve_listener",
     "request_broker",
     "execute_via_broker",
+    "execute_via_broker_attested",
 ]
