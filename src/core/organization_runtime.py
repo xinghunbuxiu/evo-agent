@@ -194,6 +194,7 @@ class OrganizationRegistry:
                 "created_from_worker_id": source_worker_id,
                 "active_task_ids": [],
                 "released_task_ids": [],
+                "task_leases": {},
                 "knowledge_asset_ids": [],
                 "created_at": _now(),
                 "updated_at": _now(),
