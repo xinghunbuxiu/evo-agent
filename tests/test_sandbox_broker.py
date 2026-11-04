@@ -45,7 +45,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         })
         self.request_id = str(uuid.uuid4())
         self.request = build_broker_request(
-            "project-test", self.spec, request_id=self.request_id,
+            "project-test", self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, request_id=self.request_id,
         )
 
     def tearDown(self):
@@ -64,6 +64,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             expected_key_id="broker-test-key",
             expected_request_id=self.request_id,
             expected_workspace_id="project-test",
+            expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
             expected_profile_id="python.pytest",
             expected_target="tests/test_sample.py",
         )
