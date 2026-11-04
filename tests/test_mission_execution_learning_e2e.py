@@ -192,6 +192,9 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
             action["independent_verification"] = sign_verification_evidence(workspace, tenant_id, {
                 "source": "mission_independent_verifier",
                 "task_id": "task-even-e2e",
+                "tenant_id": tenant_id,
+                "mission_run_id": action.get("mission_run_id"),
+                "mission_node_id": action.get("node_id"),
                 "execution_event_id": "execution-event-even-e2e",
                 "verifier_id": "deterministic-assertion-verifier",
                 "verifier_version": "1",
