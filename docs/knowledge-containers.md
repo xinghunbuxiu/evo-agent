@@ -150,11 +150,20 @@ The Knowledge page should eventually expose:
 - search across all registered shards;
 - artifact provenance, versions, hashes, and restore/verification history.
 
-## Existing implementation boundary
+## Implementation status
 
-The current code already has knowledge-container resolution, tenant Git repository configuration, provider abstraction, enterprise repository index scanning, and local archive snapshots with SHA-256/readback verification. Those capabilities are useful foundations, but they do not yet prove automatic numbered Gitee shard allocation, capacity-aware routing, concurrent shard reservation, or cross-shard catalog recovery.
+The first capacity-aware shard control-plane slice is now implemented:
 
-Implement those capabilities incrementally behind the knowledge-storage boundary. Do not bypass tenant policies, skill promotion guards, or existing archive integrity checks.
+- `src/core/knowledge_shards.py` stores a local atomic repository registry and append-only artifact-location catalog.
+- Domain IDs are allocated as `A-01`, `B-01`, ... using a process lock; `reserve_or_get_provisioning_shard` reuses an in-flight reservation to avoid duplicate shard IDs.
+- `src/admin/knowledge_shard_runtime.py` provisions deterministic Gitee repository names through the existing provider abstraction and activates the shard only after the provider returns its repository identity.
+- Gitee repository creation handles a concurrent-create conflict by reading the deterministic repository name back.
+- Usage metrics can be recorded by bytes and file count; reaching the configured write threshold seals the shard. Existing sealed shards remain addressable in the catalog.
+- Artifact catalog entries include tenant, domain, repository, branch, path, version, and SHA-256. Duplicate artifact IDs are idempotent only when their location and digest match.
+
+This is the registry/provisioning foundation, not yet the complete production write path. Existing skill sync and work-node archive routes still need to call the allocator, report fresh provider capacity metrics, and record catalog entries only after remote readback verification. Cross-shard search and catalog reconstruction also remain follow-up work. Do not describe automatic capacity rotation as globally active until those integrations and end-to-end tests are complete.
+
+Do not bypass tenant policies, skill promotion guards, or existing archive integrity checks.
 
 ## Related documents
 
