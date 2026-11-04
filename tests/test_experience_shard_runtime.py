@@ -161,6 +161,7 @@ class ExperienceShardArchiveTests(unittest.TestCase):
                 registry=registry, provider=provider, token="test-token", tenant_id="tenant-a"
             ))
             self.assertEqual(result["restored_artifacts"], 1)
+            self.assertFalse(result["integrity_verified"])
             self.assertTrue(any(item["reason"] == "artifact_digest_mismatch" for item in result["skipped"]))
 
 
