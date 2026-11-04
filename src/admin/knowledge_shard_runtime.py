@@ -29,7 +29,8 @@ async def ensure_writable_knowledge_shard(
     if active:
         return active
 
-    reservation = registry.find_provisioning_shard(domain)
+    provisioning = [item for item in registry.list_shards(domain) if item.get("status") == "provisioning"]
+    reservation = provisioning[-1] if provisioning else None
     if reservation is None:
         reservation = registry.reserve_next_shard(domain, provider=provider.provider_name)
 
