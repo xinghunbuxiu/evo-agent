@@ -66,6 +66,35 @@ class WorkerLeaseHeartbeatTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(len(registry.renewals), 1)
 
+    def test_transient_queue_lookup_error_keeps_lease_alive_and_retries(self):
+        registry = _Registry()
+
+        class FlakyQueue:
+            def __init__(self):
+                self.calls = 0
+
+            def get_task(self, task_id):
+                self.calls += 1
+                if self.calls == 1:
+                    raise OSError("temporary queue read failure")
+                return SimpleNamespace(status=SimpleNamespace(value="failed"))
+
+        queue = FlakyQueue()
+        thread = start_worker_task_lease_heartbeat(
+            organization_registry=registry,
+            task_queue=queue,
+            worker_id="worker-a",
+            claim_id="claim-transient",
+            lease_token="secret-token",
+            task_ids=["task-a"],
+            heartbeat_interval_seconds=0.001,
+        )
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(queue.calls, 2)
+        self.assertEqual(len(registry.renewals), 1)
+        self.assertEqual(registry.renewals[0]["task_id"], "claim-transient")
+
     def test_rejects_empty_task_set_and_token(self):
         registry = _Registry()
         queue = _Queue(["success"])
