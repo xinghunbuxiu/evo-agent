@@ -54,8 +54,9 @@ class KnowledgeShardRegistry:
         self.catalog_path = self.root / "artifact_catalog.jsonl"
         self.lock_path = self.root / ".knowledge_shards.lock"
         self.policy = policy or ShardPolicy()
-        if not self.registry_path.exists():
-            self._write_registry({"schema_version": 1, "domains": {}})
+        with self._locked():
+            if not self.registry_path.exists():
+                self._write_registry({"schema_version": 1, "domains": {}})
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
