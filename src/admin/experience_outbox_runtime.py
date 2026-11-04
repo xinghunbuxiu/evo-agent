@@ -117,7 +117,7 @@ async def sync_experience_outbox(
                 "synced": moved,
                 "pending": len(list(pending_dir.glob("*.json"))),
                 "skipped": skipped,
-                "integrity_verified": moved == len(records) and result.get("integrity_verified") is True,
+                "integrity_verified": not skipped and moved == len(records) and result.get("integrity_verified") is True,
             }
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
