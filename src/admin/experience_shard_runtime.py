@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,13 @@ async def archive_verified_experience_files(
     tenants_root = (Path(workspace) / ".tenants").resolve()
     if tenant_root.parent != tenants_root:
         raise ValueError("invalid tenant_id")
+
+    if not files:
+        raise ValueError("experience archive must contain at least one file")
+    for relative in files:
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts or not relative_path.parts or relative_path.as_posix() != relative:
+            raise ValueError(f"invalid experience archive path: {relative}")
 
     registry = KnowledgeShardRegistry(tenant_root / "knowledge_shards")
     shard = await ensure_writable_knowledge_shard(
