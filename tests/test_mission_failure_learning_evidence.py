@@ -22,6 +22,11 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
             }
         ]
         saved = {}
+        captured = {}
+
+        def execute_learning_task(**kwargs):
+            captured.update(kwargs)
+            return {"task_id": "learning-1", "status": "needs_learning"}
 
         bindings = create_mission_execution_bindings(
             load_learning_tasks=lambda workspace: {"tasks": {}},
@@ -36,7 +41,7 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
             build_snapshot_signature=lambda *args, **kwargs: {},
             normalize_string_list=lambda value: value if isinstance(value, list) else [],
             build_external_learning_plan=lambda **kwargs: {"preferred_sources": []},
-            execute_learning_task=lambda **kwargs: {"task_id": "learning-1", "status": "needs_learning"},
+            execute_learning_task=execute_learning_task,
             make_learning_task_id=lambda tenant_id, sample: "learning-generated",
             extract_task_snapshot=lambda *args, **kwargs: {},
             resolve_effective_growth_policy=lambda **kwargs: {},
@@ -49,8 +54,8 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
             type="analyze",
             status=SimpleNamespace(value="failed"),
             payload={"path": "/tmp/sample"},
-            result={},
-            error="execution failed",
+            result={"signals": ["missing wall boundary", "door symbol not associated"], "summary": "geometry validation failed"},
+            error="wall graph disconnected",
         )
         mission_run = {
             "mission_run_id": "mission-run-1",
@@ -84,6 +89,13 @@ class MissionFailureLearningEvidenceTests(unittest.TestCase):
             )
 
         learning_task = saved["tasks"][task_id]
+        diagnosis = captured["diagnosis"]["analyze"]
+        self.assertEqual(diagnosis["observed_error"], "wall graph disconnected")
+        self.assertEqual(
+            diagnosis["observed_signals"],
+            ["missing wall boundary", "door symbol not associated"],
+        )
+        self.assertEqual(diagnosis["worker_result_summary"], "geometry validation failed")
         self.assertEqual(learning_task["mission_run_id"], "mission-run-1")
         self.assertEqual(learning_task["source_task_id"], "source-task-1")
         self.assertEqual(learning_task["mission_node_id"], "node-a")
