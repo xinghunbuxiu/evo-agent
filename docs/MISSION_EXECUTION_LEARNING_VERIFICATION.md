@@ -348,3 +348,30 @@ account, because it is mounted read-only inside the container.
 
 The Unix transport also rejects malformed UID allowlists, including booleans
 (which Python otherwise treats as integers) and duplicate or negative UIDs.
+
+
+## Mission-bound broker attestation protocol (2026-11-04)
+
+The sandbox broker wire contract is now versioned as
+`mission.sandbox-broker-request.v2` / `mission.sandbox-broker-response.v2`.
+Every request must carry an exact `mission_context` containing
+`tenant_id`, `mission_run_id`, `node_id`, and `task_id`. The broker validates
+that identity envelope before claiming the request ID or executing the profile,
+then includes it in the Ed25519-signed response payload. The client requires the
+expected identity envelope and rejects a response whose Tenant, Mission, node, or
+task differs, even if the response signature is otherwise valid.
+
+This closes the protocol-level cross-task/cross-tenant replay gap: a valid signed
+execution result is now cryptographically bound to the task identity supplied by
+the trusted caller. It does **not** yet prove that the caller supplied truthful
+identity values, nor does it automatically connect arbitrary TaskQueue workers to
+the broker. The production dispatch adapter must derive these four values from the
+server-owned Mission run and durable queue Task, pass them to `execute_via_broker`,
+and persist the verified broker envelope as runtime-owned task evidence. The
+Mission verifier must then verify the broker signature and compare all four values
+against the durable Mission action and Task before strategy feedback is eligible.
+
+The broker remains undeployed in the VPS environment. These changes do not grant
+the normal runner Docker access or enable a local subprocess fallback. A signed
+broker result is an execution attestation, not by itself a proof that the requested
+behavior is correct; independent artifact/test checks remain necessary.
