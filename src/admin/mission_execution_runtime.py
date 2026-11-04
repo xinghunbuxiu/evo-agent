@@ -186,8 +186,13 @@ def create_mission_execution_bindings(
         task_id = str(getattr(task, "id", "") or "").strip()
         completed_at = str(getattr(task, "completed_at", "") or "").strip()
         task_tenant_id = str(getattr(task, "tenant_id", "") or "").strip()
-        if task_tenant_id and task_tenant_id != tenant_id:
+        mission_run_id = str(mission_run.get("mission_run_id") or "").strip()
+        mission_node_id = str(action.get("node_id") or "").strip()
+        if not task_tenant_id or task_tenant_id != tenant_id:
             action["verification_reason"] = "task_tenant_mismatch"
+            return None
+        if not mission_run_id or not mission_node_id:
+            action["verification_reason"] = "mission_identity_missing"
             return None
         if not task_id or not completed_at:
             action["verification_reason"] = "execution_event_missing"
@@ -237,6 +242,9 @@ def create_mission_execution_bindings(
         evidence = {
             "source": "mission_independent_verifier",
             "task_id": task_id,
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "mission_node_id": mission_node_id,
             "execution_event_id": f"task-completion:{task_id}:{completed_at}",
             "verifier_id": verifier_id,
             "verifier_version": verifier_version,
@@ -281,6 +289,11 @@ def create_mission_execution_bindings(
             or not str(verification.get("execution_event_id") or "").strip()
             or not str(verification.get("verifier_id") or "").strip()
             or not str(verification.get("verifier_version") or "").strip()
+            or str(verification.get("tenant_id") or "").strip() != tenant_id
+            or str(verification.get("mission_run_id") or "").strip() != str(action.get("mission_run_id") or "").strip()
+            or str(verification.get("mission_node_id") or "").strip() != str(action.get("node_id") or "").strip()
+            or not str(action.get("mission_run_id") or "").strip()
+            or not str(action.get("node_id") or "").strip()
             or verification_status not in {"passed", "failed"}
             or not isinstance(checks, list)
             or not checks
@@ -507,6 +520,8 @@ def create_mission_execution_bindings(
 
                 task_status = str(task.status.value or "")
                 if task_status in {"success", "completed", "failed", "cancelled"}:
+                    current["mission_run_id"] = str(mission_run.get("mission_run_id") or "")
+                    current["tenant_id"] = tenant_id
                     verify_mission_task(
                         workspace=workspace,
                         tenant_id=tenant_id,
