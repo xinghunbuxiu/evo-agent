@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from core.mission_brain import index_mission_brain_decisions
 from core.organization_runtime import OrganizationRegistry
+from admin.worker_lease_runtime import start_worker_task_lease_heartbeat
 
 
 def _append_base_action(
@@ -526,6 +527,7 @@ def create_mission_action_runtime_bindings(
             dispatch_node = dict(node)
             dispatch_node["mission_runtime_authorization"] = authorization
             claim = None
+            lease_token = None
             if callable(worker_handler) and organization_registry is not None:
                 workforce = decision.get("workforce_decision", {}) if isinstance(decision, dict) else {}
                 workforce_result = str(workforce.get("decision") or "")
@@ -577,7 +579,18 @@ def create_mission_action_runtime_bindings(
                         claim_origin = "incubated"
                     else:
                         raise ValueError("Workforce recommendation is not executable")
-                    organization_registry.claim_worker_task(worker_id=chosen_worker_id, task_id=claim_id)
+                    claimed_worker = organization_registry.claim_worker_task(
+                        worker_id=chosen_worker_id, task_id=claim_id
+                    )
+                    lease_record = (
+                        claimed_worker.get("task_leases", {}).get(claim_id)
+                        if isinstance(claimed_worker, dict)
+                        and isinstance(claimed_worker.get("task_leases"), dict)
+                        else None
+                    )
+                    lease_token = str(lease_record.get("lease_token") or "").strip() if isinstance(lease_record, dict) else ""
+                    if not lease_token:
+                        raise RuntimeError("Worker claim did not issue a lease token")
                     claim = {
                         "schema_version": "mission.worker.claim.v1",
                         "worker_id": chosen_worker_id,
@@ -663,6 +676,15 @@ def create_mission_action_runtime_bindings(
                             action["organization_worker_id"] = claim["worker_id"]
                             action["handler_error_type"] = type(exc).__name__
                             attached.add(task_id)
+                    if lease_token and callable(getattr(task_queue, "get_task", None)):
+                        start_worker_task_lease_heartbeat(
+                            organization_registry=organization_registry,
+                            task_queue=task_queue,
+                            worker_id=claim["worker_id"],
+                            claim_id=claim["claim_id"],
+                            lease_token=lease_token,
+                            task_ids=partial_task_ids,
+                        )
                     for task_id in partial_task_ids:
                         if task_id in attached:
                             continue
@@ -696,6 +718,16 @@ def create_mission_action_runtime_bindings(
                 for item in submitted_task_ids[before_task_count:]
                 if str(item).strip()
             ]
+            if claim and lease_token and new_task_ids and callable(getattr(task_queue, "get_task", None)):
+                start_worker_task_lease_heartbeat(
+                    organization_registry=organization_registry,
+                    task_queue=task_queue,
+                    worker_id=claim["worker_id"],
+                    claim_id=claim["claim_id"],
+                    lease_token=lease_token,
+                    task_ids=new_task_ids,
+                )
+
             # The queue is authoritative: never release a lease merely because a buggy
             # handler returned False after it had already submitted real tasks.
             if new_task_ids:
