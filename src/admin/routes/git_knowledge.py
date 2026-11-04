@@ -304,7 +304,6 @@ def register_git_knowledge_routes(
             "shards": shards,
             "total": len(shards),
             "domains": domain_summary,
-            "registry_path": str(registry.registry_path),
         })
 
     @app.get("/api/git/provider/status")
