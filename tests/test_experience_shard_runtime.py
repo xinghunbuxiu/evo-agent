@@ -62,6 +62,7 @@ class ExperienceShardArchiveTests(unittest.TestCase):
             self.assertTrue(result["integrity_verified"])
             self.assertEqual(len(result["verified_files"]), 2)
             self.assertEqual(len(result["artifacts"]), 2)
+            self.assertEqual(len(result["remote_catalog_manifests"]), 2)
             self.assertEqual(len(provider.created), 1)
 
     def test_experience_archive_retry_is_idempotent(self):
