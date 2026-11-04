@@ -86,6 +86,34 @@ class WorkerLeaseTests(unittest.TestCase):
                 lease_token=lease["lease_token"],
             )
 
+    def test_queue_reconciliation_can_recover_an_expired_active_lease(self):
+        claimed = self.registry.claim_worker_task(
+            worker_id="android-worker", task_id="task-recovery", lease_seconds=60
+        )
+        token = claimed["task_leases"]["task-recovery"]["lease_token"]
+        workers = self.registry._read(self.registry.workers_path)
+        workers["android-worker"]["task_leases"]["task-recovery"]["expires_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        self.registry._write(self.registry.workers_path, workers)
+
+        with self.assertRaisesRegex(ValueError, "Expired lease"):
+            self.registry.renew_worker_task_lease(
+                worker_id="android-worker",
+                task_id="task-recovery",
+                lease_token=token,
+            )
+
+        recovered = self.registry.recover_worker_task_lease(
+            worker_id="android-worker", task_id="task-recovery", lease_seconds=120
+        )
+        lease = recovered["task_leases"]["task-recovery"]
+        self.assertEqual(lease["lease_token"], token)
+        self.assertGreater(
+            datetime.fromisoformat(lease["expires_at"]),
+            datetime.now(timezone.utc),
+        )
+
     def test_release_removes_lease_and_clone_starts_without_runtime_lease(self):
         claimed = self.registry.claim_worker_task(
             worker_id="android-worker", task_id="task-4"
