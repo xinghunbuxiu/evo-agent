@@ -590,6 +590,9 @@ def create_mission_action_runtime_bindings(
                     )
                     lease_token = str(lease_record.get("lease_token") or "").strip() if isinstance(lease_record, dict) else ""
                     if not lease_token:
+                        organization_registry.release_worker_task(
+                            worker_id=chosen_worker_id, task_id=claim_id
+                        )
                         raise RuntimeError("Worker claim did not issue a lease token")
                     claim = {
                         "schema_version": "mission.worker.claim.v1",
