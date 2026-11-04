@@ -21,11 +21,28 @@ from .execution_profiles import ExecutionProfileSpec
 from .execution_results import EXECUTION_RESULT_SCHEMA
 
 
-BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v1"
-BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v1"
+BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v2"
+BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v2"
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+
+_MISSION_CONTEXT_FIELDS = {"tenant_id", "mission_run_id", "node_id", "task_id"}
+_MISSION_CONTEXT_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _normalize_mission_context(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != _MISSION_CONTEXT_FIELDS:
+        raise ValueError("mission_context must contain exact Tenant, Mission, node, and task identities")
+    normalized = {}
+    for field in sorted(_MISSION_CONTEXT_FIELDS):
+        item = value.get(field)
+        if not isinstance(item, str) or not _MISSION_CONTEXT_VALUE_RE.fullmatch(item):
+            raise ValueError(f"mission_context {field} is invalid")
+        normalized[field] = item
+    return normalized
 
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
@@ -35,12 +52,13 @@ def _canonical_json(value: dict[str, Any]) -> bytes:
 
 
 def build_broker_request(
-    workspace_id: str, spec: ExecutionProfileSpec, *, request_id: str | None = None,
+    workspace_id: str, spec: ExecutionProfileSpec, *, mission_context: dict[str, str], request_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a path-free request; the privileged broker maps workspace_id to a root."""
     workspace_id = str(workspace_id or "").strip()
     if not _WORKSPACE_ID_RE.fullmatch(workspace_id):
         raise ValueError("workspace_id must be a registered opaque identifier")
+    mission_context = _normalize_mission_context(mission_context)
     request_id = str(request_id or uuid.uuid4()).lower()
     if not _REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError("request_id must be a UUID")
@@ -65,6 +83,7 @@ def build_broker_request(
         "schema_version": BROKER_REQUEST_SCHEMA,
         "request_id": request_id,
         "workspace_id": workspace_id,
+        "mission_context": mission_context,
         "profile_id": spec.profile_id,
         "target": target,
         "timeout_seconds": spec.timeout_seconds,
@@ -78,13 +97,14 @@ def verify_broker_response(
     expected_key_id: str,
     expected_request_id: str,
     expected_workspace_id: str,
+    expected_mission_context: dict[str, str],
     expected_profile_id: str,
     expected_target: str,
 ) -> dict[str, Any]:
     """Verify broker attestation before returning its signed execution result."""
     if not isinstance(response, dict):
         raise ValueError("broker response must be an object")
-    if set(response) != {"schema_version", "request_id", "workspace_id", "result", "signature"}:
+    if set(response) != {"schema_version", "request_id", "workspace_id", "mission_context", "result", "signature"}:
         raise ValueError("broker response has unsupported or missing fields")
     if response.get("schema_version") != BROKER_RESPONSE_SCHEMA:
         raise ValueError("unsupported broker response schema")
@@ -93,6 +113,10 @@ def verify_broker_response(
 
     if response.get("workspace_id") != expected_workspace_id:
         raise ValueError("broker response workspace_id does not match the request")
+
+    mission_context = _normalize_mission_context(response.get("mission_context"))
+    if mission_context != _normalize_mission_context(expected_mission_context):
+        raise ValueError("broker response mission_context does not match the requested task")
 
     result = response.get("result")
     signature = response.get("signature")
@@ -153,6 +177,7 @@ def verify_broker_response(
                 "schema_version": BROKER_RESPONSE_SCHEMA,
                 "request_id": expected_request_id,
                 "workspace_id": expected_workspace_id,
+                "mission_context": mission_context,
                 "result": result,
             }),
         )
