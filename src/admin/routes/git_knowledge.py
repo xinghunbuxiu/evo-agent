@@ -15,6 +15,7 @@ from fastapi import Request
 from core import ExperienceStore, GitProviderError
 from core.knowledge_shards import KnowledgeShardRegistry
 from admin.experience_shard_runtime import archive_verified_experience_files, rebuild_experience_artifact_catalog
+from admin.experience_outbox_runtime import sync_experience_outbox
 
 
 def register_git_knowledge_routes(
@@ -326,6 +327,31 @@ def register_git_knowledge_routes(
         except Exception as exc:
             return error_response(f"经验目录重建失败: {type(exc).__name__}: {exc}", 500)
         return success_response(result, "经验分片 artifact catalog 重建完成")
+
+    @app.post("/api/tenants/{tenant_id}/experience-outbox/sync")
+    async def sync_tenant_experience_outbox(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
+        if not token or token == "your_real_token_here":
+            return error_response("未找到可用的 Gitee Token", 400)
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        namespace = str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else ""
+        try:
+            result = await sync_experience_outbox(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                provider=provider,
+                token=token,
+                namespace=namespace,
+                repository_name_prefix=f"evo-{sanitize_repo_name(tenant_id).lower()}-experience",
+            )
+        except Exception as exc:
+            return error_response(f"经验 outbox 同步失败: {type(exc).__name__}: {exc}", 500)
+        return success_response(result, "经验 outbox 同步完成")
 
     @app.get("/api/git/provider/status")
     async def git_provider_status(request: Request):
