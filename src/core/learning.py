@@ -9,7 +9,10 @@ Evo Core - AI 学习引擎
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Dict, List
@@ -63,27 +66,80 @@ class Experience:
 
 
 class ExperienceStore:
-    """经验存储"""
-    
+    """Tenant-scoped experience store with a durable remote-sync outbox."""
+
     def __init__(self, workspace: Path, tenant_id: str = "default"):
-        self.workspace = workspace
-        self.tenant_id = tenant_id
-        self.exp_dir = workspace / ".tenants" / tenant_id / "experiences"
+        self.workspace = Path(workspace)
+        self.tenant_id = str(tenant_id or "default")
+        self.tenant_root = self.workspace / ".tenants" / self.tenant_id
+        self.exp_dir = self.tenant_root / "experiences"
+        self.outbox_pending_dir = self.tenant_root / "experience_outbox" / "pending"
         self.exp_dir.mkdir(parents=True, exist_ok=True)
-    
+        self.outbox_pending_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_name, path)
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            if os.path.exists(temp_name):
+                os.unlink(temp_name)
+
     def save(self, exp: Experience) -> None:
-        """保存经验"""
+        """Persist locally and enqueue an immutable, retryable remote-sync event.
+
+        The synchronous save path never performs network I/O. The outbox entry
+        is fsynced before the local projection is updated, so a process restart
+        can resume remote archival without depending on an in-memory task.
+        """
         exp.task_type = normalize_task_type(exp.task_type)
         exp.capability_type = infer_capability_type(
             capability_type=getattr(exp, "capability_type", None),
             domain=exp.domain,
         )
-        domain_dir = self.exp_dir / exp.domain
-        domain_dir.mkdir(exist_ok=True)
-        
-        exp_file = domain_dir / f"{exp.id}.json"
-        with open(exp_file, "w") as f:
-            json.dump(exp.to_dict(), f, indent=2, ensure_ascii=False)
+        domain = str(exp.domain or "").strip()
+        experience_id = str(exp.id or "").strip()
+        if (
+            not domain or domain in {".", ".."} or "/" in domain or "\\\\" in domain
+            or not experience_id or experience_id in {".", ".."}
+            or "/" in experience_id or "\\\\" in experience_id
+        ):
+            raise ValueError("experience domain and id must be safe path segments")
+
+        payload = json.dumps(exp.to_dict(), indent=2, ensure_ascii=False, sort_keys=True)
+        payload_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        artifact_id = f"{self.tenant_id}:{domain}/{experience_id}:{payload_digest}"
+        outbox_record = {
+            "schema_version": 1,
+            "tenant_id": self.tenant_id,
+            "domain": domain,
+            "experience_id": experience_id,
+            "artifact_id": artifact_id,
+            "sha256": payload_digest,
+            "relative_path": f"{domain}/{experience_id}-{payload_digest[:16]}.json",
+            "content": payload,
+        }
+        outbox_name = hashlib.sha256(artifact_id.encode("utf-8")).hexdigest() + ".json"
+        self._atomic_write_text(
+            self.outbox_pending_dir / outbox_name,
+            json.dumps(outbox_record, indent=2, ensure_ascii=False, sort_keys=True),
+        )
+
+        domain_dir = self.exp_dir / domain
+        domain_dir.mkdir(parents=True, exist_ok=True)
+        exp_file = domain_dir / f"{experience_id}.json"
+        self._atomic_write_text(exp_file, payload)
     
     def load_by_domain(self, domain: str, limit: int = 100) -> List[Experience]:
         """按领域加载经验"""
