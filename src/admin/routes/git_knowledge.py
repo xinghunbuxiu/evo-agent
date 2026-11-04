@@ -14,6 +14,7 @@ from fastapi import Request
 
 from core import ExperienceStore, GitProviderError
 from core.knowledge_shards import KnowledgeShardRegistry
+from admin.experience_shard_runtime import archive_verified_experience_files, rebuild_experience_artifact_catalog
 
 
 def register_git_knowledge_routes(
@@ -306,6 +307,26 @@ def register_git_knowledge_routes(
             "domains": domain_summary,
         })
 
+    @app.post("/api/tenants/{tenant_id}/knowledge-shards/experience/rebuild")
+    async def rebuild_tenant_experience_catalog(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
+        if not token or token == "your_real_token_here":
+            return error_response("未找到可用的 Gitee Token", 400)
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        registry = KnowledgeShardRegistry(tenant_root / "knowledge_shards")
+        try:
+            result = await rebuild_experience_artifact_catalog(
+                registry=registry, provider=provider, token=token, tenant_id=tenant_id
+            )
+        except Exception as exc:
+            return error_response(f"经验目录重建失败: {type(exc).__name__}: {exc}", 500)
+        return success_response(result, "经验分片 artifact catalog 重建完成")
+
     @app.get("/api/git/provider/status")
     async def git_provider_status(request: Request):
         token = get_user_gitee_token(request)
@@ -567,19 +588,16 @@ def register_git_knowledge_routes(
 
     @app.post("/api/tenants/{tenant_id}/git-knowledge/export/experiences")
     async def export_tenant_experiences_to_git(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
         token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
         if not token or token == "your_real_token_here":
             return error_response("未找到可用的 Gitee Token", 400)
 
         git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
         provider = get_git_provider_instance(config, git_knowledge)
-        target_repo, target_url = get_tenant_git_repo(
-            tenant_manager,
-            tenant_id,
-            "experiences",
-            config.experiences.full_name,
-            config.experiences.url,
-        )
         store = ExperienceStore(workspace, tenant_id)
         autonomy_runtime = load_autonomy_runtime(workspace, tenant_id)
         child_experience_journals, journal_summary = collect_child_experience_journals(autonomy_runtime)
@@ -591,25 +609,33 @@ def register_git_knowledge_routes(
             "child_experience_journals": child_experience_journals,
             "journal_summary": journal_summary,
         }
-        file_path = f"exports/experiences/{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        content = json.dumps(payload, indent=2, ensure_ascii=False)
         try:
-            await provider.upsert_text_file(
+            archive_result = await archive_verified_experience_files(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                provider=provider,
                 token=token,
-                repo_full_name=target_repo,
-                file_path=file_path,
-                content=json.dumps(payload, indent=2, ensure_ascii=False),
+                namespace=str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else "",
+                repository_name_prefix=f"evo-{tenant_id.lower()}-experience",
+                artifact_prefix=f"tenants/{tenant_id}/experience_exports/{timestamp}",
+                files={"experience-export.json": content},
                 message=f"Export experiences for tenant {tenant_id}",
-                branch="master",
             )
-        except GitProviderError as exc:
-            return error_response(str(exc), 500)
+        except Exception as exc:
+            return error_response(f"经验分片导出失败: {type(exc).__name__}: {exc}", 500)
 
         return success_response({
             "tenant_id": tenant_id,
-            "repo": target_url,
-            "file_path": file_path,
+            "repository_id": archive_result["repository_id"],
+            "repo": archive_result["target_url"],
+            "repo_full_name": archive_result["target_repo"],
+            "file_path": archive_result["files"][0],
+            "artifact_count": len(archive_result["artifacts"]),
+            "integrity_verified": archive_result["integrity_verified"],
             "journal_summary": journal_summary,
-        }, "经验摘要已导出到 Git knowledge")
+        }, "经验摘要已写入编号经验分片并完成回读验证")
 
     @app.post("/api/tenants/{tenant_id}/git-knowledge/export/report")
     async def export_tenant_report_to_git(tenant_id: str, request: Request):
