@@ -231,6 +231,8 @@ def create_mission_action_runtime_bindings(
             extra.setdefault("depends_on", list(dependency_graph.get(node_key, [])))
             decision = brain_decisions.get(node_key)
             coordination = coordination_by_node.get(node_key)
+            extra.setdefault("mission_run_id", mission_run_id)
+            extra.setdefault("tenant_id", tenant_id)
             extra["orchestration_owner"] = "mission"
             extra["dispatch_mode"] = str(brain_contract.get("dispatch_mode") or "centralized")
             if coordination:
