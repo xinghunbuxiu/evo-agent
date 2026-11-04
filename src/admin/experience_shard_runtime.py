@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -84,19 +85,62 @@ async def archive_verified_experience_files(
             raise RuntimeError(f"remote archive verification failed: {path}")
         verified.append(path)
 
-    artifacts: list[dict[str, Any]] = []
+    # Persist a rebuildable artifact manifest in the same Gitee shard before
+    # updating the local catalog. This keeps the remote repository self-describing
+    # if the local registry/catalog is lost.
+    artifact_descriptors: list[dict[str, Any]] = []
+    remote_manifests: list[str] = []
     for relative, content in files.items():
         content_bytes = content.encode("utf-8")
         digest = hashlib.sha256(content_bytes).hexdigest()
         artifact_id = f"{normalized_tenant}:{remote_paths[relative]}:{digest}"
+        descriptor = {
+            "schema_version": 1,
+            "artifact_id": artifact_id,
+            "tenant_id": normalized_tenant,
+            "domain": "experience",
+            "repository_id": shard["repository_id"],
+            "provider": shard["provider"],
+            "full_name": repo_full_name,
+            "branch": branch,
+            "path": remote_paths[relative],
+            "artifact_type": "work_node_archive",
+            "version": 1,
+            "sha256": digest,
+        }
+        manifest_path = f".evo/catalog/experience/{hashlib.sha256(artifact_id.encode('utf-8')).hexdigest()}.json"
+        manifest_content = json.dumps(
+            descriptor, ensure_ascii=False, sort_keys=True, indent=2
+        )
+        await provider.upsert_text_file(
+            token=token,
+            repo_full_name=repo_full_name,
+            file_path=manifest_path,
+            content=manifest_content,
+            message=f"{message} (artifact catalog)",
+            branch=branch,
+        )
+        actual_manifest = await read_text_file(
+            token=token,
+            repo_full_name=repo_full_name,
+            file_path=manifest_path,
+            branch=branch,
+        )
+        if actual_manifest != manifest_content:
+            raise RuntimeError(f"remote artifact manifest verification failed: {manifest_path}")
+        remote_manifests.append(manifest_path)
+        artifact_descriptors.append((descriptor, content_bytes))
+
+    artifacts: list[dict[str, Any]] = []
+    for descriptor, content_bytes in artifact_descriptors:
         artifacts.append(registry.record_artifact(
-            artifact_id=artifact_id,
+            artifact_id=descriptor["artifact_id"],
             tenant_id=normalized_tenant,
             domain="experience",
             repository_id=str(shard["repository_id"]),
-            path=remote_paths[relative],
-            artifact_type="work_node_archive",
-            version=1,
+            path=descriptor["path"],
+            artifact_type=descriptor["artifact_type"],
+            version=descriptor["version"],
             content=content_bytes,
         ))
 
@@ -107,8 +151,9 @@ async def archive_verified_experience_files(
         "branch": branch,
         "files": list(remote_paths.values()),
         "verified_files": verified,
+        "remote_catalog_manifests": remote_manifests,
         "artifacts": artifacts,
-        "integrity_verified": len(verified) == len(files) and len(artifacts) == len(files),
+        "integrity_verified": len(verified) == len(files) and len(remote_manifests) == len(files) and len(artifacts) == len(files),
     }
 
 
