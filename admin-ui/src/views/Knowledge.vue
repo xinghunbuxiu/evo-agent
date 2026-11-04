@@ -469,6 +469,9 @@ const indexResult = ref('')
 const indexSuccess = ref(false)
 const repoIndexSummary = ref<GitKnowledgeRepoIndexSummary | null>(null)
 const shardInventory = ref<KnowledgeShardInventory | null>(null)
+const shardActiveCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.active, 0))
+const shardSealedCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.sealed, 0))
+const shardProvisioningCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.provisioning, 0))
 
 const privateContainerCount = computed(() =>
   knowledgeContainers.value.filter((item) => item.scope === 'tenant_private').length
