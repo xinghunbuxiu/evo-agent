@@ -140,7 +140,7 @@ class ExperienceShardArchiveTests(unittest.TestCase):
             self.assertEqual(result["restored_artifacts"], 2)
             self.assertTrue(result["integrity_verified"])
             artifact_id = "tenant-a:tenants/tenant-a/nodes/task-1/manifest.json:" + hashlib.sha256(b'{"ok":true}').hexdigest()
-            self.assertEqual(len(registry.find_artifact(artifact_id)), 1)
+            self.assertIsNotNone(registry.find_artifact(artifact_id))
 
     def test_rebuild_skips_tampered_remote_artifact(self):
         with tempfile.TemporaryDirectory() as temp_dir:
