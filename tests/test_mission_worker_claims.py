@@ -2,6 +2,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -479,6 +480,11 @@ class MissionWorkerClaimTests(unittest.TestCase):
         workspace = Path(self.temp.name)
         claim_id = "startup-shared-claim"
         self.registry.claim_worker_task(worker_id="worker-a", task_id=claim_id)
+        workers = self.registry._read(self.registry.workers_path)
+        workers["worker-a"]["task_leases"][claim_id]["expires_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        self.registry._write(self.registry.workers_path, workers)
         save_mission_runs(workspace, {"items": [{
             "mission_run_id": "startup-shared-run",
             "actions": [
@@ -510,6 +516,12 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(worker["active_task_ids"], [claim_id])
         self.assertTrue(all(c["state"] == "claimed" for c in claims))
         self.assertTrue(all(c["recovery_reason"] == "queue_task_not_terminal" for c in claims))
+        self.assertTrue(all(c["lease_recovery"] == "renewed_after_queue_reconciliation" for c in claims))
+        lease = worker["task_leases"][claim_id]
+        self.assertGreater(
+            datetime.fromisoformat(lease["expires_at"]),
+            datetime.now(timezone.utc),
+        )
 
     def test_startup_recovery_records_queue_lookup_failure(self):
         workspace = Path(self.temp.name)
