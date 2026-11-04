@@ -226,6 +226,37 @@
       </div>
     </div>
 
+    <div v-show="activeSection === 'shards'" class="space-y-5">
+      <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-start justify-between gap-4">
+          <div><h2 class="text-lg font-semibold text-slate-900">Gitee 知识仓分片</h2>
+            <p class="mt-1 text-sm text-slate-500">按知识场景分库，按容量扩展编号仓库。封存旧仓仍可查询，新档案转入后续分片。</p></div>
+          <span class="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">{{ shardInventory?.total ?? 0 }} repositories</span>
+        </div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardActiveCount }}</div><div class="text-xs text-slate-500">可写仓库</div></div>
+          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardSealedCount }}</div><div class="text-xs text-slate-500">已封存</div></div>
+          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardProvisioningCount }}</div><div class="text-xs text-slate-500">创建中</div></div>
+        </div>
+        <div class="mt-4 overflow-x-auto">
+          <table class="w-full min-w-[720px] text-left text-sm">
+            <thead class="border-b border-slate-200 text-xs text-slate-500"><tr><th class="px-3 py-2">仓库编号</th><th class="px-3 py-2">知识域</th><th class="px-3 py-2">状态</th><th class="px-3 py-2">容量使用</th><th class="px-3 py-2">文件数</th><th class="px-3 py-2">Gitee 仓库</th></tr></thead>
+            <tbody>
+              <tr v-for="shard in shardInventory?.shards || []" :key="shard.repository_id" class="border-b border-slate-100">
+                <td class="px-3 py-3 font-semibold text-slate-900">{{ shard.repository_id }}</td><td class="px-3 py-3 text-slate-600">{{ shard.domain }}</td>
+                <td class="px-3 py-3"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs">{{ shard.status }}</span></td>
+                <td class="px-3 py-3 text-slate-600">{{ shard.capacity_ratio == null ? "未测量" : (Math.round(shard.capacity_ratio * 1000) / 10) + "%" }}</td>
+                <td class="px-3 py-3 text-slate-600">{{ shard.usage?.file_count ?? "-" }}</td>
+                <td class="px-3 py-3"><a v-if="shard.url" :href="shard.url" target="_blank" rel="noopener noreferrer" class="text-sky-700 hover:underline">{{ shard.full_name }}</a><span v-else class="text-slate-400">尚未创建</span></td>
+              </tr>
+              <tr v-if="!shardInventory?.shards?.length"><td colspan="6" class="px-3 py-8 text-center text-slate-400">当前租户尚未建立编号知识仓</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="mt-3 text-xs text-slate-400">容量数据以最近一次测量为准；写入链路接入前不会自动触发扩容。</p>
+      </div>
+    </div>
+
     <div v-show="activeSection === 'skills'" class="space-y-5">
       <div class="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
       <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -394,12 +425,14 @@ import {
   exportTenantReport,
   getKnowledgeSkillDetail,
   getKnowledgeSkills,
+  getKnowledgeShards,
   syncLocalSkills,
   type KnowledgeSkill,
   type KnowledgeSkillsPayload,
+  type KnowledgeShardInventory,
 } from '../api/knowledge'
 
-type KnowledgeSection = 'overview' | 'index' | 'skills' | 'export'
+type KnowledgeSection = 'overview' | 'index' | 'shards' | 'skills' | 'export'
 
 const route = useRoute()
 const router = useRouter()
@@ -435,6 +468,7 @@ const exportingIndex = ref(false)
 const indexResult = ref('')
 const indexSuccess = ref(false)
 const repoIndexSummary = ref<GitKnowledgeRepoIndexSummary | null>(null)
+const shardInventory = ref<KnowledgeShardInventory | null>(null)
 
 const privateContainerCount = computed(() =>
   knowledgeContainers.value.filter((item) => item.scope === 'tenant_private').length
@@ -460,6 +494,7 @@ const sectionMeta = computed(() => {
   const map: Record<KnowledgeSection, { title: string; description: string }> = {
     overview: { title: '知识分层总览', description: '租户私有层、项目容器与可共享层三层结构；制度修改请去公司设置。' },
     index: { title: '索引与容器', description: 'Git 知识仓索引扫描、容器就绪状态与租户绑定信息。' },
+    shards: { title: '分布式知识仓', description: '查看按知识场景分库的 Gitee 编号仓库、容量和分片状态。' },
     skills: { title: '技能目录', description: '本地技能、自治产出与信任级别；可查看单条技能详情。' },
     export: { title: '同步与导出', description: '推送技能到 Git、导出经验摘要与成长报告。' },
   }
@@ -469,13 +504,14 @@ const sectionMeta = computed(() => {
 const subNavItems = computed<WorkspaceSubNavItem[]>(() => ([
   { key: 'overview', title: '总览', badge: String(stats.value.total), active: activeSection.value === 'overview' },
   { key: 'index', title: '索引', badge: String(repoIndexSummary.value?.total_entries ?? 0), active: activeSection.value === 'index' },
+  { key: 'shards', title: '分布式仓库', badge: String(shardInventory.value?.total ?? 0), active: activeSection.value === 'shards' },
   { key: 'skills', title: '技能', badge: String(stats.value.verified), active: activeSection.value === 'skills' },
   { key: 'export', title: '导出', active: activeSection.value === 'export' },
 ]))
 
 const normalizeSection = (value: unknown): KnowledgeSection => {
   const section = String(value || '').trim()
-  if (section === 'index' || section === 'skills' || section === 'export') return section
+  if (section === 'index' || section === 'shards' || section === 'skills' || section === 'export') return section
   return 'overview'
 }
 
@@ -502,10 +538,11 @@ const loadSkills = async () => {
   localStorage.setItem('tenant_id', tenantId.value || 'default')
   try {
     const currentTenantId = tenantId.value || 'default'
-    const [response, providerStatus, policyResponse] = await Promise.all([
+    const [response, providerStatus, policyResponse, shardResponse] = await Promise.all([
       getKnowledgeSkills(currentTenantId),
       getGitProviderStatus(currentTenantId),
       getTenantKnowledgePolicy(currentTenantId),
+      getKnowledgeShards(currentTenantId),
     ])
     skills.value = response.data?.skills || []
     knowledgeRepo.value = response.data?.repo || ''
@@ -517,6 +554,7 @@ const loadSkills = async () => {
     autonomySkillSummary.value = response.data?.autonomy_skill_summary || null
     recentAutonomySkills.value = response.data?.recent_autonomy_skills || []
     repoIndexSummary.value = providerStatus.data?.repo_index_summary || null
+    shardInventory.value = shardResponse.data || null
     knowledgePolicy.value = policyResponse.data?.policy || null
     stats.value = {
       total: skills.value.length,
