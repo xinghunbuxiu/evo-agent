@@ -618,7 +618,7 @@ def register_git_knowledge_routes(
                 provider=provider,
                 token=token,
                 namespace=str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else "",
-                repository_name_prefix=f"evo-{tenant_id.lower()}-experience",
+                repository_name_prefix=f"evo-{sanitize_repo_name(tenant_id).lower()}-experience",
                 artifact_prefix=f"tenants/{tenant_id}/experience_exports/{timestamp}",
                 files={"experience-export.json": content},
                 message=f"Export experiences for tenant {tenant_id}",
