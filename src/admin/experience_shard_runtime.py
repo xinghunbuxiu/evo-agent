@@ -157,4 +157,119 @@ async def archive_verified_experience_files(
     }
 
 
-__all__ = ["archive_verified_experience_files"]
+
+async def rebuild_experience_artifact_catalog(
+    *,
+    registry: KnowledgeShardRegistry,
+    provider: Any,
+    token: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Rebuild missing local experience entries from verified remote manifests."""
+    normalized_tenant = str(tenant_id or "").strip()
+    if not normalized_tenant or normalized_tenant in {".", ".."} or "/" in normalized_tenant or "\\" in normalized_tenant:
+        raise ValueError("invalid tenant_id")
+    list_directory = getattr(provider, "list_directory", None)
+    read_text_file = getattr(provider, "read_text_file", None)
+    if not callable(list_directory) or not callable(read_text_file):
+        raise RuntimeError("Git provider must support list_directory and read_text_file")
+
+    restored: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    inspected = 0
+    for shard in registry.list_shards("experience"):
+        if shard.get("status") not in {"active", "sealed"}:
+            continue
+        full_name = str(shard.get("full_name") or "")
+        branch = str(shard.get("branch") or "master")
+        if not full_name:
+            skipped.append({"repository_id": str(shard.get("repository_id")), "reason": "missing_full_name"})
+            continue
+
+        pending = [".evo/catalog/experience"]
+        manifest_paths: list[str] = []
+        while pending:
+            directory = pending.pop()
+            entries = await list_directory(
+                token=token, repo_full_name=full_name, path=directory, branch=branch
+            )
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                path = str(entry.get("path") or "")
+                kind = str(entry.get("type") or entry.get("type_name") or "").lower()
+                if not path.startswith(".evo/catalog/experience/"):
+                    continue
+                if kind in {"dir", "tree"}:
+                    pending.append(path)
+                elif kind in {"file", "blob"} and path.endswith(".json"):
+                    manifest_paths.append(path)
+
+        for manifest_path in sorted(manifest_paths):
+            inspected += 1
+            raw = await read_text_file(
+                token=token, repo_full_name=full_name, file_path=manifest_path, branch=branch
+            )
+            if raw is None:
+                skipped.append({"path": manifest_path, "reason": "manifest_missing"})
+                continue
+            try:
+                descriptor = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                skipped.append({"path": manifest_path, "reason": "manifest_invalid_json"})
+                continue
+
+            if (
+                descriptor.get("schema_version") != 1
+                or descriptor.get("tenant_id") != normalized_tenant
+                or descriptor.get("domain") != "experience"
+                or descriptor.get("repository_id") != shard.get("repository_id")
+                or descriptor.get("provider") != shard.get("provider")
+                or descriptor.get("full_name") != full_name
+                or descriptor.get("branch") != branch
+            ):
+                skipped.append({"path": manifest_path, "reason": "manifest_identity_mismatch"})
+                continue
+
+            artifact_path = str(descriptor.get("path") or "")
+            if not artifact_path or artifact_path.startswith("/") or ".." in Path(artifact_path).parts:
+                skipped.append({"path": manifest_path, "reason": "artifact_path_invalid"})
+                continue
+            artifact_content = await read_text_file(
+                token=token, repo_full_name=full_name, file_path=artifact_path, branch=branch
+            )
+            if artifact_content is None:
+                skipped.append({"path": manifest_path, "reason": "artifact_missing"})
+                continue
+            content_bytes = artifact_content.encode("utf-8")
+            actual_digest = hashlib.sha256(content_bytes).hexdigest()
+            if actual_digest != descriptor.get("sha256"):
+                skipped.append({"path": manifest_path, "reason": "artifact_digest_mismatch"})
+                continue
+            artifact_id = str(descriptor.get("artifact_id") or "")
+            if artifact_id != f"{normalized_tenant}:{artifact_path}:{actual_digest}":
+                skipped.append({"path": manifest_path, "reason": "artifact_id_mismatch"})
+                continue
+
+            restored.append(registry.record_artifact(
+                artifact_id=artifact_id,
+                tenant_id=normalized_tenant,
+                domain="experience",
+                repository_id=str(shard["repository_id"]),
+                path=artifact_path,
+                artifact_type=str(descriptor.get("artifact_type") or "work_node_archive"),
+                version=int(descriptor.get("version") or 1),
+                content=content_bytes,
+            ))
+
+    return {
+        "tenant_id": normalized_tenant,
+        "inspected_manifests": inspected,
+        "restored_artifacts": len(restored),
+        "artifacts": restored,
+        "skipped": skipped,
+        "integrity_verified": all(item.get("sha256") for item in restored),
+    }
+
+
+__all__ = ["archive_verified_experience_files", "rebuild_experience_artifact_catalog"]
