@@ -44,7 +44,14 @@ def start_worker_task_lease_heartbeat(
         while True:
             all_terminal = True
             for task_id in normalized_task_ids:
-                task = task_queue.get_task(task_id) if hasattr(task_queue, "get_task") else None
+                try:
+                    task = task_queue.get_task(task_id) if hasattr(task_queue, "get_task") else None
+                except Exception:
+                    # A transient queue read/JSON/disk error is an unknown state,
+                    # not proof that work has finished. Keep the lease alive and
+                    # let the next heartbeat retry the authoritative lookup.
+                    all_terminal = False
+                    break
                 if task is None:
                     all_terminal = False
                     break
