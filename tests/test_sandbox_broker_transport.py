@@ -40,7 +40,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             "profile_id": "python.pytest", "target": "tests/test_sample.py",
         })
         self.request_id = str(uuid.uuid4())
-        request = build_broker_request("test-workspace", self.spec, request_id=self.request_id)
+        request = build_broker_request("test-workspace", self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, request_id=self.request_id)
         self.key = Ed25519PrivateKey.generate()
         self.service = SandboxBrokerService(
             workspace_roots={"test-workspace": root},
@@ -135,6 +135,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         public_key = self.key.public_key().public_bytes_raw()
         result = execute_via_broker(
             path, "test-workspace", self.spec,
+            mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
             public_key=public_key, expected_key_id="test-key",
         )
         stop.set()
