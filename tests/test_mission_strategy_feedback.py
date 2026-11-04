@@ -89,8 +89,9 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         )
 
     def test_runtime_verifier_replaces_untrusted_action_evidence(self):
-        task = SimpleNamespace(id="task-verify", completed_at="2026-10-31T00:00:00")
+        task = SimpleNamespace(id="task-verify", tenant_id="tenant-a", completed_at="2026-10-31T00:00:00")
         action = {
+            "node_id": "node-1",
             "independent_verification": self._verification("forged-task"),
             "verification_state": "passed",
         }
@@ -134,7 +135,7 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
             tenant_id="tenant-b",
             status=SimpleNamespace(value="success"),
         )
-        action = {}
+        action = {"node_id": "node-1"}
         calls = []
 
         def verifier(**kwargs):
@@ -162,9 +163,10 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         task = SimpleNamespace(
             id="task-passed",
             completed_at="2026-10-31T00:00:00",
+            tenant_id="tenant-a",
             status=SimpleNamespace(value="success"),
         )
-        action = {}
+        action = {"node_id": "node-1"}
 
         def verifier(**kwargs):
             return {
@@ -189,9 +191,10 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         task = SimpleNamespace(
             id="task-failed",
             completed_at="2026-10-31T00:00:00",
+            tenant_id="tenant-a",
             status=SimpleNamespace(value="failed"),
         )
-        action = {}
+        action = {"node_id": "node-1"}
 
         def verifier(**kwargs):
             return {
