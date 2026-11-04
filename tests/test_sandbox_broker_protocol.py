@@ -59,6 +59,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             "schema_version": BROKER_RESPONSE_SCHEMA,
             "request_id": self.request_id,
             "workspace_id": "project-evo-os",
+            "mission_context": {"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
             "result": result,
         }
         canonical = json.dumps(
@@ -75,7 +76,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
 
     def test_request_contains_only_opaque_workspace_and_allowlisted_intent(self):
         request = build_broker_request(
-            "project-evo-os", self.spec, request_id=self.request_id,
+            "project-evo-os", self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, request_id=self.request_id,
         )
         self.assertEqual(request["workspace_id"], "project-evo-os")
         self.assertEqual(request["profile_id"], "python.pytest")
@@ -85,7 +86,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
         self.assertNotIn("workspace_path", request)
         self.assertEqual(
             set(request),
-            {"schema_version", "request_id", "workspace_id", "profile_id", "target", "timeout_seconds"},
+            {"schema_version", "request_id", "workspace_id", "mission_context", "profile_id", "target", "timeout_seconds"},
         )
 
     def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
@@ -106,6 +107,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             expected_key_id="broker-key-2026-01",
             expected_request_id=self.request_id,
             expected_workspace_id="project-evo-os",
+            expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
             expected_profile_id="python.pytest",
             expected_target="tests/test_sample.py",
         )
@@ -129,6 +131,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                     expected_key_id="broker-key-2026-01",
                     expected_request_id=request_id,
                     expected_workspace_id="project-evo-os",
+                    expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
                     expected_profile_id="python.pytest",
                     expected_target="tests/test_sample.py",
                 )
@@ -176,7 +179,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             result["stdout"] = dict(result["stdout"], **changes)
             response = self._signed_response(result=result)
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "output metadata"):
-                verify_broker_response(response, public_key=self.public_key, expected_key_id="broker-key-2026-01", expected_request_id=self.request_id, expected_workspace_id="project-evo-os", expected_profile_id="python.pytest", expected_target="tests/test_sample.py")
+                verify_broker_response(response, public_key=self.public_key, expected_key_id="broker-key-2026-01", expected_request_id=self.request_id, expected_workspace_id="project-evo-os", expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, expected_profile_id="python.pytest", expected_target="tests/test_sample.py")
 
     def test_rejects_signed_result_for_different_target(self):
         result = self._signed_response()["result"]
