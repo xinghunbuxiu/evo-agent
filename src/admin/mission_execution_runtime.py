@@ -74,17 +74,40 @@ def create_mission_execution_bindings(
         role_reflection_context = extract_node_role_reflection_context(mission_run, str(action.get("node_id") or ""))
         role_next_experiment = str(role_reflection_context.get("next_experiment") or "").strip()
         role_summary = str(role_reflection_context.get("summary") or "").strip()
+        result = failed_task.result if isinstance(failed_task.result, dict) else {}
+        raw_signals = result.get("signals", payload.get("signals", []))
+        if isinstance(raw_signals, list):
+            observed_signals = [
+                trim_candidate_text(str(item), 280)
+                for item in raw_signals[:12]
+                if str(item or "").strip()
+            ]
+        elif isinstance(raw_signals, dict):
+            observed_signals = {
+                str(key): trim_candidate_text(str(value), 280)
+                for key, value in list(raw_signals.items())[:12]
+            }
+        else:
+            observed_signals = []
+        task_error = trim_candidate_text(
+            str(getattr(failed_task, "error", "") or result.get("error") or ""),
+            1200,
+        )
         base_snapshot = {
             "task_id": failed_task.id,
             "task_type": task_type,
             "status": failed_task.status.value,
             "capability_id": (
-                (failed_task.result or {}).get("capability_id")
+                result.get("capability_id")
                 or payload.get("capability_id")
             ),
+            "observed_error": task_error,
+            "observed_signals": observed_signals,
+            "worker_result_summary": trim_candidate_text(str(result.get("summary") or ""), 600),
             "issue_category": "execution_error",
             "recommended_actions": [
-                "复核失败任务的输入路径、signals 与 strategy 决策",
+                "对照实际 error、signals 和输入证据定位失败原因",
+                "复核 strategy 决策是否适用于当前真实场景",
                 "从本地经验、平台共享和企业私有仓中搜索相似失败案例",
                 *( [f"优先回到岗位最近实验: {role_next_experiment}"] if role_next_experiment else [] ),
             ],
