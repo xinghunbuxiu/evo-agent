@@ -261,8 +261,8 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertEqual(result["status"], "archived")
         self.assertTrue(result["integrity_verified"])
         self.assertEqual(set(result["verified_files"]), set(result["files"]))
-        self.assertEqual(provider.upsert_text_file.await_count, 3)
-        self.assertEqual(provider.read_text_file.await_count, 3)
+        self.assertEqual(provider.upsert_text_file.await_count, 6)
+        self.assertEqual(provider.read_text_file.await_count, 6)
 
     def test_integrity_manifest_uses_sha256_utf8_bytes(self):
         payload = "中文内容"
