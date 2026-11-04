@@ -289,7 +289,7 @@ def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, o
             # Queue state is checked first; only then may trusted reconciliation renew
             # the existing durable lease (including one that expired during downtime).
             recover_lease = getattr(organization_registry, "recover_worker_task_lease", None)
-            if reason in {"queue_task_not_terminal", "queue_task_missing", "queue_lookup_failed"} and callable(recover_lease):
+            if reason in {"queue_task_not_terminal"} and callable(recover_lease):
                 try:
                     recover_lease(worker_id=group["worker_id"], task_id=claim_id)
                 except Exception as exc:
@@ -299,7 +299,7 @@ def _reconcile_worker_claims_on_startup_locked(*, workspace: Path, task_queue, o
                 claim["recovery_status"] = "needs_review"
                 claim["recovery_reason"] = reason
                 claim["recovery_checked_at"] = datetime.now().astimezone().isoformat()
-                if reason in {"queue_task_not_terminal", "queue_task_missing", "queue_lookup_failed"}:
+                if reason in {"queue_task_not_terminal"}:
                     claim["lease_recovery"] = (
                         "renewed_after_queue_reconciliation"
                         if lease_recovery_error is None and callable(recover_lease)
