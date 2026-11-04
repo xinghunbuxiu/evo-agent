@@ -160,6 +160,7 @@ The first capacity-aware shard control-plane slice is now implemented:
 - Gitee repository creation handles a concurrent-create conflict by reading the deterministic repository name back.
 - Usage metrics can be recorded by bytes and file count; reaching the configured write threshold seals the shard. Existing sealed shards remain addressable in the catalog.
 - Artifact catalog entries include tenant, domain, repository, branch, path, version, and SHA-256. Duplicate artifact IDs are idempotent only when their location and digest match.
+- `GET /api/tenants/{tenant_id}/knowledge-shards` exposes the tenant shard inventory; the Knowledge page now displays numbered repositories, status, latest measured capacity ratio, and file count.
 
 This is the registry/provisioning foundation, not yet the complete production write path. Existing skill sync and work-node archive routes still need to call the allocator, report fresh provider capacity metrics, and record catalog entries only after remote readback verification. Cross-shard search and catalog reconstruction also remain follow-up work. Do not describe automatic capacity rotation as globally active until those integrations and end-to-end tests are complete.
 
