@@ -157,6 +157,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
                 expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
@@ -170,6 +171,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
                 expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
@@ -192,6 +194,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
                 expected_key_id="broker-key-2026-01",
                 expected_request_id=self.request_id,
                 expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
                 expected_profile_id="python.pytest",
                 expected_target="tests/test_sample.py",
             )
