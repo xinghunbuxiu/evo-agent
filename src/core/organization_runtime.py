@@ -12,7 +12,7 @@ import re
 import tempfile
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +161,7 @@ class OrganizationRegistry:
                 "created_from_worker_id": created_from_worker_id,
                 "active_task_ids": [],
                 "released_task_ids": [],
+                "task_leases": {},
                 "knowledge_asset_ids": [],
                 "created_at": _now(),
                 "updated_at": _now(),
@@ -373,14 +374,14 @@ class OrganizationRegistry:
         self._write(self.assets_path, assets)
         return asset
 
-    def claim_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
-        """Atomically reserve an available worker for one task.
-
-        The lock serializes claims across processes sharing this workspace. A claim
-        fails closed if the worker is unavailable or already owns any active task.
-        """
+    def claim_worker_task(
+        self, *, worker_id: str, task_id: str, lease_seconds: int = 300
+    ) -> dict[str, Any]:
+        """Atomically reserve a worker and issue a renewable execution lease."""
         worker_id = _validate_id(worker_id, "worker_id")
         task_id = _validate_id(task_id, "task_id")
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or not 15 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be an integer between 15 and 3600")
         with _exclusive_worker_lock(self.root / ".workers.lock"):
             workers = self._read(self.workers_path)
             worker = workers.get(worker_id)
@@ -389,18 +390,94 @@ class OrganizationRegistry:
             if worker.get("status") == "retired":
                 raise ValueError("Retired worker cannot claim tasks")
             active = list(worker.get("active_task_ids", []))
+            leases = worker.setdefault("task_leases", {})
             if task_id in active:
+                # Idempotent retries return the same lease; they never mint a new owner token.
+                if task_id not in leases:
+                    now = datetime.now(timezone.utc)
+                    leases[task_id] = {
+                        "lease_token": uuid.uuid4().hex,
+                        "heartbeat_at": now.isoformat(),
+                        "expires_at": (now + timedelta(seconds=lease_seconds)).isoformat(),
+                    }
+                    worker["updated_at"] = now.isoformat()
+                    self._write(self.workers_path, workers)
                 return worker
             if task_id in worker.get("released_task_ids", []):
                 raise ValueError("A released task claim cannot be reopened")
             if worker.get("status") != "available" or active:
                 raise ValueError(f"Worker is not available for a new task: {worker_id}")
+            now = datetime.now(timezone.utc)
             worker["status"] = "busy"
             worker["active_task_ids"] = [task_id]
-            worker["updated_at"] = _now()
+            leases[task_id] = {
+                "lease_token": uuid.uuid4().hex,
+                "heartbeat_at": now.isoformat(),
+                "expires_at": (now + timedelta(seconds=lease_seconds)).isoformat(),
+            }
+            worker["updated_at"] = now.isoformat()
             workers[worker_id] = worker
             self._write(self.workers_path, workers)
             return worker
+
+    def renew_worker_task_lease(
+        self, *, worker_id: str, task_id: str, lease_token: str, lease_seconds: int = 300
+    ) -> dict[str, Any]:
+        """Renew only the current lease owner; stale workers cannot revive expired leases."""
+        worker_id = _validate_id(worker_id, "worker_id")
+        task_id = _validate_id(task_id, "task_id")
+        token = str(lease_token or "").strip()
+        if not token:
+            raise ValueError("lease_token is required")
+        if isinstance(lease_seconds, bool) or not isinstance(lease_seconds, int) or not 15 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be an integer between 15 and 3600")
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            leases = worker.get("task_leases", {})
+            lease = leases.get(task_id) if isinstance(leases, dict) else None
+            if task_id not in worker.get("active_task_ids", []) or not isinstance(lease, dict):
+                raise ValueError("No active lease exists for this worker task")
+            if lease.get("lease_token") != token:
+                raise ValueError("Lease token does not own this worker task")
+            now = datetime.now(timezone.utc)
+            expires_at = datetime.fromisoformat(str(lease.get("expires_at") or ""))
+            if expires_at <= now:
+                raise ValueError("Expired lease cannot be renewed; reconcile task state first")
+            lease["heartbeat_at"] = now.isoformat()
+            lease["expires_at"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+            worker["updated_at"] = now.isoformat()
+            self._write(self.workers_path, workers)
+            return worker
+
+    def list_expired_worker_task_leases(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
+        """Report expired leases without releasing claims or making dispatch decisions."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        expired = []
+        for worker in self.list_workers(include_retired=True):
+            leases = worker.get("task_leases", {})
+            if not isinstance(leases, dict):
+                continue
+            for task_id, lease in leases.items():
+                if not isinstance(lease, dict):
+                    continue
+                try:
+                    expires_at = datetime.fromisoformat(str(lease.get("expires_at") or ""))
+                except ValueError:
+                    continue
+                if expires_at.tzinfo is not None and expires_at <= current:
+                    expired.append({
+                        "worker_id": worker.get("worker_id"),
+                        "task_id": task_id,
+                        "heartbeat_at": lease.get("heartbeat_at"),
+                        "expires_at": lease.get("expires_at"),
+                        "status": worker.get("status"),
+                    })
+        return expired
 
     def release_worker_task(self, *, worker_id: str, task_id: str) -> dict[str, Any]:
         """Release a claimed task; keep the worker busy until all its tasks are closed."""
@@ -417,6 +494,10 @@ class OrganizationRegistry:
                     return worker
                 raise ValueError(f"Task is not claimed by worker {worker_id}: {task_id}")
             worker["active_task_ids"] = [item for item in active if item != task_id]
+            leases = worker.get("task_leases", {})
+            if isinstance(leases, dict):
+                leases.pop(task_id, None)
+                worker["task_leases"] = leases
             released = list(worker.get("released_task_ids", []))
             released.append(task_id)
             worker["released_task_ids"] = released[-100:]
