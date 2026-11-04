@@ -45,6 +45,9 @@ def _record_feedback_in_process(workspace, task_id, barrier, results):
     evidence = sign_verification_evidence(Path(workspace), "tenant-a", {
         "source": "mission_independent_verifier",
         "task_id": task_id,
+        "tenant_id": "tenant-a",
+        "mission_run_id": "mission-1",
+        "mission_node_id": "node-1",
         "execution_event_id": f"event-{task_id}",
         "verifier_id": "test-verifier",
         "verifier_version": "1",
@@ -72,6 +75,9 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
         evidence = {
             "source": "mission_independent_verifier",
             "task_id": task_id,
+            "tenant_id": "tenant-a",
+            "mission_run_id": "mission-1",
+            "mission_node_id": "node-1",
             "execution_event_id": f"event-{task_id}",
             "verifier_id": "test-verifier",
             "verifier_version": "1",
@@ -327,6 +333,8 @@ class MissionStrategyFeedbackTests(unittest.TestCase):
                 "task_type": "analyze",
                 "title": "Analyze source",
                 "mission_run_id": "mission-1",
+                "tenant_id": "tenant-a",
+                "node_id": "node-1",
                 "recommended_strategies": [{"id": "strategy-a"}],
             }
             action["independent_verification"] = self._verification("task-2", workspace=workspace)
