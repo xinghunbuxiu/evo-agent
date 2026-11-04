@@ -13,6 +13,7 @@ from typing import Callable
 from fastapi import Request
 
 from core import ExperienceStore, GitProviderError
+from core.knowledge_shards import KnowledgeShardRegistry
 
 
 def register_git_knowledge_routes(
@@ -281,6 +282,30 @@ def register_git_knowledge_routes(
             "tenant_id": tenant_id,
             "file_path": file_path,
         }, f"技能 {skill_name} 已上传到知识库")
+
+    @app.get("/api/tenants/{tenant_id}/knowledge-shards")
+    async def list_tenant_knowledge_shards(tenant_id: str):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        registry = KnowledgeShardRegistry(tenant_root / "knowledge_shards")
+        shards = registry.list_shards()
+        domain_summary: dict[str, dict[str, int]] = {}
+        for shard in shards:
+            domain = str(shard.get("domain") or "unknown")
+            summary = domain_summary.setdefault(domain, {"total": 0, "active": 0, "sealed": 0, "provisioning": 0})
+            summary["total"] += 1
+            state = str(shard.get("status") or "")
+            if state in summary:
+                summary[state] += 1
+        return success_response({
+            "tenant_id": tenant_id,
+            "shards": shards,
+            "total": len(shards),
+            "domains": domain_summary,
+            "registry_path": str(registry.registry_path),
+        })
 
     @app.get("/api/git/provider/status")
     async def git_provider_status(request: Request):
