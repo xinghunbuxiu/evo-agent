@@ -24,12 +24,13 @@ from .sandbox_broker_protocol import (
     BROKER_RESPONSE_SCHEMA,
     BROKER_SIGNATURE_ALGORITHM,
     _canonical_json,
+    _normalize_mission_context,
 )
 from .sandbox_runner import RunnerProcessOutput
 
 
 _REQUEST_FIELDS = {
-    "schema_version", "request_id", "workspace_id",
+    "schema_version", "request_id", "workspace_id", "mission_context",
     "profile_id", "target", "timeout_seconds",
 }
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -110,6 +111,10 @@ def validate_broker_request(request: object) -> dict:
     workspace_id = request.get("workspace_id")
     if not isinstance(workspace_id, str) or not _WORKSPACE_ID_RE.fullmatch(workspace_id):
         raise BrokerRequestRejected("workspace_id is invalid")
+    try:
+        mission_context = _normalize_mission_context(request.get("mission_context"))
+    except ValueError as exc:
+        raise BrokerRequestRejected("mission_context is invalid") from exc
     profile_id = request.get("profile_id")
     if profile_id not in {"python.unittest", "python.pytest"}:
         raise BrokerRequestRejected("unsupported execution profile")
@@ -127,7 +132,7 @@ def validate_broker_request(request: object) -> dict:
     timeout = request.get("timeout_seconds")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
         raise BrokerRequestRejected("timeout_seconds must be between 1 and 300")
-    return dict(request)
+    return {**request, "mission_context": mission_context}
 
 
 def _validate_workspace_root(raw_root: Path) -> Path:
@@ -222,6 +227,7 @@ class SandboxBrokerService:
             "schema_version": BROKER_RESPONSE_SCHEMA,
             "request_id": request_id,
             "workspace_id": workspace_id,
+            "mission_context": validated["mission_context"],
             "result": result,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
