@@ -210,6 +210,11 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         remote_files = dict(files)
         remote_files["archive.integrity.json"] = (base / "archive.integrity.json").read_text(encoding="utf-8")
         provider = SimpleNamespace()
+        provider.ensure_repo = AsyncMock(return_value=SimpleNamespace(
+            full_name="owner/evo-tenant-a-experience-d-01",
+            html_url="https://gitee.com/owner/evo-tenant-a-experience-d-01",
+            branch="master",
+        ))
         if upload_error:
             provider.upsert_text_file = AsyncMock(side_effect=RuntimeError("simulated upload failure"))
         else:
