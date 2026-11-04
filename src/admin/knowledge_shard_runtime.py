@@ -29,10 +29,9 @@ async def ensure_writable_knowledge_shard(
     if active:
         return active
 
-    provisioning = [item for item in registry.list_shards(domain) if item.get("status") == "provisioning"]
-    reservation = provisioning[-1] if provisioning else None
-    if reservation is None:
-        reservation = registry.reserve_next_shard(domain, provider=provider.provider_name)
+    reservation = registry.reserve_or_get_provisioning_shard(
+        domain, provider=provider.provider_name
+    )
 
     prefix = re.sub(r"[^a-zA-Z0-9_-]+", "-", repository_name_prefix.strip()).strip("-")
     if not prefix:
