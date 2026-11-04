@@ -20,6 +20,7 @@ import httpx
 from dotenv import load_dotenv
 
 from admin.spa_static import register_spa_static
+from admin.experience_outbox_runtime import sync_experience_outbox
 
 # 核心组件
 import sys
@@ -1277,6 +1278,47 @@ def create_app() -> FastAPI:
         daemon=True,
         name="evo-js-research-loop",
     )
+    experience_outbox_task: asyncio.Task | None = None
+
+    async def _background_experience_outbox_sync_loop() -> None:
+        """Drain durable experience outboxes using only the server-scoped token."""
+        while True:
+            token = str(os.getenv("GITEE_TOKEN") or "").strip()
+            if token and token != "your_real_token_here":
+                tenants_root = workspace / ".tenants"
+                if tenants_root.is_dir():
+                    for tenant_dir in sorted(path for path in tenants_root.iterdir() if path.is_dir()):
+                        pending_dir = tenant_dir / "experience_outbox" / "pending"
+                        if not pending_dir.is_dir() or not any(pending_dir.glob("*.json")):
+                            continue
+                        tenant_id = tenant_dir.name
+                        try:
+                            git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+                            provider = _get_git_provider_instance(config, git_knowledge)
+                            namespace = (
+                                str(git_knowledge.get("namespace") or "")
+                                if isinstance(git_knowledge, dict) else ""
+                            )
+                            result = await sync_experience_outbox(
+                                workspace=workspace,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                token=token,
+                                namespace=namespace,
+                                repository_name_prefix=f"evo-{_sanitize_repo_name(tenant_id).lower()}-experience",
+                            )
+                            print(
+                                "[experience-outbox] sync complete "
+                                f"tenant={tenant_id} synced={result.get('synced', 0)} "
+                                f"pending={result.get('pending', 0)} "
+                                f"integrity_verified={result.get('integrity_verified', False)}"
+                            )
+                        except Exception as exc:
+                            print(
+                                "[experience-outbox] sync failed "
+                                f"tenant={tenant_id} error={type(exc).__name__}: {exc}"
+                            )
+            await asyncio.sleep(60)
 
     def _sanitize_git_slug(value: str, fallback: str) -> str:
         safe = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value or "").strip())
@@ -1663,12 +1705,24 @@ def create_app() -> FastAPI:
             print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
         if not autonomy_thread.is_alive():
             autonomy_thread.start()
+        nonlocal experience_outbox_task
+        if experience_outbox_task is None or experience_outbox_task.done():
+            experience_outbox_task = asyncio.create_task(
+                _background_experience_outbox_sync_loop(),
+                name="evo-experience-outbox-sync",
+            )
 
     @app.on_event("shutdown")
     async def stop_background_research():
         autonomy_stop_event.set()
         if autonomy_thread.is_alive():
             autonomy_thread.join(timeout=3)
+        if experience_outbox_task is not None:
+            experience_outbox_task.cancel()
+            try:
+                await experience_outbox_task
+            except asyncio.CancelledError:
+                pass
         task_queue.stop()
     
     _default_session_secret = "evo-session-secret-change-in-production"
