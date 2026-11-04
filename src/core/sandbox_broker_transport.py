@@ -175,12 +175,13 @@ def execute_via_broker(
     workspace_id: str,
     spec: ExecutionProfileSpec,
     *,
+    mission_context: dict[str, str],
     public_key: bytes,
     expected_key_id: str,
     timeout_seconds: float | None = None,
 ) -> dict:
     """Execute one fixed profile through the broker and verify its attestation."""
-    request = build_broker_request(workspace_id, spec)
+    request = build_broker_request(workspace_id, spec, mission_context=mission_context)
     timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
     response = request_broker(socket_path, request, timeout_seconds=timeout)
     return verify_broker_response(
@@ -189,6 +190,7 @@ def execute_via_broker(
         expected_key_id=expected_key_id,
         expected_request_id=request["request_id"],
         expected_workspace_id=workspace_id,
+        expected_mission_context=mission_context,
         expected_profile_id=spec.profile_id,
         expected_target=spec.target,
     )
