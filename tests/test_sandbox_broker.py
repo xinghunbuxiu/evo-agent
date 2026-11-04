@@ -141,6 +141,16 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(BrokerRequestRejected):
                 validate_broker_request(bad)
 
+    def test_rejects_missing_or_cross_task_identity_before_execution(self):
+        missing = dict(self.request)
+        missing.pop("mission_context")
+        with self.assertRaisesRegex(BrokerRequestRejected, "unsupported or missing"):
+            self.service.handle_request(missing)
+        malformed = dict(self.request, mission_context={"tenant_id": "tenant-test"})
+        with self.assertRaisesRegex(BrokerRequestRejected, "mission_context"):
+            self.service.handle_request(malformed)
+        self.assertEqual(self.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()
