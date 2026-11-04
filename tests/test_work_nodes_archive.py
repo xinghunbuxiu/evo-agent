@@ -218,7 +218,10 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         if upload_error:
             provider.upsert_text_file = AsyncMock(side_effect=RuntimeError("simulated upload failure"))
         else:
-            provider.upsert_text_file = AsyncMock()
+            async def upload(*, file_path, content, **kwargs):
+                rel_path = file_path[len(self.prefix) + 1:]
+                remote_files[rel_path] = content
+            provider.upsert_text_file = AsyncMock(side_effect=upload)
         async def read_back(*, file_path, **kwargs):
             rel_path = file_path[len(self.prefix) + 1:]
             if corrupt_readback and rel_path == "manifest.json":
