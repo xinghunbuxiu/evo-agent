@@ -71,6 +71,8 @@ class ExperienceStore:
     def __init__(self, workspace: Path, tenant_id: str = "default"):
         self.workspace = Path(workspace)
         self.tenant_id = str(tenant_id or "default")
+        if self.tenant_id in {".", ".."} or "/" in self.tenant_id or chr(92) in self.tenant_id:
+            raise ValueError("invalid tenant_id")
         self.tenant_root = self.workspace / ".tenants" / self.tenant_id
         self.exp_dir = self.tenant_root / "experiences"
         self.outbox_pending_dir = self.tenant_root / "experience_outbox" / "pending"
@@ -111,9 +113,9 @@ class ExperienceStore:
         domain = str(exp.domain or "").strip()
         experience_id = str(exp.id or "").strip()
         if (
-            not domain or domain in {".", ".."} or "/" in domain or "\\\\" in domain
+            not domain or domain in {".", ".."} or "/" in domain or chr(92) in domain
             or not experience_id or experience_id in {".", ".."}
-            or "/" in experience_id or "\\\\" in experience_id
+            or "/" in experience_id or chr(92) in experience_id
         ):
             raise ValueError("experience domain and id must be safe path segments")
 
