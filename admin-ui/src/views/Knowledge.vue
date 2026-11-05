@@ -409,10 +409,61 @@
 <script setup lang="ts">
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
-import WorkspaceSubNav from '../components/shell/WorkspaceSubNav.vue'
+import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
 import { useKnowledgePage } from '../composables/useKnowledgePage'
 
 const {
-
+activeSection,
+tenantId,
+skills,
+stats,
+loading,
+syncing,
+exportingExperiences,
+exportingReport,
+syncResult,
+syncSuccess,
+experienceResult,
+experienceSuccess,
+reportResult,
+reportSuccess,
+pageMessage,
+pageSuccess,
+selectedSkill,
+knowledgeRepo,
+repoFullName,
+bootstrappedAt,
+gitReady,
+knowledgeContainers,
+knowledgePolicy,
+knowledgeLayerAdvice,
+autonomySkillSummary,
+recentAutonomySkills,
+scanning,
+exportingIndex,
+indexResult,
+indexSuccess,
+repoIndexSummary,
+shardInventory,
+shardActiveCount,
+shardSealedCount,
+shardProvisioningCount,
+privateContainerCount,
+projectContainerCount,
+sharedContainerCount,
+shareModeLabel,
+platformPromotionLabel,
+sectionMeta,
+subNavItems,
+normalizeSection,
+onSectionSelect,
+refreshSection,
+loadSkills,
+scanKnowledgeIndex,
+exportIndexTemplate,
+viewSkill,
+syncSkills,
+exportExperiencesToGit,
+exportReportToGit
 } = useKnowledgePage()
 </script>
