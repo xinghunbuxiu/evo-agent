@@ -253,8 +253,8 @@ watch(() => route.query.section, (value) => {
 const loadSkills = async () => {
   loading.value = true
   pageMessage.value = ''
-  localStorage.setItem('tenant_id', tenantId.value || 'default')
   try {
+    localStorage.setItem('tenant_id', tenantId.value || 'default')
     const currentTenantId = tenantId.value || 'default'
     const [response, providerStatus, policyResponse, shardResponse] = await Promise.all([
       getKnowledgeSkills(currentTenantId),
