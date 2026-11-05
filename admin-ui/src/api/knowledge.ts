@@ -19,6 +19,7 @@ export interface KnowledgeSkill {
     mission_run_id?: string
     mission_node_id?: string
     mission_kind?: string
+    primary_worker_id?: string
     worker_id?: string
     evidence_ids?: string[]
     validation_evidence?: Record<string, unknown>
