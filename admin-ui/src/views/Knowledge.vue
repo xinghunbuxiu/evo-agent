@@ -146,8 +146,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, inject, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { companyConsoleKey } from '../composables/companyConsole'
 import AutonomySkillsPanel from '../components/AutonomySkillsPanel.vue'
 import KnowledgeOverviewPanel from '../components/KnowledgeOverviewPanel.vue'
 import KnowledgeSkillsCatalog from '../components/KnowledgeSkillsCatalog.vue'
@@ -176,7 +177,8 @@ const route = useRoute()
 const router = useRouter()
 const activeSection = ref<KnowledgeSection>('overview')
 
-const tenantId = ref(localStorage.getItem('tenant_id') || 'default')
+const companyConsole = inject(companyConsoleKey, null)
+const tenantId = companyConsole?.tenantId ?? ref(localStorage.getItem('tenant_id') || 'default')
 const skills = ref<KnowledgeSkill[]>([])
 const stats = ref({ total: 0, draft: 0, verified: 0 })
 const loading = ref(false)
@@ -255,6 +257,31 @@ const refreshSection = async () => {
 watch(() => route.query.section, (value) => {
   activeSection.value = normalizeSection(value)
 }, { immediate: true })
+
+watch(tenantId, (nextTenantId, previousTenantId) => {
+  const next = nextTenantId || 'default'
+  const previous = previousTenantId || 'default'
+  if (next === previous) return
+
+  // Never leave the previous tenant's knowledge visible while the new tenant loads.
+  loadRequestVersion += 1
+  skills.value = []
+  stats.value = { total: 0, draft: 0, verified: 0 }
+  knowledgeRepo.value = ''
+  repoFullName.value = ''
+  bootstrappedAt.value = ''
+  gitReady.value = false
+  knowledgeContainers.value = []
+  knowledgePolicy.value = null
+  knowledgeLayerAdvice.value = null
+  autonomySkillSummary.value = null
+  recentAutonomySkills.value = []
+  repoIndexSummary.value = null
+  shardInventory.value = null
+  pageMessage.value = ''
+  pageSuccess.value = false
+  void loadSkills()
+}, { flush: 'sync' })
 
 let loadRequestVersion = 0
 
