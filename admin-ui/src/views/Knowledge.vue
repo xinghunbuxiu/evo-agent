@@ -196,69 +196,19 @@
     <div v-show="activeSection === 'skills'" class="space-y-5">
       <AutonomySkillsPanel :summary="autonomySkillSummary" :recent-skills="recentAutonomySkills" />
 
-      <div class="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <table class="w-full">
-        <thead class="border-b bg-slate-50">
-          <tr class="text-left text-sm text-slate-500">
-            <th class="px-4 py-3 font-medium">技能名称</th>
-            <th class="px-4 py-3 font-medium">领域</th>
-            <th class="px-4 py-3 font-medium">信任级别</th>
-            <th class="px-4 py-3 font-medium">来源</th>
-            <th class="px-4 py-3 font-medium">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="skill in skills" :key="`${skill.domain}-${skill.name}`" class="border-b last:border-0 hover:bg-slate-50">
-            <td class="px-4 py-3 font-mono text-sm">{{ skill.name }}</td>
-            <td class="px-4 py-3">{{ skill.domain || '-' }}</td>
-            <td class="px-4 py-3">
-              <StatusBadge :status="skill.trust_level || 'draft'" />
-            </td>
-            <td class="px-4 py-3">{{ skill.source || 'local' }}</td>
-            <td class="px-4 py-3">
-              <button
-                @click="viewSkill(skill)"
-                class="text-sm text-teal-600 hover:text-teal-800"
-              >
-                查看
-              </button>
-            </td>
-          </tr>
-          <tr v-if="skills.length === 0">
-            <td colspan="5" class="px-4 py-8 text-center text-gray-500">
-              <div v-if="loading" class="loading">加载中...</div>
-              <div v-else>当前租户暂无本地技能</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      </div>
+      <KnowledgeSkillsCatalog :tenant-id="tenantId || 'default'" :skills="skills" :loading="loading" />
     </div>
 
     <KnowledgeExportPanel :tenant-id="tenantId || 'default'" :refresh="loadSkills" />
 
-    <div v-if="selectedSkill" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div class="bg-white rounded-lg p-6 w-full max-w-lg max-h-[80vh] overflow-auto">
-        <h2 class="text-xl font-bold mb-4">技能详情</h2>
-        <pre class="bg-gray-50 p-4 rounded-lg text-sm overflow-auto">{{ JSON.stringify(selectedSkill, null, 2) }}</pre>
-        <div class="flex justify-end mt-4">
-          <button
-            @click="selectedSkill = null"
-            class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-          >
-            关闭
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import StatusBadge from '../components/StatusBadge.vue'
 import AutonomySkillsPanel from '../components/AutonomySkillsPanel.vue'
+import KnowledgeSkillsCatalog from '../components/KnowledgeSkillsCatalog.vue'
 import KnowledgeExportPanel from '../components/KnowledgeExportPanel.vue'
 import KnowledgeIndexPanel from '../components/KnowledgeIndexPanel.vue'
 import KnowledgeShardsPanel from '../components/KnowledgeShardsPanel.vue'
@@ -271,7 +221,6 @@ import {
 } from '../api/git'
 import { getTenantKnowledgePolicy, type TenantKnowledgePolicy } from '../api/plugins'
 import {
-  getKnowledgeSkillDetail,
   getKnowledgeSkills,
   getKnowledgeShards,
   type KnowledgeSkill,
@@ -291,7 +240,6 @@ const stats = ref({ total: 0, draft: 0, verified: 0 })
 const loading = ref(false)
 const pageMessage = ref('')
 const pageSuccess = ref(false)
-const selectedSkill = ref<KnowledgeSkill | null>(null)
 const knowledgeRepo = ref('')
 const repoFullName = ref('')
 const bootstrappedAt = ref('')
@@ -405,18 +353,6 @@ const loadSkills = async () => {
   loading.value = false
 }
 
-const viewSkill = async (skill: KnowledgeSkill) => {
-  try {
-    const res = await getKnowledgeSkillDetail(tenantId.value || 'default', skill.domain || 'unknown', skill.name)
-    if (res.success && res.data) {
-      selectedSkill.value = res.data
-    } else {
-      selectedSkill.value = skill
-    }
-  } catch {
-    selectedSkill.value = skill
-  }
-}
 
 onMounted(loadSkills)
 </script>
