@@ -66,7 +66,7 @@
             <dl class="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
               <div><dt class="text-slate-400">Mission Run</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_run_id || selectedSkill.parameters?.mission_run_id || '-' }}</dd></div>
               <div><dt class="text-slate-400">Mission Node</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_node_id || selectedSkill.parameters?.mission_node_id || '-' }}</dd></div>
-              <div><dt class="text-slate-400">Worker</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.worker_id || selectedSkill.parameters?.worker_id || selectedSkill.parameters?.source_worker_id || '未记录' }}</dd></div>
+              <div><dt class="text-slate-400">主路由 Worker</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.primary_worker_id || selectedSkill.parameters?.primary_worker_id || selectedSkill.provenance?.worker_id || selectedSkill.parameters?.worker_id || selectedSkill.parameters?.source_worker_id || '未记录' }}</dd></div>
               <div><dt class="text-slate-400">经验证据</dt><dd class="mt-1">{{ selectedSkill.provenance?.evidence_ids?.length || (Array.isArray(selectedSkill.parameters?.evidence_ids) ? selectedSkill.parameters.evidence_ids.length : 0) }} 条</dd></div>
             </dl>
             <div v-if="selectedSkill.parameters?.validation_evidence" class="mt-3">
