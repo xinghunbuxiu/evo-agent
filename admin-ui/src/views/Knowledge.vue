@@ -35,6 +35,15 @@
       @select="onSectionSelect"
     />
 
+    <p
+      v-if="pageMessage"
+      class="rounded-xl border px-4 py-3 text-sm"
+      :class="pageSuccess ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'"
+      role="status"
+    >
+      {{ pageMessage }}
+    </p>
+
     <div v-show="activeSection === 'overview'">
       <KnowledgeOverviewPanel
         :tenant-id="tenantId || 'default'"
@@ -117,9 +126,6 @@
           </div>
         </div>
       </div>
-      <p v-if="pageMessage" class="mt-4 text-sm" :class="pageSuccess ? 'text-green-600' : 'text-rose-600'">
-        {{ pageMessage }}
-      </p>
       </div>
     </div>
 
@@ -300,7 +306,13 @@ const loadSkills = async () => {
 
     if (providerResult.status === 'fulfilled' && providerResult.value.success) {
       const data = providerResult.value.data
-      knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
+      if (
+        skillsResult.status !== 'fulfilled' ||
+        !skillsResult.value.success ||
+        !skillsResult.value.data?.knowledge_containers
+      ) {
+        knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
+      }
       repoIndexSummary.value = data?.repo_index_summary || null
       if (!skillsResult || skillsResult.status !== 'fulfilled' || !skillsResult.value.success) {
         gitReady.value = Boolean(data?.git_knowledge?.repos)
