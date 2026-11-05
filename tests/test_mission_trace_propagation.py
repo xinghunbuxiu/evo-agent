@@ -582,6 +582,7 @@ class MissionTracePropagationTests(unittest.TestCase):
                 mission_run={
                     "mission_run_id": "run-42",
                     "mission_kind": "javascript_reverse",
+                    "runtime_route": {"primary_worker_id": "worker-vue"},
                     "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": trace}]},
                 },
                 analyze_snapshot={"task_id": "analyze-17", "summary": "Vue application"},
@@ -609,12 +610,15 @@ class MissionTracePropagationTests(unittest.TestCase):
         }
         self.assertEqual(skill["parameters"]["mission_run_id"], "run-42")
         self.assertEqual(skill["parameters"]["mission_node_id"], "promote_knowledge")
+        self.assertEqual(skill["parameters"]["primary_worker_id"], "worker-vue")
+        self.assertEqual(skill["parameters"]["evidence_ids"], ["analyze-17", "reconstruct-29"])
         self.assertEqual(skill["parameters"]["decision_trace"], trace)
         self.assertEqual(skill["parameters"]["validation_evidence"], expected_evidence)
         self.assertEqual(len(growth_events), 1)
         metadata = growth_events[0]["metadata"]
         self.assertEqual(metadata["mission_run_id"], skill["parameters"]["mission_run_id"])
         self.assertEqual(metadata["mission_node_id"], skill["parameters"]["mission_node_id"])
+        self.assertEqual(metadata["primary_worker_id"], "worker-vue")
         self.assertEqual(metadata["decision_trace"], skill["parameters"]["decision_trace"])
         self.assertEqual(metadata["validation_evidence"], expected_evidence)
 
