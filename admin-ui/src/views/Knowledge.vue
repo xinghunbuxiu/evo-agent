@@ -250,43 +250,95 @@ watch(() => route.query.section, (value) => {
   activeSection.value = normalizeSection(value)
 }, { immediate: true })
 
+let loadRequestVersion = 0
+
 const loadSkills = async () => {
+  const requestVersion = ++loadRequestVersion
+  const currentTenantId = tenantId.value || 'default'
   loading.value = true
   pageMessage.value = ''
+
   try {
-    localStorage.setItem('tenant_id', tenantId.value || 'default')
-    const currentTenantId = tenantId.value || 'default'
-    const [response, providerStatus, policyResponse, shardResponse] = await Promise.all([
+    localStorage.setItem('tenant_id', currentTenantId)
+  } catch (e) {
+    console.warn('Failed to persist tenant id:', e)
+  }
+
+  try {
+    const results = await Promise.allSettled([
       getKnowledgeSkills(currentTenantId),
       getGitProviderStatus(currentTenantId),
       getTenantKnowledgePolicy(currentTenantId),
       getKnowledgeShards(currentTenantId),
     ])
-    skills.value = response.data?.skills || []
-    knowledgeRepo.value = response.data?.repo || ''
-    repoFullName.value = response.data?.repo_full_name || ''
-    bootstrappedAt.value = response.data?.git_knowledge?.bootstrapped_at || ''
-    knowledgeContainers.value = response.data?.knowledge_containers || providerStatus.data?.knowledge_containers || []
-    gitReady.value = Boolean(response.data?.git_knowledge?.repos)
-    knowledgeLayerAdvice.value = response.data?.knowledge_layer_advice || null
-    autonomySkillSummary.value = response.data?.autonomy_skill_summary || null
-    recentAutonomySkills.value = response.data?.recent_autonomy_skills || []
-    repoIndexSummary.value = providerStatus.data?.repo_index_summary || null
-    shardInventory.value = shardResponse.data || null
-    knowledgePolicy.value = policyResponse.data?.policy || null
-    stats.value = {
-      total: skills.value.length,
-      draft: skills.value.filter(s => s.trust_level === 'draft').length,
-      verified: skills.value.filter(s => s.trust_level === 'verified').length,
+
+    // A newer refresh (or tenant switch) owns the visible state.
+    if (requestVersion !== loadRequestVersion || currentTenantId !== (tenantId.value || 'default')) return
+
+    const failures: string[] = []
+    const [skillsResult, providerResult, policyResult, shardResult] = results
+
+    if (skillsResult.status === 'fulfilled' && skillsResult.value.success) {
+      const response = skillsResult.value
+      const data = response.data
+      skills.value = data?.skills || []
+      knowledgeRepo.value = data?.repo || ''
+      repoFullName.value = data?.repo_full_name || ''
+      bootstrappedAt.value = data?.git_knowledge?.bootstrapped_at || ''
+      knowledgeLayerAdvice.value = data?.knowledge_layer_advice || null
+      autonomySkillSummary.value = data?.autonomy_skill_summary || null
+      recentAutonomySkills.value = data?.recent_autonomy_skills || []
+      gitReady.value = Boolean(data?.git_knowledge?.repos)
+      stats.value = {
+        total: skills.value.length,
+        draft: skills.value.filter((skill) => skill.trust_level === 'draft').length,
+        verified: skills.value.filter((skill) => skill.trust_level === 'verified').length,
+      }
+    } else {
+      failures.push('技能目录')
     }
-    pageMessage.value = response.message || '知识状态已刷新'
-    pageSuccess.value = response.success
+
+    if (providerResult.status === 'fulfilled' && providerResult.value.success) {
+      const data = providerResult.value.data
+      knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
+      repoIndexSummary.value = data?.repo_index_summary || null
+      if (!skillsResult || skillsResult.status !== 'fulfilled' || !skillsResult.value.success) {
+        gitReady.value = Boolean(data?.git_knowledge?.repos)
+        bootstrappedAt.value = data?.git_knowledge?.bootstrapped_at || bootstrappedAt.value
+      }
+    } else {
+      failures.push('Git 提供方与索引状态')
+    }
+
+    if (policyResult.status === 'fulfilled' && policyResult.value.success) {
+      knowledgePolicy.value = policyResult.value.data?.policy || null
+    } else {
+      failures.push('租户知识策略')
+    }
+
+    if (shardResult.status === 'fulfilled' && shardResult.value.success) {
+      shardInventory.value = shardResult.value.data || null
+    } else {
+      failures.push('分片库存')
+    }
+
+    if (failures.length > 0) {
+      pageMessage.value = `部分数据加载失败：${failures.join('、')}。其他成功的数据已更新，可稍后重试。`
+      pageSuccess.value = false
+    } else {
+      pageMessage.value = skillsResult.status === 'fulfilled'
+        ? skillsResult.value.message || '知识状态已刷新'
+        : '知识状态已刷新'
+      pageSuccess.value = true
+    }
   } catch (e) {
-    console.error('Failed to load skills:', e)
-    pageMessage.value = '知识状态加载失败'
-    pageSuccess.value = false
+    console.error('Failed to load knowledge data:', e)
+    if (requestVersion === loadRequestVersion) {
+      pageMessage.value = '知识状态加载失败，请稍后重试'
+      pageSuccess.value = false
+    }
   } finally {
-    loading.value = false
+    if (requestVersion === loadRequestVersion) loading.value = false
   }
 }
 
