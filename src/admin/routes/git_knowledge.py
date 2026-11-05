@@ -109,6 +109,7 @@ def register_git_knowledge_routes(
                             "mission_run_id": parameters.get("mission_run_id"),
                             "mission_node_id": parameters.get("mission_node_id"),
                             "mission_kind": parameters.get("mission_kind"),
+                            "primary_worker_id": parameters.get("primary_worker_id"),
                             "worker_id": parameters.get("worker_id") or parameters.get("source_worker_id"),
                             "evidence_ids": parameters.get("evidence_ids"),
                             "validation_evidence": parameters.get("validation_evidence"),
