@@ -102,16 +102,32 @@ def register_git_knowledge_routes(
                 try:
                     with open(skill_file, encoding="utf-8") as f:
                         skill_data = json.load(f)
+                    parameters = skill_data.get("parameters") if isinstance(skill_data.get("parameters"), dict) else {}
+                    provenance = {
+                        key: value
+                        for key, value in {
+                            "mission_run_id": parameters.get("mission_run_id"),
+                            "mission_node_id": parameters.get("mission_node_id"),
+                            "mission_kind": parameters.get("mission_kind"),
+                            "worker_id": parameters.get("worker_id") or parameters.get("source_worker_id"),
+                            "evidence_ids": parameters.get("evidence_ids"),
+                            "validation_evidence": parameters.get("validation_evidence"),
+                        }.items()
+                        if value is not None and value != ""
+                    }
                     skill_entries.append({
                         "id": skill_data.get("id", skill_file.stem),
                         "name": skill_data.get("name", skill_file.stem),
                         "domain": skill_data.get("domain", "javascript"),
+                        "capability_type": skill_data.get("capability_type"),
                         "trust_level": trust_level,
                         "source": skill_data.get("source", "local"),
                         "path": str(skill_file),
                         "usage_count": skill_data.get("usage_count", 0),
                         "success_rate": skill_data.get("success_rate"),
+                        "created_at": skill_data.get("created_at"),
                         "updated_at": skill_data.get("updated_at") or skill_data.get("created_at"),
+                        "provenance": provenance,
                     })
                 except Exception:
                     skill_entries.append({
