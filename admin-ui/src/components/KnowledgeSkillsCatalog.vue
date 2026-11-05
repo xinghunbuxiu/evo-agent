@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import StatusBadge from './StatusBadge.vue'
 import { getKnowledgeSkillDetail, type KnowledgeSkill } from '../api/knowledge'
 
@@ -65,17 +65,28 @@ const props = defineProps<{
 }>()
 
 const selectedSkill = ref<KnowledgeSkill | null>(null)
+let detailRequestVersion = 0
+
+watch(() => props.tenantId, () => {
+  detailRequestVersion += 1
+  selectedSkill.value = null
+})
 
 const viewSkill = async (skill: KnowledgeSkill) => {
+  const requestVersion = ++detailRequestVersion
+  const tenantId = props.tenantId || 'default'
   try {
     const response = await getKnowledgeSkillDetail(
-      props.tenantId || 'default',
+      tenantId,
       skill.domain || 'unknown',
       skill.name
     )
+    if (requestVersion !== detailRequestVersion || tenantId !== (props.tenantId || 'default')) return
     selectedSkill.value = response.success && response.data ? response.data : skill
   } catch {
-    selectedSkill.value = skill
+    if (requestVersion === detailRequestVersion && tenantId === (props.tenantId || 'default')) {
+      selectedSkill.value = skill
+    }
   }
 }
 </script>
