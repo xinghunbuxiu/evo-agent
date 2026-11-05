@@ -191,7 +191,9 @@
       </div>
     </div>
 
-    <KnowledgeShardsPanel :inventory="shardInventory" />
+    <div v-show="activeSection === 'shards'" class="space-y-5">
+      <KnowledgeShardsPanel :inventory="shardInventory" />
+    </div>
 
     <div v-show="activeSection === 'skills'" class="space-y-5">
       <AutonomySkillsPanel :summary="autonomySkillSummary" :recent-skills="recentAutonomySkills" />
@@ -199,8 +201,9 @@
       <KnowledgeSkillsCatalog :tenant-id="tenantId || 'default'" :skills="skills" :loading="loading" />
     </div>
 
-    <KnowledgeExportPanel :tenant-id="tenantId || 'default'" :refresh="loadSkills" />
-
+    <div v-show="activeSection === 'export'" class="space-y-5">
+      <KnowledgeExportPanel :tenant-id="tenantId || 'default'" :refresh="loadSkills" />
+    </div>
   </div>
 </template>
 
