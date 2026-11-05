@@ -294,6 +294,7 @@ const loadSkills = async () => {
       knowledgeRepo.value = data?.repo || ''
       repoFullName.value = data?.repo_full_name || ''
       bootstrappedAt.value = data?.git_knowledge?.bootstrapped_at || ''
+      knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
       knowledgeLayerAdvice.value = data?.knowledge_layer_advice || null
       autonomySkillSummary.value = data?.autonomy_skill_summary || null
       recentAutonomySkills.value = data?.recent_autonomy_skills || []
@@ -312,15 +313,15 @@ const loadSkills = async () => {
       if (
         skillsResult.status !== 'fulfilled' ||
         !skillsResult.value.success ||
-        !skillsResult.value.data?.knowledge_containers
+        !skillsResult.value.data?.git_knowledge
       ) {
-        knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
-      }
-      repoIndexSummary.value = data?.repo_index_summary || null
-      if (!skillsResult || skillsResult.status !== 'fulfilled' || !skillsResult.value.success) {
+        if (!skillsResult.value?.data?.knowledge_containers) {
+          knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
+        }
         gitReady.value = Boolean(data?.git_knowledge?.repos)
         bootstrappedAt.value = data?.git_knowledge?.bootstrapped_at || bootstrappedAt.value
       }
+      repoIndexSummary.value = data?.repo_index_summary || null
     } else {
       failures.push('Git 提供方与索引状态')
     }
