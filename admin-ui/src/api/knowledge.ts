@@ -10,6 +10,7 @@ export interface KnowledgeSkill {
   trust_level?: string
   source?: string
   path?: string
+  version?: string
   description?: string
   usage_count?: number
   success_rate?: number
