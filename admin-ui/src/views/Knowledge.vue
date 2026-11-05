@@ -286,6 +286,9 @@ const loadSkills = async () => {
 
     const failures: string[] = []
     const [skillsResult, providerResult, policyResult, shardResult] = results
+    const skillsData = skillsResult.status === 'fulfilled' && skillsResult.value.success
+      ? skillsResult.value.data
+      : null
 
     if (skillsResult.status === 'fulfilled' && skillsResult.value.success) {
       const response = skillsResult.value
@@ -310,14 +313,10 @@ const loadSkills = async () => {
 
     if (providerResult.status === 'fulfilled' && providerResult.value.success) {
       const data = providerResult.value.data
-      if (
-        skillsResult.status !== 'fulfilled' ||
-        !skillsResult.value.success ||
-        !skillsResult.value.data?.git_knowledge
-      ) {
-        if (!skillsResult.value?.data?.knowledge_containers) {
-          knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
-        }
+      if (!skillsData?.knowledge_containers) {
+        knowledgeContainers.value = data?.knowledge_containers || knowledgeContainers.value
+      }
+      if (!skillsData?.git_knowledge) {
         gitReady.value = Boolean(data?.git_knowledge?.repos)
         bootstrappedAt.value = data?.git_knowledge?.bootstrapped_at || bootstrappedAt.value
       }
