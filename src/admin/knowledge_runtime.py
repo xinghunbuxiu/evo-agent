@@ -384,6 +384,13 @@ def create_mission_delivery_skill_candidate(
         "analyze_task_id": analyze_snapshot["task_id"],
         "reconstruct_task_id": reconstruct_snapshot["task_id"],
     }
+    runtime_route = mission_run.get("runtime_route") if isinstance(mission_run.get("runtime_route"), dict) else {}
+    mission_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+    primary_worker_id = str(
+        runtime_route.get("primary_worker_id")
+        or mission_context.get("runtime_primary_worker_id")
+        or ""
+    ).strip() or None
     framework_hint = "javascript"
     analyze_summary = str(analyze_snapshot.get("summary") or "").lower()
     reconstruct_summary = str(reconstruct_snapshot.get("summary") or "").lower()
@@ -412,6 +419,8 @@ def create_mission_delivery_skill_candidate(
             "mission_kind": mission_run.get("mission_kind"),
             "mission_run_id": mission_run["mission_run_id"],
             "mission_node_id": promotion_node["id"],
+            "primary_worker_id": primary_worker_id,
+            "evidence_ids": [analyze_snapshot["task_id"], reconstruct_snapshot["task_id"]],
             "decision_trace": decision_trace,
             "validation_evidence": validation_evidence,
             "framework_hint": framework_hint,
@@ -454,6 +463,7 @@ def create_mission_delivery_skill_candidate(
             "skill_name": skill.name,
             "mission_run_id": mission_run["mission_run_id"],
             "mission_node_id": promotion_node["id"],
+            "primary_worker_id": primary_worker_id,
             "decision_trace": decision_trace,
             "validation_evidence": validation_evidence,
             "source": "mission_delivery",
