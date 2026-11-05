@@ -119,42 +119,7 @@
     </div>
 
     <div v-show="activeSection === 'index'" class="space-y-5">
-      <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 class="text-lg font-semibold text-slate-900">知识索引状态</h2>
-        <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="rounded-xl bg-slate-50 px-4 py-3 text-center">
-            <div class="text-2xl font-bold text-slate-900">{{ repoIndexSummary?.repo_count ?? 0 }}</div>
-            <div class="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">Repos</div>
-          </div>
-          <div class="rounded-xl bg-slate-50 px-4 py-3 text-center">
-            <div class="text-2xl font-bold text-slate-900">{{ repoIndexSummary?.indexed_repo_count ?? 0 }}</div>
-            <div class="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">Indexed</div>
-          </div>
-          <div class="rounded-xl bg-slate-50 px-4 py-3 text-center">
-            <div class="text-2xl font-bold text-slate-900">{{ repoIndexSummary?.total_entries ?? 0 }}</div>
-            <div class="mt-1 text-xs uppercase tracking-[0.16em] text-slate-400">Entries</div>
-          </div>
-        </div>
-        <div class="mt-4 flex flex-wrap gap-3">
-          <button
-            class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            :disabled="scanning"
-            @click="scanKnowledgeIndex"
-          >
-            {{ scanning ? '扫描中...' : '扫描知识索引' }}
-          </button>
-          <button
-            class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            :disabled="exportingIndex"
-            @click="exportIndexTemplate"
-          >
-            {{ exportingIndex ? '导出中...' : '导出索引模板' }}
-          </button>
-        </div>
-        <p v-if="indexResult" class="mt-3 text-sm" :class="indexSuccess ? 'text-green-600' : 'text-rose-600'">
-          {{ indexResult }}
-        </p>
-      </div>
+      <KnowledgeIndexPanel :tenant-id="tenantId || 'default'" :summary="repoIndexSummary" :refresh="loadSkills" @update:summary="repoIndexSummary = $event" />
 
       <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 class="text-lg font-semibold text-slate-900">当前租户知识状态</h2>
@@ -324,12 +289,11 @@ import { useRoute, useRouter } from 'vue-router'
 import StatusBadge from '../components/StatusBadge.vue'
 import AutonomySkillsPanel from '../components/AutonomySkillsPanel.vue'
 import KnowledgeExportPanel from '../components/KnowledgeExportPanel.vue'
+import KnowledgeIndexPanel from '../components/KnowledgeIndexPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
 import {
-  exportGitKnowledgeIndexTemplate,
   getGitProviderStatus,
-  scanTenantGitKnowledge,
   type GitKnowledgeRepoIndexSummary,
   type KnowledgeContainer,
 } from '../api/git'
@@ -365,10 +329,6 @@ const knowledgePolicy = ref<TenantKnowledgePolicy | null>(null)
 const knowledgeLayerAdvice = ref<KnowledgeSkillsPayload['knowledge_layer_advice'] | null>(null)
 const autonomySkillSummary = ref<KnowledgeSkillsPayload['autonomy_skill_summary'] | null>(null)
 const recentAutonomySkills = ref<NonNullable<KnowledgeSkillsPayload['recent_autonomy_skills']>>([])
-const scanning = ref(false)
-const exportingIndex = ref(false)
-const indexResult = ref('')
-const indexSuccess = ref(false)
 const repoIndexSummary = ref<GitKnowledgeRepoIndexSummary | null>(null)
 const shardInventory = ref<KnowledgeShardInventory | null>(null)
 const shardActiveCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.active, 0))
@@ -474,45 +434,6 @@ const loadSkills = async () => {
     pageSuccess.value = false
   }
   loading.value = false
-}
-
-const scanKnowledgeIndex = async () => {
-  scanning.value = true
-  indexResult.value = ''
-  try {
-    const res = await scanTenantGitKnowledge(tenantId.value || 'default')
-    repoIndexSummary.value = res.data?.repo_index_summary || null
-    indexResult.value = res.success
-      ? `${res.message || '扫描完成'}，已索引 ${res.data?.repo_index_summary?.indexed_repo_count || 0} 个仓库`
-      : res.message || '扫描失败'
-    indexSuccess.value = res.success
-    await loadSkills()
-  } catch (error) {
-    console.error('Failed to scan knowledge index:', error)
-    indexResult.value = '知识索引扫描失败'
-    indexSuccess.value = false
-  }
-  scanning.value = false
-}
-
-const exportIndexTemplate = async () => {
-  exportingIndex.value = true
-  indexResult.value = ''
-  try {
-    const res = await exportGitKnowledgeIndexTemplate(tenantId.value || 'default', {
-      scan_after_write: true,
-    })
-    repoIndexSummary.value = res.data?.repo_index_summary || null
-    indexResult.value = res.success
-      ? `${res.message || '导出完成'}：${res.data?.file_path || ''}`
-      : res.message || '导出失败'
-    indexSuccess.value = res.success
-  } catch (error) {
-    console.error('Failed to export knowledge index template:', error)
-    indexResult.value = '索引模板导出失败'
-    indexSuccess.value = false
-  }
-  exportingIndex.value = false
 }
 
 const viewSkill = async (skill: KnowledgeSkill) => {
