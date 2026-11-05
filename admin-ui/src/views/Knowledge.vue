@@ -191,36 +191,7 @@
       </div>
     </div>
 
-    <div v-show="activeSection === 'shards'" class="space-y-5">
-      <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div class="flex items-start justify-between gap-4">
-          <div><h2 class="text-lg font-semibold text-slate-900">Gitee 知识仓分片</h2>
-            <p class="mt-1 text-sm text-slate-500">按知识场景分库，按容量扩展编号仓库。封存旧仓仍可查询，新档案转入后续分片。</p></div>
-          <span class="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">{{ shardInventory?.total ?? 0 }} repositories</span>
-        </div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardActiveCount }}</div><div class="text-xs text-slate-500">可写仓库</div></div>
-          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardSealedCount }}</div><div class="text-xs text-slate-500">已封存</div></div>
-          <div class="rounded-xl bg-slate-50 px-4 py-3"><div class="text-2xl font-bold">{{ shardProvisioningCount }}</div><div class="text-xs text-slate-500">创建中</div></div>
-        </div>
-        <div class="mt-4 overflow-x-auto">
-          <table class="w-full min-w-[720px] text-left text-sm">
-            <thead class="border-b border-slate-200 text-xs text-slate-500"><tr><th class="px-3 py-2">仓库编号</th><th class="px-3 py-2">知识域</th><th class="px-3 py-2">状态</th><th class="px-3 py-2">容量使用</th><th class="px-3 py-2">文件数</th><th class="px-3 py-2">Gitee 仓库</th></tr></thead>
-            <tbody>
-              <tr v-for="shard in shardInventory?.shards || []" :key="shard.repository_id" class="border-b border-slate-100">
-                <td class="px-3 py-3 font-semibold text-slate-900">{{ shard.repository_id }}</td><td class="px-3 py-3 text-slate-600">{{ shard.domain }}</td>
-                <td class="px-3 py-3"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs">{{ shard.status }}</span></td>
-                <td class="px-3 py-3 text-slate-600">{{ shard.capacity_ratio == null ? "未测量" : (Math.round(shard.capacity_ratio * 1000) / 10) + "%" }}</td>
-                <td class="px-3 py-3 text-slate-600">{{ shard.usage?.file_count ?? "-" }}</td>
-                <td class="px-3 py-3"><a v-if="shard.url" :href="shard.url" target="_blank" rel="noopener noreferrer" class="text-sky-700 hover:underline">{{ shard.full_name }}</a><span v-else class="text-slate-400">尚未创建</span></td>
-              </tr>
-              <tr v-if="!shardInventory?.shards?.length"><td colspan="6" class="px-3 py-8 text-center text-slate-400">当前租户尚未建立编号知识仓</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="mt-3 text-xs text-slate-400">容量数据以最近一次测量为准；写入链路接入前不会自动触发扩容。</p>
-      </div>
-    </div>
+    <KnowledgeShardsPanel :inventory="shardInventory" />
 
     <div v-show="activeSection === 'skills'" class="space-y-5">
       <AutonomySkillsPanel :summary="autonomySkillSummary" :recent-skills="recentAutonomySkills" />
@@ -290,6 +261,7 @@ import StatusBadge from '../components/StatusBadge.vue'
 import AutonomySkillsPanel from '../components/AutonomySkillsPanel.vue'
 import KnowledgeExportPanel from '../components/KnowledgeExportPanel.vue'
 import KnowledgeIndexPanel from '../components/KnowledgeIndexPanel.vue'
+import KnowledgeShardsPanel from '../components/KnowledgeShardsPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
 import {
@@ -331,9 +303,6 @@ const autonomySkillSummary = ref<KnowledgeSkillsPayload['autonomy_skill_summary'
 const recentAutonomySkills = ref<NonNullable<KnowledgeSkillsPayload['recent_autonomy_skills']>>([])
 const repoIndexSummary = ref<GitKnowledgeRepoIndexSummary | null>(null)
 const shardInventory = ref<KnowledgeShardInventory | null>(null)
-const shardActiveCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.active, 0))
-const shardSealedCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.sealed, 0))
-const shardProvisioningCount = computed(() => Object.values(shardInventory.value?.domains || {}).reduce((sum, item) => sum + item.provisioning, 0))
 
 const privateContainerCount = computed(() =>
   knowledgeContainers.value.filter((item) => item.scope === 'tenant_private').length
