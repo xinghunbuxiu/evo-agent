@@ -6,13 +6,24 @@ export interface KnowledgeSkill {
   id?: string
   name: string
   domain?: string
+  capability_type?: string
   trust_level?: string
   source?: string
   path?: string
   description?: string
   usage_count?: number
   success_rate?: number
+  created_at?: string
   updated_at?: string
+  provenance?: {
+    mission_run_id?: string
+    mission_node_id?: string
+    mission_kind?: string
+    worker_id?: string
+    evidence_ids?: string[]
+    validation_evidence?: Record<string, unknown>
+  }
+  parameters?: Record<string, unknown>
 }
 
 export interface KnowledgeSkillsPayload {
