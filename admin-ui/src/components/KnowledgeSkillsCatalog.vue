@@ -6,7 +6,7 @@
           <th class="px-4 py-3 font-medium">技能名称</th>
           <th class="px-4 py-3 font-medium">领域</th>
           <th class="px-4 py-3 font-medium">信任级别</th>
-          <th class="px-4 py-3 font-medium">来源</th>
+          <th class="px-4 py-3 font-medium">来源 / 任务</th>
           <th class="px-4 py-3 font-medium">操作</th>
         </tr>
       </thead>
@@ -17,7 +17,15 @@
           <td class="px-4 py-3">
             <StatusBadge :status="skill.trust_level || 'draft'" />
           </td>
-          <td class="px-4 py-3">{{ skill.source || 'local' }}</td>
+          <td class="px-4 py-3">
+            <div>{{ skill.source || 'local' }}</div>
+            <div v-if="skill.provenance?.mission_run_id" class="mt-1 text-xs text-slate-500">
+              Mission: {{ skill.provenance.mission_run_id }}
+            </div>
+            <div v-if="skill.provenance?.evidence_ids?.length" class="mt-1 text-xs text-slate-500">
+              经验证据 {{ skill.provenance.evidence_ids.length }} 条
+            </div>
+          </td>
           <td class="px-4 py-3">
             <button
               @click="viewSkill(skill)"
@@ -39,7 +47,44 @@
     <div v-if="selectedSkill" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div class="max-h-[80vh] w-full max-w-lg overflow-auto rounded-lg bg-white p-6">
         <h2 class="mb-4 text-xl font-bold">技能详情</h2>
-        <pre class="overflow-auto rounded-lg bg-gray-50 p-4 text-sm">{{ JSON.stringify(selectedSkill, null, 2) }}</pre>
+        <div class="space-y-4 text-sm">
+          <section class="rounded-lg border border-slate-200 p-4">
+            <div class="font-semibold text-slate-900">{{ selectedSkill.name }}</div>
+            <p class="mt-1 text-slate-600">{{ selectedSkill.description || '暂无描述' }}</p>
+            <div class="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+              <div><span class="text-slate-400">领域</span><div class="mt-1">{{ selectedSkill.domain || '-' }}</div></div>
+              <div><span class="text-slate-400">能力类型</span><div class="mt-1">{{ selectedSkill.capability_type || '-' }}</div></div>
+              <div><span class="text-slate-400">来源</span><div class="mt-1">{{ selectedSkill.source || 'local' }}</div></div>
+              <div><span class="text-slate-400">版本</span><div class="mt-1">{{ selectedSkill.version || '-' }}</div></div>
+              <div><span class="text-slate-400">使用次数</span><div class="mt-1">{{ selectedSkill.usage_count ?? 0 }}</div></div>
+              <div><span class="text-slate-400">成功率</span><div class="mt-1">{{ selectedSkill.success_rate ?? '-' }}</div></div>
+            </div>
+          </section>
+
+          <section class="rounded-lg border border-slate-200 p-4">
+            <h3 class="font-semibold text-slate-900">来源与任务链路</h3>
+            <dl class="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+              <div><dt class="text-slate-400">Mission Run</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_run_id || selectedSkill.parameters?.mission_run_id || '-' }}</dd></div>
+              <div><dt class="text-slate-400">Mission Node</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_node_id || selectedSkill.parameters?.mission_node_id || '-' }}</dd></div>
+              <div><dt class="text-slate-400">Worker</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.worker_id || selectedSkill.parameters?.worker_id || selectedSkill.parameters?.source_worker_id || '未记录' }}</dd></div>
+              <div><dt class="text-slate-400">经验证据</dt><dd class="mt-1">{{ selectedSkill.provenance?.evidence_ids?.length || (Array.isArray(selectedSkill.parameters?.evidence_ids) ? selectedSkill.parameters.evidence_ids.length : 0) }} 条</dd></div>
+            </dl>
+            <div v-if="selectedSkill.parameters?.validation_evidence" class="mt-3">
+              <div class="text-xs font-medium text-slate-500">验证证据</div>
+              <pre class="mt-1 overflow-auto rounded bg-slate-50 p-3 text-xs">{{ JSON.stringify(selectedSkill.parameters.validation_evidence, null, 2) }}</pre>
+            </div>
+            <div v-if="selectedSkill.parameters?.decision_trace" class="mt-3">
+              <div class="text-xs font-medium text-slate-500">决策轨迹</div>
+              <pre class="mt-1 overflow-auto rounded bg-slate-50 p-3 text-xs">{{ JSON.stringify(selectedSkill.parameters.decision_trace, null, 2) }}</pre>
+            </div>
+            <p class="mt-3 text-xs text-slate-500">未记录的来源字段会显示为“未记录”，不会根据任务名称或文件位置推断。</p>
+          </section>
+
+          <details class="rounded-lg border border-slate-200 p-4">
+            <summary class="cursor-pointer font-medium text-slate-700">查看完整技能数据</summary>
+            <pre class="mt-3 overflow-auto rounded bg-gray-50 p-3 text-xs">{{ JSON.stringify(selectedSkill, null, 2) }}</pre>
+          </details>
+        </div>
         <div class="mt-4 flex justify-end">
           <button
             @click="selectedSkill = null"
