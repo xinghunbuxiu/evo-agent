@@ -63,6 +63,7 @@
 
           <section class="rounded-lg border border-slate-200 p-4">
             <h3 class="font-semibold text-slate-900">来源与任务链路</h3>
+            <p class="mt-1 text-xs text-amber-700">信任级别是技能文件的存储层级标记；当前技能注册表的自动验证与云端发布入口处于关闭保护状态，不能仅凭“verified”标记认定技能已通过真实回放验证。</p>
             <dl class="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
               <div><dt class="text-slate-400">Mission Run</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_run_id || selectedSkill.parameters?.mission_run_id || '-' }}</dd></div>
               <div><dt class="text-slate-400">Mission Node</dt><dd class="mt-1 break-all">{{ selectedSkill.provenance?.mission_node_id || selectedSkill.parameters?.mission_node_id || '-' }}</dd></div>
