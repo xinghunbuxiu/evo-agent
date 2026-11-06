@@ -2,6 +2,16 @@ import { get, post } from './request'
 import type { GitKnowledgeConfig, KnowledgeContainer } from './git'
 import type { KnowledgeLayerAdvice } from './evolution'
 
+export interface KnowledgeSkillSourceExperience {
+  experience_id?: string
+  mission_run_id?: string
+  mission_node_id?: string
+  primary_worker_id?: string
+  evidence_ids?: string[]
+  validation_evidence?: Record<string, unknown>
+  decision_trace?: unknown[]
+}
+
 export interface KnowledgeSkill {
   id?: string
   name: string
@@ -27,17 +37,14 @@ export interface KnowledgeSkill {
     source_experience_ids?: string[]
     source_mission_run_ids?: string[]
     source_worker_ids?: string[]
-    source_experiences?: Array<{
-      experience_id?: string
-      mission_run_id?: string
-      mission_node_id?: string
-      primary_worker_id?: string
-      evidence_ids?: string[]
-      validation_evidence?: Record<string, unknown>
-      decision_trace?: unknown[]
-    }>
+    source_experiences?: KnowledgeSkillSourceExperience[]
   }
-  parameters?: Record<string, unknown>
+  parameters?: Record<string, unknown> & {
+    source_experience_ids?: string[]
+    source_mission_run_ids?: string[]
+    source_worker_ids?: string[]
+    source_experiences?: KnowledgeSkillSourceExperience[]
+  }
 }
 
 export interface KnowledgeSkillsPayload {
