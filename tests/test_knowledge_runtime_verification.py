@@ -135,6 +135,26 @@ class SkillReplayVerificationTests(unittest.TestCase):
                 [item["experience_id"] for item in parameters["source_experiences"]],
                 ["experience-1", "experience-2"],
             )
+            self.assertEqual(
+                [item["mission_node_id"] for item in parameters["source_experiences"]],
+                ["node-1", "node-2"],
+            )
+            self.assertEqual(
+                [item["primary_worker_id"] for item in parameters["source_experiences"]],
+                ["worker-vue", "worker-vue-2"],
+            )
+            self.assertEqual(
+                [item["evidence_ids"] for item in parameters["source_experiences"]],
+                [["analyze-1", "reconstruct-1"], ["analyze-2", "reconstruct-2"]],
+            )
+            self.assertEqual(
+                [item["validation_evidence"]["verdict"] for item in parameters["source_experiences"]],
+                ["pass", "pass"],
+            )
+            self.assertEqual(
+                [item["decision_trace"][0]["result"] for item in parameters["source_experiences"]],
+                ["passed", "passed"],
+            )
 
     def test_replay_results_must_be_bound_to_candidate_and_pass_all_checks(self):
         invalid_results = [
