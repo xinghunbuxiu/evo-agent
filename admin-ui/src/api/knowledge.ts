@@ -10,6 +10,23 @@ export interface KnowledgeSkillSourceExperience {
   evidence_ids?: string[]
   validation_evidence?: Record<string, unknown>
   decision_trace?: unknown[]
+  skill_execution?: {
+    schema_version?: string
+    skill_id?: string
+    skill_name?: string
+    skill_version?: string
+    skill_trust_level?: string
+    application_mode?: string
+    task_type?: string
+    execution_success?: boolean
+    execution_status?: string
+    quality_score?: number
+    task_id?: string
+    mission_run_id?: string
+    mission_node_id?: string
+    worker_id?: string
+    evaluation?: Record<string, unknown>
+  }
 }
 
 export interface KnowledgeSkill {
