@@ -425,6 +425,24 @@ def complete_javascript_reverse_promotion_action(
     framework_hint = infer_framework_hint_from_delivery({
         "summary": f"{analyze_snapshot.get('summary') or ''} {reconstruct_snapshot.get('summary') or ''}",
     })
+    runtime_route = mission_run.get("runtime_route") if isinstance(mission_run.get("runtime_route"), dict) else {}
+    mission_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+    primary_worker_id = str(
+        runtime_route.get("primary_worker_id")
+        or mission_context.get("runtime_primary_worker_id")
+        or ""
+    ).strip() or None
+    evidence_ids = [
+        str(task_id)
+        for task_id in (analyze_snapshot.get("task_id"), reconstruct_snapshot.get("task_id"))
+        if str(task_id or "").strip()
+    ]
+    validation_evidence = {
+        "verdict": reconstruct_snapshot.get("evaluation_verdict"),
+        "evaluation_score": reconstruct_snapshot.get("evaluation_score"),
+        "analyze_task_id": analyze_snapshot.get("task_id"),
+        "reconstruct_task_id": reconstruct_snapshot.get("task_id"),
+    }
     experience_id = f"mission_delivery_{mission_run.get('mission_run_id')}"
 
     exp = Experience(
@@ -439,7 +457,10 @@ def complete_javascript_reverse_promotion_action(
             "mission_delivery": {
                 "mission_run_id": mission_run["mission_run_id"],
                 "mission_node_id": action["node_id"],
+                "primary_worker_id": primary_worker_id,
+                "evidence_ids": evidence_ids,
                 "decision_trace": action["decision_trace"],
+                "validation_evidence": validation_evidence,
                 "validation_summary": {
                     "verdict": reconstruct_snapshot["evaluation_verdict"],
                     "evaluation_score": reconstruct_snapshot["evaluation_score"],
