@@ -325,7 +325,13 @@ def auto_draft_stable_experience_skills(
         existing_params = existing_payload.get("parameters", {}) if isinstance(existing_payload.get("parameters"), dict) else {}
         existing_experience_ids = existing_params.get("source_experience_ids", [])
         existing_avg_quality = safe_float(existing_params.get("avg_quality_score"), 0.0)
-        if existing_payload and list(existing_experience_ids) == source_experience_ids and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001:
+        existing_source_experiences = existing_params.get("source_experiences", [])
+        if (
+            existing_payload
+            and list(existing_experience_ids) == source_experience_ids
+            and existing_source_experiences == source_experiences
+            and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001
+        ):
             continue
         description = (
             f"基于 {group.get('count')} 条稳定 {domain}/{task_type} 经验自动沉淀的技能草稿，"
