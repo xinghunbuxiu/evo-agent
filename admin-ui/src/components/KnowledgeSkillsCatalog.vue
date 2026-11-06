@@ -74,11 +74,11 @@
               <div class="text-xs font-medium text-slate-500">验证证据</div>
               <pre class="mt-1 overflow-auto rounded bg-slate-50 p-3 text-xs">{{ JSON.stringify(selectedSkill.parameters.validation_evidence, null, 2) }}</pre>
             </div>
-            <div v-if="selectedSkill.provenance?.source_experiences?.length" class="mt-3">
-              <div class="text-xs font-medium text-slate-500">聚合来源经验（{{ selectedSkill.provenance.source_experiences.length }} 条）</div>
+            <div v-if="(selectedSkill.provenance?.source_experiences || selectedSkill.parameters?.source_experiences)?.length" class="mt-3">
+              <div class="text-xs font-medium text-slate-500">聚合来源经验（{{ (selectedSkill.provenance?.source_experiences || selectedSkill.parameters?.source_experiences || []).length }} 条）</div>
               <div class="mt-2 space-y-2">
                 <div
-                  v-for="source in selectedSkill.provenance.source_experiences"
+                  v-for="source in (selectedSkill.provenance?.source_experiences || selectedSkill.parameters?.source_experiences || [])"
                   :key="source.experience_id || source.mission_run_id || source.mission_node_id"
                   class="rounded bg-slate-50 p-3 text-xs"
                 >
@@ -93,9 +93,9 @@
                 </div>
               </div>
             </div>
-            <div v-if="selectedSkill.provenance?.source_mission_run_ids?.length || selectedSkill.provenance?.source_worker_ids?.length" class="mt-3 text-xs text-slate-600">
-              <div>来源 Missions: {{ selectedSkill.provenance?.source_mission_run_ids?.join(', ') || '未记录' }}</div>
-              <div class="mt-1">来源 Workers: {{ selectedSkill.provenance?.source_worker_ids?.join(', ') || '未记录' }}</div>
+            <div v-if="selectedSkill.provenance?.source_mission_run_ids?.length || selectedSkill.parameters?.source_mission_run_ids?.length || selectedSkill.provenance?.source_worker_ids?.length || selectedSkill.parameters?.source_worker_ids?.length" class="mt-3 text-xs text-slate-600">
+              <div>来源 Missions: {{ (selectedSkill.provenance?.source_mission_run_ids || selectedSkill.parameters?.source_mission_run_ids || []).join(', ') || '未记录' }}</div>
+              <div class="mt-1">来源 Workers: {{ (selectedSkill.provenance?.source_worker_ids || selectedSkill.parameters?.source_worker_ids || []).join(', ') || '未记录' }}</div>
             </div>
             <div v-if="selectedSkill.parameters?.decision_trace" class="mt-3">
               <div class="text-xs font-medium text-slate-500">决策轨迹</div>
