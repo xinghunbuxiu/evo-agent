@@ -24,6 +24,18 @@ export interface KnowledgeSkill {
     worker_id?: string
     evidence_ids?: string[]
     validation_evidence?: Record<string, unknown>
+    source_experience_ids?: string[]
+    source_mission_run_ids?: string[]
+    source_worker_ids?: string[]
+    source_experiences?: Array<{
+      experience_id?: string
+      mission_run_id?: string
+      mission_node_id?: string
+      primary_worker_id?: string
+      evidence_ids?: string[]
+      validation_evidence?: Record<string, unknown>
+      decision_trace?: unknown[]
+    }>
   }
   parameters?: Record<string, unknown>
 }
