@@ -79,6 +79,11 @@ class SkillReplayVerificationTests(unittest.TestCase):
                         "evidence_ids": ["analyze-1", "reconstruct-1"],
                         "validation_evidence": {"verdict": "pass", "evaluation_score": 0.94},
                         "decision_trace": [{"step": "validate", "result": "passed"}],
+                    }, "skill_execution": {
+                        "schema_version": "skill.execution.feedback.v1",
+                        "skill_id": "skill-vue",
+                        "skill_version": "2.4.1",
+                        "execution_status": "succeeded",
                     }},
                 ),
                 Experience(
@@ -96,6 +101,11 @@ class SkillReplayVerificationTests(unittest.TestCase):
                         "evidence_ids": ["analyze-2", "reconstruct-2"],
                         "validation_evidence": {"verdict": "pass", "evaluation_score": 0.92},
                         "decision_trace": [{"step": "validate", "result": "passed"}],
+                    }, "skill_execution": {
+                        "schema_version": "skill.execution.feedback.v1",
+                        "skill_id": "skill-vue",
+                        "skill_version": "2.4.1",
+                        "execution_status": "succeeded",
                     }},
                 ),
             ]
@@ -146,6 +156,10 @@ class SkillReplayVerificationTests(unittest.TestCase):
             self.assertEqual(
                 [item["evidence_ids"] for item in parameters["source_experiences"]],
                 [["analyze-1", "reconstruct-1"], ["analyze-2", "reconstruct-2"]],
+            )
+            self.assertEqual(
+                [item["skill_execution"]["skill_version"] for item in parameters["source_experiences"]],
+                ["2.4.1", "2.4.1"],
             )
             self.assertEqual(
                 [item["validation_evidence"]["verdict"] for item in parameters["source_experiences"]],
