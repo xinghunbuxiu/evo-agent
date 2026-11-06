@@ -292,7 +292,10 @@ def auto_draft_stable_experience_skills(
                 source_experience_ids.append(experience_id)
             metadata = item.metadata if isinstance(item.metadata, dict) else {}
             delivery = metadata.get("mission_delivery") if isinstance(metadata.get("mission_delivery"), dict) else {}
+            skill_execution = metadata.get("skill_execution") if isinstance(metadata.get("skill_execution"), dict) else {}
             source_record = {"experience_id": experience_id} if experience_id else {}
+            if skill_execution:
+                source_record["skill_execution"] = skill_execution
             for key in (
                 "mission_run_id",
                 "mission_node_id",
