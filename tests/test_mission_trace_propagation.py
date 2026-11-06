@@ -600,6 +600,8 @@ class MissionTracePropagationTests(unittest.TestCase):
             )
             self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
             skill = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
+            experience_path = Path(tmp) / ".tenants" / "tenant-a" / "experiences" / "javascript" / "mission_delivery_run-42.json"
+            experience = json.loads(experience_path.read_text(encoding="utf-8"))
 
         self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
         expected_evidence = {
@@ -614,6 +616,13 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(skill["parameters"]["evidence_ids"], ["analyze-17", "reconstruct-29"])
         self.assertEqual(skill["parameters"]["decision_trace"], trace)
         self.assertEqual(skill["parameters"]["validation_evidence"], expected_evidence)
+        experience_lineage = experience["metadata"]["mission_delivery"]
+        self.assertEqual(experience_lineage["mission_run_id"], skill["parameters"]["mission_run_id"])
+        self.assertEqual(experience_lineage["mission_node_id"], skill["parameters"]["mission_node_id"])
+        self.assertEqual(experience_lineage["primary_worker_id"], skill["parameters"]["primary_worker_id"])
+        self.assertEqual(experience_lineage["evidence_ids"], skill["parameters"]["evidence_ids"])
+        self.assertEqual(experience_lineage["decision_trace"], skill["parameters"]["decision_trace"])
+        self.assertEqual(experience_lineage["validation_evidence"], expected_evidence)
         self.assertEqual(len(growth_events), 1)
         metadata = growth_events[0]["metadata"]
         self.assertEqual(metadata["mission_run_id"], skill["parameters"]["mission_run_id"])
