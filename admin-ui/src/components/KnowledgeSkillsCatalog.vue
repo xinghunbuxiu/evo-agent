@@ -86,9 +86,15 @@
                   <div class="mt-1 break-all">Mission: {{ source.mission_run_id || '未记录' }} <span v-if="source.mission_node_id">/ Node: {{ source.mission_node_id }}</span></div>
                   <div class="mt-1 break-all">Worker: {{ source.primary_worker_id || '未记录' }}</div>
                   <div class="mt-1">任务证据: {{ source.evidence_ids?.length || 0 }} 条</div>
-                  <details v-if="source.validation_evidence || source.decision_trace" class="mt-2">
+                  <div v-if="source.skill_execution" class="mt-2 rounded bg-white p-2">
+                    <div class="font-medium text-slate-700">Skill 实际执行反馈</div>
+                    <div class="mt-1 break-all">Skill: {{ source.skill_execution.skill_id || '未记录' }} @ {{ source.skill_execution.skill_version || '版本未记录' }}</div>
+                    <div class="mt-1">执行状态: {{ source.skill_execution.execution_status || '未记录' }} · 质量分: {{ source.skill_execution.quality_score ?? '未记录' }}</div>
+                    <div v-if="source.skill_execution.task_id" class="mt-1 break-all">Task: {{ source.skill_execution.task_id }}</div>
+                  </div>
+                  <details v-if="source.validation_evidence || source.decision_trace || source.skill_execution?.evaluation" class="mt-2">
                     <summary class="cursor-pointer text-slate-500">查看该经验的验证与决策记录</summary>
-                    <pre class="mt-1 overflow-auto rounded bg-white p-2">{{ JSON.stringify({ validation_evidence: source.validation_evidence, decision_trace: source.decision_trace }, null, 2) }}</pre>
+                    <pre class="mt-1 overflow-auto rounded bg-white p-2">{{ JSON.stringify({ validation_evidence: source.validation_evidence, decision_trace: source.decision_trace, skill_execution_evaluation: source.skill_execution?.evaluation }, null, 2) }}</pre>
                   </details>
                 </div>
               </div>
