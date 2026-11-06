@@ -113,6 +113,10 @@ def register_git_knowledge_routes(
                             "worker_id": parameters.get("worker_id") or parameters.get("source_worker_id"),
                             "evidence_ids": parameters.get("evidence_ids"),
                             "validation_evidence": parameters.get("validation_evidence"),
+                            "source_experience_ids": parameters.get("source_experience_ids"),
+                            "source_mission_run_ids": parameters.get("source_mission_run_ids"),
+                            "source_worker_ids": parameters.get("source_worker_ids"),
+                            "source_experiences": parameters.get("source_experiences"),
                         }.items()
                         if value is not None and value != ""
                     }
