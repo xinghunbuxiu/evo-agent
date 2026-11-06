@@ -239,7 +239,7 @@ def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> l
         avg_quality = round(sum(float(item.quality_score or 0.0) for item in items) / len(items), 3)
         if avg_quality < 0.82:
             continue
-        payload["items"] = sorted(items, key=lambda item: item.created_at, reverse=True)[:6]
+        payload["items"] = sorted(items, key=lambda item: item.created_at, reverse=True)
         payload["count"] = len(items)
         payload["avg_quality"] = avg_quality
         stable_groups.append(payload)
