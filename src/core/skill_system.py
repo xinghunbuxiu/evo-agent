@@ -457,15 +457,17 @@ class SkillExecutor:
             }
     
     def _execute_skill_code(self, skill: Skill, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行技能代码（占位实现）"""
-        # TODO: 实现具体的执行逻辑
-        # 可以是 Python 代码执行、AI 调用、外部命令等
-        return {
-            "success": True,
-            "data": {"executed": skill.name, "context": context},
-            "message": f"Executed skill: {skill.name}",
-        }
-    
+        """拒绝执行尚未接入可信隔离回放器的 Skill。
+
+        Skill.code 目前没有受约束的执行协议。不能把“返回成功对象”
+        当作代码已执行，也不能在宿主进程中直接 eval/exec 不可信技能内容。
+        等待专用 replay executor、版本摘要绑定和独立验证器接入后再开放。
+        """
+        raise RuntimeError(
+            "Skill replay execution is unavailable: no trusted isolated "
+            "executor is configured for this skill."
+        )
+
     def get_execution_history(self, skill_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取执行历史（用于验证技能）"""
         if skill_id:
