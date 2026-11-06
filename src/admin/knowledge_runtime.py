@@ -281,12 +281,51 @@ def auto_draft_stable_experience_skills(
             continue
         existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
         existing_usage = int(existing_payload.get("usage_count", 0) or 0)
-        evidence_ids = [str(item.id) for item in items[:4]]
+        source_experiences: list[dict] = []
+        source_experience_ids: list[str] = []
+        source_mission_run_ids: list[str] = []
+        source_worker_ids: list[str] = []
+        task_evidence_ids: list[str] = []
+        for item in items:
+            experience_id = str(item.id or "").strip()
+            if experience_id:
+                source_experience_ids.append(experience_id)
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            delivery = metadata.get("mission_delivery") if isinstance(metadata.get("mission_delivery"), dict) else {}
+            source_record = {"experience_id": experience_id} if experience_id else {}
+            for key in (
+                "mission_run_id",
+                "mission_node_id",
+                "primary_worker_id",
+                "evidence_ids",
+                "validation_evidence",
+                "decision_trace",
+            ):
+                value = delivery.get(key)
+                if value is not None and value != "":
+                    source_record[key] = value
+            if source_record:
+                source_experiences.append(source_record)
+            mission_run_id = str(delivery.get("mission_run_id") or "").strip()
+            worker_id = str(delivery.get("primary_worker_id") or "").strip()
+            if mission_run_id:
+                source_mission_run_ids.append(mission_run_id)
+            if worker_id:
+                source_worker_ids.append(worker_id)
+            evidence = delivery.get("evidence_ids")
+            if isinstance(evidence, list):
+                task_evidence_ids.extend(str(value) for value in evidence if str(value or "").strip())
+
+        source_experience_ids = list(dict.fromkeys(source_experience_ids))
+        source_mission_run_ids = list(dict.fromkeys(source_mission_run_ids))
+        source_worker_ids = list(dict.fromkeys(source_worker_ids))
+        task_evidence_ids = list(dict.fromkeys(task_evidence_ids))
+        evidence_ids = task_evidence_ids
         summaries = [str(item.output_summary or "").strip() for item in items[:3] if str(item.output_summary or "").strip()]
         existing_params = existing_payload.get("parameters", {}) if isinstance(existing_payload.get("parameters"), dict) else {}
-        existing_evidence_ids = existing_params.get("evidence_ids", [])
+        existing_experience_ids = existing_params.get("source_experience_ids", [])
         existing_avg_quality = safe_float(existing_params.get("avg_quality_score"), 0.0)
-        if existing_payload and list(existing_evidence_ids) == evidence_ids and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001:
+        if existing_payload and list(existing_experience_ids) == source_experience_ids and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001:
             continue
         description = (
             f"基于 {group.get('count')} 条稳定 {domain}/{task_type} 经验自动沉淀的技能草稿，"
@@ -312,6 +351,10 @@ def auto_draft_stable_experience_skills(
                 "stable_experience_count": int(group.get("count") or 0),
                 "avg_quality_score": float(group.get("avg_quality") or 0.0),
                 "evidence_ids": evidence_ids,
+                "source_experience_ids": source_experience_ids,
+                "source_mission_run_ids": source_mission_run_ids,
+                "source_worker_ids": source_worker_ids,
+                "source_experiences": source_experiences,
                 "example_outputs": summaries,
             },
             trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
@@ -346,6 +389,9 @@ def auto_draft_stable_experience_skills(
                 "skill_id": skill.id,
                 "source": "stable_experience_cluster",
                 "evidence_ids": evidence_ids,
+                "source_experience_ids": source_experience_ids,
+                "source_mission_run_ids": source_mission_run_ids,
+                "source_worker_ids": source_worker_ids,
                 "stable_experience_count": int(group.get("count") or 0),
                 "verified": bool(verified_info),
             },
@@ -356,6 +402,9 @@ def auto_draft_stable_experience_skills(
             "stable_experience_count": int(group.get("count") or 0),
             "avg_quality_score": float(group.get("avg_quality") or 0.0),
             "evidence_ids": evidence_ids,
+            "source_experience_ids": source_experience_ids,
+            "source_mission_run_ids": source_mission_run_ids,
+            "source_worker_ids": source_worker_ids,
         })
     return drafted
 
