@@ -74,6 +74,29 @@
               <div class="text-xs font-medium text-slate-500">验证证据</div>
               <pre class="mt-1 overflow-auto rounded bg-slate-50 p-3 text-xs">{{ JSON.stringify(selectedSkill.parameters.validation_evidence, null, 2) }}</pre>
             </div>
+            <div v-if="selectedSkill.provenance?.source_experiences?.length" class="mt-3">
+              <div class="text-xs font-medium text-slate-500">聚合来源经验（{{ selectedSkill.provenance.source_experiences.length }} 条）</div>
+              <div class="mt-2 space-y-2">
+                <div
+                  v-for="source in selectedSkill.provenance.source_experiences"
+                  :key="source.experience_id || source.mission_run_id || source.mission_node_id"
+                  class="rounded bg-slate-50 p-3 text-xs"
+                >
+                  <div class="font-medium text-slate-700 break-all">Experience: {{ source.experience_id || '未记录' }}</div>
+                  <div class="mt-1 break-all">Mission: {{ source.mission_run_id || '未记录' }} <span v-if="source.mission_node_id">/ Node: {{ source.mission_node_id }}</span></div>
+                  <div class="mt-1 break-all">Worker: {{ source.primary_worker_id || '未记录' }}</div>
+                  <div class="mt-1">任务证据: {{ source.evidence_ids?.length || 0 }} 条</div>
+                  <details v-if="source.validation_evidence || source.decision_trace" class="mt-2">
+                    <summary class="cursor-pointer text-slate-500">查看该经验的验证与决策记录</summary>
+                    <pre class="mt-1 overflow-auto rounded bg-white p-2">{{ JSON.stringify({ validation_evidence: source.validation_evidence, decision_trace: source.decision_trace }, null, 2) }}</pre>
+                  </details>
+                </div>
+              </div>
+            </div>
+            <div v-if="selectedSkill.provenance?.source_mission_run_ids?.length || selectedSkill.provenance?.source_worker_ids?.length" class="mt-3 text-xs text-slate-600">
+              <div>来源 Missions: {{ selectedSkill.provenance?.source_mission_run_ids?.join(', ') || '未记录' }}</div>
+              <div class="mt-1">来源 Workers: {{ selectedSkill.provenance?.source_worker_ids?.join(', ') || '未记录' }}</div>
+            </div>
             <div v-if="selectedSkill.parameters?.decision_trace" class="mt-3">
               <div class="text-xs font-medium text-slate-500">决策轨迹</div>
               <pre class="mt-1 overflow-auto rounded bg-slate-50 p-3 text-xs">{{ JSON.stringify(selectedSkill.parameters.decision_trace, null, 2) }}</pre>
