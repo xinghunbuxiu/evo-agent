@@ -600,8 +600,6 @@ class MissionTracePropagationTests(unittest.TestCase):
             )
             self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
             skill = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
-            experience_path = Path(tmp) / ".tenants" / "tenant-a" / "experiences" / "javascript" / "mission_delivery_run-42.json"
-            experience = json.loads(experience_path.read_text(encoding="utf-8"))
 
         self.assertEqual(result["skill_id"], "skill_javascript_reverse_vue_delivery")
         expected_evidence = {
@@ -616,13 +614,6 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(skill["parameters"]["evidence_ids"], ["analyze-17", "reconstruct-29"])
         self.assertEqual(skill["parameters"]["decision_trace"], trace)
         self.assertEqual(skill["parameters"]["validation_evidence"], expected_evidence)
-        experience_lineage = experience["metadata"]["mission_delivery"]
-        self.assertEqual(experience_lineage["mission_run_id"], skill["parameters"]["mission_run_id"])
-        self.assertEqual(experience_lineage["mission_node_id"], skill["parameters"]["mission_node_id"])
-        self.assertEqual(experience_lineage["primary_worker_id"], skill["parameters"]["primary_worker_id"])
-        self.assertEqual(experience_lineage["evidence_ids"], skill["parameters"]["evidence_ids"])
-        self.assertEqual(experience_lineage["decision_trace"], skill["parameters"]["decision_trace"])
-        self.assertEqual(experience_lineage["validation_evidence"], expected_evidence)
         self.assertEqual(len(growth_events), 1)
         metadata = growth_events[0]["metadata"]
         self.assertEqual(metadata["mission_run_id"], skill["parameters"]["mission_run_id"])
@@ -631,6 +622,77 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(metadata["decision_trace"], skill["parameters"]["decision_trace"])
         self.assertEqual(metadata["validation_evidence"], expected_evidence)
 
+
+    def test_mission_delivery_experience_persists_same_worker_and_evidence_lineage_as_skill(self):
+        import json
+        from workers.javascript_reverse import runtime as javascript_reverse_runtime
+
+        trace = [{
+            "step": "validation",
+            "rule_id": "mission.delivery.quality_gate.v1",
+            "result": "passed",
+            "evidence": {"evaluation_score": 0.94},
+        }]
+        snapshots = {
+            "analyze": {"task_id": "analyze-17", "summary": "Vue application"},
+            "reconstruct": {
+                "task_id": "reconstruct-29",
+                "summary": "Vue reconstructed project",
+                "evaluation_verdict": "pass",
+                "evaluation_score": 0.94,
+                "evaluation_metrics": {"components": 8, "has_target_dir": True},
+                "strategy_id": "strategy-5",
+            },
+        }
+        growth_events = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(javascript_reverse_runtime, "TenantManager", return_value=object()), \
+             mock.patch.object(knowledge_runtime, "maybe_auto_verify_skill_candidate", return_value=None):
+            result = javascript_reverse_runtime.complete_javascript_reverse_promotion_action(
+                workspace=Path(tmp),
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "run-42",
+                    "mission_kind": "javascript_reverse",
+                    "goal": "restore Vue application",
+                    "runtime_route": {"primary_worker_id": "worker-vue"},
+                    "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": trace}]},
+                    "work_type_summary": {},
+                },
+                action={"node_id": "promote_knowledge", "decision_trace": trace},
+                analyze_task="analyze",
+                reconstruct_task="reconstruct",
+                inherited_skills=[],
+                skill_ids_from_items=lambda items: [],
+                extract_task_snapshot=lambda task: snapshots[task],
+                resolve_effective_growth_policy=lambda **kwargs: {},
+                infer_framework_hint_from_delivery=lambda payload: "vue",
+                safe_float=lambda value, default: float(value) if value is not None else default,
+                create_mission_delivery_skill_candidate=lambda **kwargs: knowledge_runtime.create_mission_delivery_skill_candidate(
+                    **kwargs,
+                    record_growth_event=lambda *args, **event: growth_events.append(event),
+                ),
+                build_snapshot_signature=lambda snapshot: {"signature": "snapshot-29"},
+                record_growth_event=lambda *args, **event: growth_events.append(event),
+                growth_policy_decision_label=lambda policy: "tenant_only",
+                effective_platform_promotion_status=lambda policy: "candidate",
+            )
+            experience_path = Path(tmp) / ".tenants" / "tenant-a" / "experiences" / "javascript" / "mission_delivery_run-42.json"
+            experience = json.loads(experience_path.read_text(encoding="utf-8"))
+
+        lineage = experience["metadata"]["mission_delivery"]
+        self.assertEqual(lineage["mission_run_id"], "run-42")
+        self.assertEqual(lineage["mission_node_id"], "promote_knowledge")
+        self.assertEqual(lineage["primary_worker_id"], "worker-vue")
+        self.assertEqual(lineage["evidence_ids"], ["analyze-17", "reconstruct-29"])
+        self.assertEqual(lineage["decision_trace"], trace)
+        self.assertEqual(lineage["validation_evidence"], {
+            "verdict": "pass",
+            "evaluation_score": 0.94,
+            "analyze_task_id": "analyze-17",
+            "reconstruct_task_id": "reconstruct-29",
+        })
+        self.assertEqual(result["promotion"]["experience_id"], "mission_delivery_run-42")
 
     def test_runtime_authorizes_matching_ready_worker_and_binds_evidence_to_real_task(self):
         from types import SimpleNamespace
