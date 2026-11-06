@@ -668,10 +668,7 @@ class MissionTracePropagationTests(unittest.TestCase):
                 resolve_effective_growth_policy=lambda **kwargs: {},
                 infer_framework_hint_from_delivery=lambda payload: "vue",
                 safe_float=lambda value, default: float(value) if value is not None else default,
-                create_mission_delivery_skill_candidate=lambda **kwargs: knowledge_runtime.create_mission_delivery_skill_candidate(
-                    **kwargs,
-                    record_growth_event=lambda *args, **event: growth_events.append(event),
-                ),
+                create_mission_delivery_skill_candidate=knowledge_runtime.create_mission_delivery_skill_candidate,
                 build_snapshot_signature=lambda snapshot: {"signature": "snapshot-29"},
                 record_growth_event=lambda *args, **event: growth_events.append(event),
                 growth_policy_decision_label=lambda policy: "tenant_only",
