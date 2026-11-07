@@ -23,6 +23,7 @@ from .execution_results import EXECUTION_RESULT_SCHEMA
 
 BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v3"
 BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v3"
+SKILL_ARTIFACT_RESOLUTION_SCHEMA = "mission.skill-artifact-resolution.v1"
 _SKILL_BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -234,6 +235,7 @@ def verify_broker_response(
 __all__ = [
     "BROKER_REQUEST_SCHEMA",
     "BROKER_RESPONSE_SCHEMA",
+    "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
     "BROKER_SIGNATURE_ALGORITHM",
     "build_broker_request",
     "verify_broker_response",
