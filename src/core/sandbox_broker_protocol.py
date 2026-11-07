@@ -21,8 +21,9 @@ from .execution_profiles import ExecutionProfileSpec
 from .execution_results import EXECUTION_RESULT_SCHEMA
 
 
-BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v2"
-BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v2"
+BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v3"
+BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v3"
+_SKILL_BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -51,14 +52,40 @@ def _canonical_json(value: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | None = None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != _SKILL_BINDING_FIELDS:
+        raise ValueError("skill_binding has unsupported or missing fields")
+    if value.get("schema_version") != "mission.skill-replay-binding.v1":
+        raise ValueError("unsupported Skill replay binding schema")
+    skill_id, version, digest, trust = (value.get("skill_id"), value.get("skill_version"),
+                                        value.get("content_sha256"), value.get("trust_level"))
+    if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
+        raise ValueError("skill_binding skill_id is invalid")
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
+        raise ValueError("skill_binding skill_version is invalid")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("skill_binding content_sha256 is invalid")
+    if trust not in {"verified", "cloud"}:
+        raise ValueError("skill_binding trust_level is invalid")
+    context = _normalize_mission_context(value.get("mission_context"))
+    if expected_context is not None and context != _normalize_mission_context(expected_context):
+        raise ValueError("skill_binding mission_context does not match Broker request")
+    return {"schema_version": value["schema_version"], "skill_id": skill_id, "skill_version": version,
+            "content_sha256": digest, "trust_level": trust, "mission_context": context}
+
+
 def build_broker_request(
-    workspace_id: str, spec: ExecutionProfileSpec, *, mission_context: dict[str, str], request_id: str | None = None,
+    workspace_id: str, spec: ExecutionProfileSpec, *, mission_context: dict[str, str],
+    request_id: str | None = None, skill_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a path-free request; the privileged broker maps workspace_id to a root."""
     workspace_id = str(workspace_id or "").strip()
     if not _WORKSPACE_ID_RE.fullmatch(workspace_id):
         raise ValueError("workspace_id must be a registered opaque identifier")
     mission_context = _normalize_mission_context(mission_context)
+    skill_binding = _normalize_skill_binding(skill_binding, expected_context=mission_context)
     request_id = str(request_id or uuid.uuid4()).lower()
     if not _REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError("request_id must be a UUID")
@@ -84,6 +111,7 @@ def build_broker_request(
         "request_id": request_id,
         "workspace_id": workspace_id,
         "mission_context": mission_context,
+        "skill_binding": skill_binding,
         "profile_id": spec.profile_id,
         "target": target,
         "timeout_seconds": spec.timeout_seconds,
@@ -100,11 +128,12 @@ def verify_broker_response(
     expected_mission_context: dict[str, str],
     expected_profile_id: str,
     expected_target: str,
+    expected_skill_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify broker attestation before returning its signed execution result."""
     if not isinstance(response, dict):
         raise ValueError("broker response must be an object")
-    if set(response) != {"schema_version", "request_id", "workspace_id", "mission_context", "result", "signature"}:
+    if set(response) != {"schema_version", "request_id", "workspace_id", "mission_context", "skill_binding", "skill_artifact", "result", "signature"}:
         raise ValueError("broker response has unsupported or missing fields")
     if response.get("schema_version") != BROKER_RESPONSE_SCHEMA:
         raise ValueError("unsupported broker response schema")
@@ -117,6 +146,20 @@ def verify_broker_response(
     mission_context = _normalize_mission_context(response.get("mission_context"))
     if mission_context != _normalize_mission_context(expected_mission_context):
         raise ValueError("broker response mission_context does not match the requested task")
+
+    expected_binding = _normalize_skill_binding(expected_skill_binding, expected_context=mission_context)
+    response_binding = _normalize_skill_binding(response.get("skill_binding"), expected_context=mission_context)
+    if response_binding != expected_binding:
+        raise ValueError("broker response Skill binding does not match request")
+    artifact = response.get("skill_artifact")
+    if response_binding is None:
+        if artifact is not None:
+            raise ValueError("unexpected Skill artifact resolution")
+    elif (not isinstance(artifact, dict)
+          or set(artifact) != {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level"}
+          or artifact.get("schema_version") != "mission.skill-artifact-resolution.v1"
+          or any(artifact.get(k) != response_binding[k] for k in ("skill_id", "skill_version", "content_sha256", "trust_level"))):
+        raise ValueError("broker Skill artifact resolution does not match request")
 
     result = response.get("result")
     signature = response.get("signature")
@@ -178,6 +221,8 @@ def verify_broker_response(
                 "request_id": expected_request_id,
                 "workspace_id": expected_workspace_id,
                 "mission_context": mission_context,
+                "skill_binding": response_binding,
+                "skill_artifact": artifact,
                 "result": result,
             }),
         )
