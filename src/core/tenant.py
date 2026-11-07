@@ -25,6 +25,9 @@ DEFAULT_EXTERNAL_LEARNING_POLICY = {
     "allow_enterprise_sources": True,
     "source_priority": ["local_memory", "platform_shared", "enterprise_repo", "official_docs", "web_search", "ai_assist"],
     "validation_required": True,
+    # Automatic repair is opt-in; zero attempts keeps it disabled.
+    "auto_repair_enabled": False,
+    "max_repair_attempts": 0,
     # OpenAI-compatible model provider (DeepSeek / local gateway / etc.)
     "model_provider": {
         "enabled": False,
@@ -334,6 +337,15 @@ class TenantManager:
             **current,
         }
         raw_provider = current.get("model_provider") if isinstance(current.get("model_provider"), dict) else {}
+        merged["auto_repair_enabled"] = bool(
+            current.get("auto_repair_enabled", DEFAULT_EXTERNAL_LEARNING_POLICY["auto_repair_enabled"])
+        )
+        try:
+            merged["max_repair_attempts"] = max(
+                0, int(current.get("max_repair_attempts", DEFAULT_EXTERNAL_LEARNING_POLICY["max_repair_attempts"]) or 0)
+            )
+        except (TypeError, ValueError):
+            merged["max_repair_attempts"] = 0
         merged["model_provider"] = {
             **default_provider,
             **raw_provider,
@@ -356,6 +368,8 @@ class TenantManager:
         source_priority: list[str],
         validation_required: bool,
         model_provider: dict | None = None,
+        auto_repair_enabled: bool | None = None,
+        max_repair_attempts: int | None = None,
     ) -> Tenant:
         tenant = self.get_tenant(tenant_id)
         if tenant is None:
@@ -387,12 +401,31 @@ class TenantManager:
             "api_key": str(next_provider.get("api_key") or "").strip(),
             "model": str(next_provider.get("model") or "").strip(),
         }
+        existing_policy = existing_policy if isinstance(existing_policy, dict) else {}
+        configured_max_attempts = (
+            max_repair_attempts
+            if max_repair_attempts is not None
+            else existing_policy.get("max_repair_attempts", DEFAULT_EXTERNAL_LEARNING_POLICY["max_repair_attempts"])
+        )
+        try:
+            configured_max_attempts = max(0, int(configured_max_attempts or 0))
+        except (TypeError, ValueError):
+            configured_max_attempts = 0
+        configured_auto_repair = (
+            bool(auto_repair_enabled)
+            if auto_repair_enabled is not None
+            else bool(existing_policy.get("auto_repair_enabled", DEFAULT_EXTERNAL_LEARNING_POLICY["auto_repair_enabled"]))
+        )
+        if not configured_auto_repair:
+            configured_max_attempts = 0
         tenant.config["external_learning_policy"] = {
             "allow_ai_assist": allow_ai_assist,
             "allow_web_research": allow_web_research,
             "allow_enterprise_sources": allow_enterprise_sources,
             "source_priority": source_priority or list(DEFAULT_EXTERNAL_LEARNING_POLICY["source_priority"]),
             "validation_required": validation_required,
+            "auto_repair_enabled": configured_auto_repair,
+            "max_repair_attempts": configured_max_attempts,
             "model_provider": next_provider,
         }
         self._save_tenant(tenant)

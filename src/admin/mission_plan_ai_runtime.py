@@ -22,6 +22,8 @@ def _safe_task_context(context: dict[str, Any]) -> dict[str, Any]:
         "work_type_required_inputs", "work_type_optional_inputs",
         "source_path", "source_dir", "bundle_path", "channel",
         "deliverable_goal", "goal_hint", "acceptance", "required_capabilities",
+        "repair_mode", "repair_attempt_count", "repair_of_mission_run_id",
+        "repair_failure_evidence",
     )
     return {key: context[key] for key in allowed if key in context}
 
@@ -41,19 +43,26 @@ def build_worker_mission_plan_messages(
             reference_template if isinstance(reference_template, dict) else {}
         ),
     }
+    system_prompt = (
+        "你是被指派的专业 Worker。请先理解目标，再根据自己的岗位能力、输入条件、"
+        "可复用参考流程和验收要求，制定本次任务真正需要的步骤。不要机械照搬参考模板；"
+        "步骤数量和依赖必须由目标决定。只返回 JSON 对象，不输出 Markdown 或思维链。"
+        "JSON 格式：{title,description,primary_capability_type,delivery,tasks}。"
+        "tasks 为 1-24 个对象，每项必须包含 id,title,objective,task_type,capability_type,acceptance；"
+        "可选 depends_on（id 数组）、parallel_safe（布尔值）、verification_contract（对象）。"
+        "不要提出超出 manifest 能力范围的任务，不要要求执行未授权命令、访问密钥或绕过权限。"
+        "Mission 主脑会独立审核计划、依赖、权限和验收条件；你的输出不是执行授权。"
+    )
+    if context.get("repair_mode") == "fix_test":
+        system_prompt += (
+            " 当前是失败修复轮次。必须先分析 repair_failure_evidence 中的失败事实和未通过检查，"
+            "选择针对根因的最小修复方案；不能原样重复失败步骤。计划必须包含实际修复动作以及"
+            "修复后的回归测试/重新验收动作。若证据不足，应把补充输入或诊断作为计划步骤，不能假定修复成功。"
+        )
     return [
         {
             "role": "system",
-            "content": (
-                "你是被指派的专业 Worker。请先理解目标，再根据自己的岗位能力、输入条件、"
-                "可复用参考流程和验收要求，制定本次任务真正需要的步骤。不要机械照搬参考模板；"
-                "步骤数量和依赖必须由目标决定。只返回 JSON 对象，不输出 Markdown 或思维链。"
-                "JSON 格式：{title,description,primary_capability_type,delivery,tasks}。"
-                "tasks 为 1-24 个对象，每项必须包含 id,title,objective,task_type,capability_type,acceptance；"
-                "可选 depends_on（id 数组）、parallel_safe（布尔值）、verification_contract（对象）。"
-                "不要提出超出 manifest 能力范围的任务，不要要求执行未授权命令、访问密钥或绕过权限。"
-                "Mission 主脑会独立审核计划、依赖、权限和验收条件；你的输出不是执行授权。"
-            ),
+            "content": system_prompt,
         },
         {
             "role": "user",
@@ -88,6 +97,12 @@ def create_worker_mission_plan_proposer(tenant_manager):
         worker_manifest: dict[str, Any],
         reference_template: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        try:
+            policy = tenant_manager.get_external_learning_policy(tenant_id) if tenant_manager else {}
+        except Exception:
+            policy = {}
+        if isinstance(policy, dict) and policy.get("allow_ai_assist") is False:
+            return {"status": "disabled", "detail": "tenant_policy_disables_ai_assist"}
         provider = resolve_model_provider(tenant_manager, tenant_id)
         if not model_provider_ready(provider):
             return {

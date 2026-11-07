@@ -116,6 +116,22 @@ def register_tenant_policy_routes(
         if not isinstance(source_priority, list):
             return error_response("source_priority 必须是数组", 400)
 
+        current_policy = tenant_manager.get_external_learning_policy(tenant_id)
+        auto_repair_enabled = bool(data.get(
+            "auto_repair_enabled", current_policy.get("auto_repair_enabled", False)
+        ))
+        raw_max_attempts = data.get(
+            "max_repair_attempts", current_policy.get("max_repair_attempts", 0)
+        )
+        try:
+            max_repair_attempts = int(raw_max_attempts)
+        except (TypeError, ValueError):
+            return error_response("max_repair_attempts 必须是非负整数", 400)
+        if max_repair_attempts < 0 or max_repair_attempts > 20:
+            return error_response("max_repair_attempts 必须在 0 到 20 之间", 400)
+        if auto_repair_enabled and max_repair_attempts < 1:
+            return error_response("启用自动修复时 max_repair_attempts 至少为 1", 400)
+
         tenant_manager.set_external_learning_policy(
             tenant_id=tenant_id,
             allow_ai_assist=bool(data.get("allow_ai_assist", True)),
@@ -124,6 +140,8 @@ def register_tenant_policy_routes(
             source_priority=[item for item in source_priority if isinstance(item, str)],
             validation_required=bool(data.get("validation_required", True)),
             model_provider=data.get("model_provider") if isinstance(data.get("model_provider"), dict) else None,
+            auto_repair_enabled=auto_repair_enabled,
+            max_repair_attempts=max_repair_attempts,
         )
 
         from admin.model_provider_runtime import mask_model_provider

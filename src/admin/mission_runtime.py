@@ -526,6 +526,103 @@ def derive_follow_up_context(mission_run: dict) -> dict:
     return context
 
 
+def _repairable_failure_actions(mission_run: dict) -> list[dict]:
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    return [
+        item for item in actions
+        if isinstance(item, dict)
+        and item.get("action_type") == "task_submitted"
+        and item.get("status") in {"failed", "verification_failed"}
+    ]
+
+
+def should_auto_repair_mission(mission_run: dict, tenant_policy: dict | None = None) -> bool:
+    """Only repair explicit failed attempts when tenant policy enables a finite budget."""
+    if not isinstance(mission_run, dict) or not isinstance(tenant_policy, dict):
+        return False
+    if tenant_policy.get("auto_repair_enabled") is not True:
+        return False
+    try:
+        max_attempts = max(0, int(tenant_policy.get("max_repair_attempts") or 0))
+        attempts = max(0, int(
+            (mission_run.get("context") or {}).get("repair_attempt_count") or 0
+        ))
+    except (TypeError, ValueError):
+        return False
+    if max_attempts < 1 or attempts >= max_attempts:
+        return False
+    if mission_run.get("auto_repair_triggered_run_id"):
+        return False
+    if str(mission_run.get("status") or "") not in {"needs_learning", "partially_completed"}:
+        return False
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    if any(
+        isinstance(item, dict)
+        and item.get("action_type") in {"task_submitted", "failure_learning_ticket"}
+        and item.get("status") in {"submitted", "running", "awaiting_verification", "validating"}
+        for item in actions
+    ):
+        return False
+    return bool(_repairable_failure_actions(mission_run))
+
+
+def derive_repair_goal(mission_run: dict) -> str:
+    return str(mission_run.get("goal") or "").strip()
+
+
+def derive_repair_context(mission_run: dict) -> dict:
+    """Carry bounded, factual failure evidence into the next Worker planning attempt."""
+    context = copy.deepcopy(
+        mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
+    )
+    failures = _repairable_failure_actions(mission_run)
+    evidence = []
+    for action in failures[:5]:
+        verification = action.get("independent_verification", {})
+        verification = verification if isinstance(verification, dict) else {}
+        checks = verification.get("checks", []) if isinstance(verification.get("checks"), list) else []
+        task_result = action.get("task_result", {}) if isinstance(action.get("task_result"), dict) else {}
+        evidence.append({
+            "node_id": str(action.get("node_id") or "")[:80],
+            "title": str(action.get("title") or "")[:240],
+            "task_id": str(action.get("task_id") or "")[:120],
+            "failure_kind": (
+                "verification_failure"
+                if action.get("status") == "verification_failed"
+                else "execution_failure"
+            ),
+            "execution_status": str(action.get("execution_status") or "")[:40],
+            "verification_state": str(action.get("verification_state") or "")[:40],
+            "failure_detail": str(action.get("detail") or "")[:1000],
+            "worker_result_summary": str(task_result.get("summary") or "")[:1000],
+            "verification_checks": [
+                {
+                    "check_id": str(check.get("check_id") or "")[:120],
+                    "passed": check.get("passed") is True,
+                }
+                for check in checks[:20] if isinstance(check, dict)
+            ],
+            "acceptance": str(action.get("acceptance") or "")[:1000],
+        })
+    context["previous_mission_run_id"] = mission_run.get("mission_run_id")
+    context["autonomy_session_id"] = (
+        mission_run.get("autonomy_session_id")
+        or context.get("autonomy_session_id")
+        or mission_run.get("mission_run_id")
+    )
+    context["root_mission_run_id"] = (
+        mission_run.get("root_mission_run_id")
+        or context.get("root_mission_run_id")
+        or mission_run.get("mission_run_id")
+    )
+    context["repair_mode"] = "fix_test"
+    context["repair_attempt_count"] = int(context.get("repair_attempt_count") or 0) + 1
+    context["repair_of_mission_run_id"] = mission_run.get("mission_run_id")
+    context["repair_failure_evidence"] = evidence
+    context["auto_repair"] = True
+    return context
+
+
 def should_auto_continue_mission(mission_run: dict) -> bool:
     if not isinstance(mission_run, dict):
         return False
@@ -601,9 +698,48 @@ def refresh_mission_runs(
     ]
 
     if callable(mission_starter):
+        repair_started = False
         for current in refreshed_items:
-            if not should_auto_continue_mission(current):
+            tenant_id = str(current.get("tenant_id") or "default")
+            try:
+                tenant_policy = tenant_manager.get_external_learning_policy(tenant_id)
+            except Exception:
+                tenant_policy = {}
+            if not should_auto_repair_mission(current, tenant_policy):
                 continue
+            repair_context = derive_repair_context(current)
+            payload = {
+                "tenant_id": tenant_id,
+                "work_type_id": (
+                    current.get("work_type", {}).get("work_type_id")
+                    if isinstance(current.get("work_type"), dict)
+                    else None
+                ),
+                "mission_kind": current.get("mission_kind"),
+                "goal": derive_repair_goal(current),
+                "context": repair_context,
+            }
+            latest, error = mission_starter(payload, refresh_runs=False)
+            if error is not None or not isinstance(latest, dict):
+                current["auto_repair_status"] = "failed_to_start"
+                current["auto_repair_error"] = (
+                    str(error.get("error") or error.get("message") or "自动修复任务启动失败")[:500]
+                    if isinstance(error, dict) else str(error or "自动修复任务启动失败")[:500]
+                )
+                continue
+            current["auto_repair_triggered_at"] = datetime.now().isoformat()
+            current["auto_repair_triggered_run_id"] = latest.get("mission_run_id")
+            current["auto_repair_status"] = "triggered"
+            latest["auto_repair_source_mission_run_id"] = current.get("mission_run_id")
+            latest["repair_attempt_number"] = repair_context.get("repair_attempt_count")
+            refreshed_items.insert(0, latest)
+            repair_started = True
+            break
+
+        if not repair_started:
+            for current in refreshed_items:
+                if not should_auto_continue_mission(current):
+                    continue
             payload = {
                 "tenant_id": current.get("tenant_id") or "default",
                 "work_type_id": (
@@ -630,8 +766,8 @@ def refresh_mission_runs(
             current["auto_continue_triggered_run_id"] = latest.get("mission_run_id")
             current["auto_continue_status"] = "triggered"
             latest["auto_continue_source_mission_run_id"] = current.get("mission_run_id")
-            refreshed_items.insert(0, latest)
-            break
+                refreshed_items.insert(0, latest)
+                break
 
     for current in refreshed_items:
         if not isinstance(current, dict):
