@@ -1,4 +1,5 @@
 """Tests for the broker-owned immutable Skill artifact store."""
+import base64
 import json
 import os
 import sys
@@ -7,9 +8,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from core.skill_artifact_store import SkillArtifactStore, SkillArtifactStoreError
+from core.skill_artifact_store import (
+    SkillArtifactStore, SkillArtifactStoreError, VALIDATION_ATTESTATION_SCHEMA,
+)
 
 
 class SkillArtifactStoreTests(unittest.TestCase):
@@ -17,7 +22,12 @@ class SkillArtifactStoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / "trusted-artifacts"
         self.root.mkdir(mode=0o700)
-        self.store = SkillArtifactStore(self.root)
+        self.validator_key = Ed25519PrivateKey.generate()
+        self.store = SkillArtifactStore(
+            self.root,
+            validator_public_key=self.validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
         self.skill = SimpleNamespace(
             id="skill_android_login",
             version="1.2.0",
@@ -34,8 +44,36 @@ class SkillArtifactStoreTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def _attestation(self, skill=None, *, tenant_id="tenant-one"):
+        candidate = skill or self.skill
+        import hashlib
+        payload = {
+            "schema_version": VALIDATION_ATTESTATION_SCHEMA,
+            "validation_id": "validation-001",
+            "validator_id": "independent-validator",
+            "tenant_id": tenant_id,
+            "skill_id": candidate.id,
+            "skill_version": candidate.version,
+            "content_sha256": hashlib.sha256(candidate.code.encode("utf-8")).hexdigest(),
+            "passed": True,
+        }
+        signature = self.validator_key.sign(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8"))
+        return {
+            **payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "validator-test-key",
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
+
     def _publish_binding(self):
-        identity = self.store.publish(tenant_id="tenant-one", skill=self.skill)
+        identity = self.store.publish(
+            tenant_id="tenant-one", skill=self.skill,
+            validation_attestation=self._attestation(),
+        )
         return {
             "schema_version": "mission.skill-replay-binding.v1",
             "skill_id": identity["skill_id"],
@@ -62,7 +100,10 @@ class SkillArtifactStoreTests(unittest.TestCase):
                 code=code, trust_level=trust,
             )
             with self.subTest(trust=trust, code=code), self.assertRaises(SkillArtifactStoreError):
-                self.store.publish(tenant_id="tenant-one", skill=candidate)
+                self.store.publish(
+                    tenant_id="tenant-one", skill=candidate,
+                    validation_attestation=self._attestation(candidate),
+                )
 
     def test_rejects_duplicate_version_instead_of_overwriting(self):
         self._publish_binding()
@@ -71,7 +112,10 @@ class SkillArtifactStoreTests(unittest.TestCase):
             code="def run():\n    return False\n", trust_level="verified",
         )
         with self.assertRaisesRegex(SkillArtifactStoreError, "already exists"):
-            self.store.publish(tenant_id="tenant-one", skill=changed)
+            self.store.publish(
+                tenant_id="tenant-one", skill=changed,
+                validation_attestation=self._attestation(changed),
+            )
 
     def test_rejects_tampered_digest_and_artifact_content(self):
         binding = self._publish_binding()
@@ -115,7 +159,10 @@ class SkillArtifactStoreTests(unittest.TestCase):
         outside.mkdir(mode=0o700)
         (self.root / "tenant-one").symlink_to(outside, target_is_directory=True)
         with self.assertRaisesRegex(SkillArtifactStoreError, "symlink"):
-            self.store.publish(tenant_id="tenant-one", skill=self.skill)
+            self.store.publish(
+                tenant_id="tenant-one", skill=self.skill,
+                validation_attestation=self._attestation(),
+            )
 
 
 if __name__ == "__main__":
