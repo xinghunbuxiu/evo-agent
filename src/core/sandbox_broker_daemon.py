@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .sandbox_broker import BrokerReplayStore, SandboxBrokerService
+from .skill_artifact_store import SkillArtifactStore, SkillArtifactStoreError
 from .sandbox_broker_transport import serve_listener
 from .sandbox_docker_executor import DockerSandboxExecutor
 
@@ -23,7 +24,8 @@ LOGGER = logging.getLogger("evo.sandbox_broker")
 DEFAULT_CONFIG = Path("/etc/evo-sandbox-broker/config.json")
 _CONFIG_FIELDS = {
     "workspace_roots", "replay_database", "signing_key", "key_id",
-    "image", "allowed_uids", "max_workers",
+    "image", "allowed_uids", "max_workers", "artifact_store_root",
+    "validator_public_key", "validator_key_id",
 }
 
 
@@ -78,6 +80,20 @@ def _load_signing_key(path_value: Any) -> Ed25519PrivateKey:
     return key
 
 
+def _load_validator_public_key(path_value: Any) -> bytes:
+    path = _safe_regular_file(path_value, field="validator_public_key")
+    info = path.stat()
+    if info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022:
+        raise BrokerDaemonConfigurationError("validator public key must be broker-controlled and not group/world writable")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise BrokerDaemonConfigurationError("validator public key is unavailable") from exc
+    if len(raw) != 32:
+        raise BrokerDaemonConfigurationError("validator public key must be 32 raw Ed25519 bytes")
+    return raw
+
+
 def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], int]:
     """Build service only from root-controlled configuration and a pinned image."""
     if not isinstance(config, dict) or set(config) != _CONFIG_FIELDS:
@@ -116,6 +132,18 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 8:
         raise BrokerDaemonConfigurationError("max_workers must be between 1 and 8")
 
+    validator_key_id = config["validator_key_id"]
+    if not isinstance(validator_key_id, str) or not validator_key_id.strip() or len(validator_key_id) > 128:
+        raise BrokerDaemonConfigurationError("validator_key_id is invalid")
+    try:
+        artifact_store = SkillArtifactStore(
+            Path(config["artifact_store_root"]),
+            validator_public_key=_load_validator_public_key(config["validator_public_key"]),
+            validator_key_id=validator_key_id,
+        )
+    except (SkillArtifactStoreError, TypeError, OSError) as exc:
+        raise BrokerDaemonConfigurationError("trusted Skill Artifact Store configuration is invalid") from exc
+
     executor = DockerSandboxExecutor(
         docker_client=DockerSandboxExecutor.connect_docker_socket(),
         image=config["image"],
@@ -126,6 +154,7 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
         executor=executor,
         signing_key=signing_key,
         key_id=key_id,
+        skill_artifact_store=artifact_store,
     )
     return service, tuple(allowed), workers
 
