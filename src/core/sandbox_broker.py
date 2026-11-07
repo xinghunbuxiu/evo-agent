@@ -211,22 +211,15 @@ class SandboxBrokerService:
         if root is None:
             raise BrokerRequestRejected("workspace_id is not registered with this broker")
         binding = validated["skill_binding"]
-        skill_artifact = None
         if binding is not None:
-            if self.skill_artifact_store is None:
-                raise BrokerRequestRejected("trusted Skill Artifact Store is not configured")
-            try:
-                artifact = self.skill_artifact_store.load_for_binding(binding)
-            except Exception as exc:
-                raise BrokerRequestRejected("trusted Skill artifact attestation or digest verification failed") from exc
-            # This is artifact resolution only, not Skill Replay execution.
-            skill_artifact = {
-                "schema_version": "mission.skill-artifact-resolution.v1",
-                "skill_id": artifact.id,
-                "skill_version": artifact.version,
-                "content_sha256": artifact.content_sha256,
-                "trust_level": artifact.trust_level,
-            }
+            # Artifact lookup is not execution. Until a dedicated, isolated
+            # SkillReplayExecutor is configured, never run the request's generic
+            # pytest/unittest target and report it as a Skill Replay result.
+            raise BrokerRequestRejected(
+                "trusted Skill Replay executor is not configured; "
+                "artifact resolution alone cannot authorize generic profile execution"
+            )
+        skill_artifact = None
         self.replay_store.claim(request_id, validated)
 
         spec = resolve_execution_profile(root, {
