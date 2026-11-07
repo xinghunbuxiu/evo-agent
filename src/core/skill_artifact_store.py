@@ -75,7 +75,7 @@ class SkillArtifactStore:
     def __init__(self, root: Path):
         self.root = _secure_directory(Path(root), create=False)
 
-    def _artifact_path(self, tenant_id: str, skill_id: str, version: str) -> Path:
+    def _artifact_path(self, tenant_id: str, skill_id: str, version: str, *, create: bool) -> Path:
         tenant = _identity(tenant_id, "tenant_id", _ID_RE)
         skill = _identity(skill_id, "skill_id", _ID_RE)
         revision = _identity(version, "skill_version", _VERSION_RE)
@@ -89,8 +89,10 @@ class SkillArtifactStore:
                     raise SkillArtifactStoreError("artifact path contains a non-directory or symlink")
                 if info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077:
                     raise SkillArtifactStoreError("artifact path directory permissions are unsafe")
-            else:
+            elif create:
                 directory.mkdir(mode=0o700)
+            else:
+                raise SkillArtifactStoreError("trusted Skill artifact directory is unavailable")
         return skill_dir / f"{revision}.json"
 
     def publish(self, *, tenant_id: str, skill: Any) -> dict[str, str]:
@@ -119,7 +121,7 @@ class SkillArtifactStore:
             "code": code,
         }
         payload = _canonical_json(artifact)
-        path = self._artifact_path(tenant_id, skill_id, version)
+        path = self._artifact_path(tenant_id, skill_id, version, create=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -175,7 +177,7 @@ class SkillArtifactStore:
         if expected_trust not in _TRUST_LEVELS:
             raise SkillArtifactStoreError("Skill replay trust level is not executable")
 
-        path = self._artifact_path(tenant_id, skill_id, version)
+        path = self._artifact_path(tenant_id, skill_id, version, create=False)
         try:
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
