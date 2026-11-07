@@ -178,6 +178,7 @@ def execute_via_broker_attested(
     mission_context: dict[str, str],
     public_key: bytes,
     expected_key_id: str,
+    skill_binding: dict | None = None,
     timeout_seconds: float | None = None,
 ) -> dict:
     """Execute and return both the signed envelope and its verified result.
@@ -185,7 +186,7 @@ def execute_via_broker_attested(
     Persist the complete attestation envelope, not only the result, so the
     Mission verifier can re-check the original signature after task reload.
     """
-    request = build_broker_request(workspace_id, spec, mission_context=mission_context)
+    request = build_broker_request(workspace_id, spec, mission_context=mission_context, skill_binding=skill_binding)
     timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
     response = request_broker(socket_path, request, timeout_seconds=timeout)
     result = verify_broker_response(
@@ -197,6 +198,7 @@ def execute_via_broker_attested(
         expected_mission_context=mission_context,
         expected_profile_id=spec.profile_id,
         expected_target=spec.target,
+        expected_skill_binding=skill_binding,
     )
     return {
         "schema_version": "mission.sandbox-broker-attestation.v1",
@@ -213,6 +215,7 @@ def execute_via_broker(
     mission_context: dict[str, str],
     public_key: bytes,
     expected_key_id: str,
+    skill_binding: dict | None = None,
     timeout_seconds: float | None = None,
 ) -> dict:
     """Execute one fixed profile through the broker and verify its attestation."""
@@ -223,6 +226,7 @@ def execute_via_broker(
         mission_context=mission_context,
         public_key=public_key,
         expected_key_id=expected_key_id,
+        skill_binding=skill_binding,
         timeout_seconds=timeout_seconds,
     )["result"]
 
