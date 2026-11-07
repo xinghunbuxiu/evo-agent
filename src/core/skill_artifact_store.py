@@ -25,7 +25,7 @@ VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v1"
 VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
 _ATTESTATION_FIELDS = {
     "schema_version", "validation_id", "validator_id", "tenant_id",
-    "skill_id", "skill_version", "content_sha256", "passed", "signature",
+    "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
@@ -93,7 +93,7 @@ class SkillArtifactStore:
 
     def _verify_validation_attestation(
         self, attestation: Any, *, tenant_id: str, skill_id: str,
-        version: str, digest: str,
+        version: str, digest: str, trust_level: str,
     ) -> None:
         if not isinstance(attestation, Mapping) or set(attestation) != _ATTESTATION_FIELDS:
             raise SkillArtifactStoreError("validation attestation has unsupported or missing fields")
@@ -108,6 +108,7 @@ class SkillArtifactStore:
             "skill_id": skill_id,
             "skill_version": version,
             "content_sha256": digest,
+            "trust_level": trust_level,
         }
         if any(attestation.get(field) != value for field, value in expected.items()):
             raise SkillArtifactStoreError("validation attestation does not bind this exact Skill artifact")
@@ -164,7 +165,7 @@ class SkillArtifactStore:
         normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
         self._verify_validation_attestation(
             validation_attestation, tenant_id=normalized_tenant,
-            skill_id=skill_id, version=version, digest=digest,
+            skill_id=skill_id, version=version, digest=digest, trust_level=trust,
         )
         artifact = {
             "schema_version": ARTIFACT_SCHEMA,
