@@ -67,7 +67,7 @@ def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | N
         raise ValueError("skill_binding skill_version is invalid")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("skill_binding content_sha256 is invalid")
-    if trust not in {"verified", "cloud"}:
+    if not isinstance(trust, str) or trust not in {"verified", "cloud"}:
         raise ValueError("skill_binding trust_level is invalid")
     context = _normalize_mission_context(value.get("mission_context"))
     if expected_context is not None and context != _normalize_mission_context(expected_context):
