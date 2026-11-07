@@ -175,6 +175,9 @@ class SkillArtifactStore:
             "trust_level": trust,
             "content_sha256": digest,
             "code": code,
+            # Persist the signed validator statement so the Broker can re-verify
+            # provenance using only its pinned public key at every load.
+            "validation_attestation": dict(validation_attestation),
         }
         payload = _canonical_json(artifact)
         path = self._artifact_path(tenant_id, skill_id, version, create=True)
@@ -251,7 +254,7 @@ class SkillArtifactStore:
 
         fields = {
             "schema_version", "tenant_id", "skill_id", "skill_version",
-            "trust_level", "content_sha256", "code",
+            "trust_level", "content_sha256", "code", "validation_attestation",
         }
         if not isinstance(artifact, dict) or set(artifact) != fields:
             raise SkillArtifactStoreError("stored Skill artifact has unsupported or missing fields")
@@ -274,6 +277,16 @@ class SkillArtifactStore:
             raise SkillArtifactStoreError("stored Skill artifact identity does not match replay binding")
         if actual_digest != expected_digest or artifact.get("content_sha256") != actual_digest:
             raise SkillArtifactStoreError("stored Skill artifact content digest mismatch")
+        # Re-check the independent validator signature on every broker load.
+        # A matching file digest alone is not proof that this Skill was validated.
+        self._verify_validation_attestation(
+            artifact.get("validation_attestation"),
+            tenant_id=tenant_id,
+            skill_id=skill_id,
+            version=version,
+            digest=actual_digest,
+            trust_level=expected_trust,
+        )
         return SimpleNamespace(
             id=skill_id,
             version=version,
