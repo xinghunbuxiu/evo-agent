@@ -104,7 +104,11 @@ def create_mission_execution_bindings(
             "observed_error": task_error,
             "observed_signals": observed_signals,
             "worker_result_summary": trim_candidate_text(str(result.get("summary") or ""), 600),
-            "issue_category": "execution_error",
+            "issue_category": (
+                "verification_failure"
+                if str(action.get("status") or "") == "verification_failed"
+                else "execution_error"
+            ),
             "recommended_actions": [
                 "对照实际 error、signals 和输入证据定位失败原因",
                 "复核 strategy 决策是否适用于当前真实场景",
@@ -507,6 +511,8 @@ def create_mission_execution_bindings(
             "learning_completed": 0,
             "dependency_waiting": 0,
             "dependency_replan_required": 0,
+            "verification_failed": 0,
+            "verification_pending": 0,
         }
 
         goal = str(mission_run.get("goal") or "")
@@ -561,14 +567,79 @@ def create_mission_execution_bindings(
                         execution_success=task_status in {"success", "completed"},
                     )
                 if task_status in {"success", "completed"}:
-                    current["status"] = "completed"
-                    current["detail"] = trim_candidate_text(
-                        (task.result or {}).get("summary") or current.get("detail") or f"{current.get('task_type') or 'task'} 已完成"
+                    # Execution completion and acceptance are separate facts. A
+                    # declarative verification contract makes independent evidence
+                    # mandatory; without one, retain the task's existing completion
+                    # semantics rather than inventing an evaluator requirement.
+                    current["execution_status"] = "completed"
+                    contract = current.get("verification_contract")
+                    verification_required = (
+                        isinstance(contract, dict)
+                        and isinstance(contract.get("checks"), list)
+                        and bool(contract.get("checks"))
                     )
                     current["task_result"] = task.result if isinstance(task.result, dict) else {}
-                    counts["success"] += 1
-                    successful_task_actions.append(current)
+                    if verification_required and current.get("verification_state") != "passed":
+                        if current.get("verification_state") == "failed":
+                            current["status"] = "verification_failed"
+                            current["verification_verdict"] = "fail"
+                            current["detail"] = (
+                                "任务执行已结束，但独立验收未通过；不得将该节点视为完成"
+                            )
+                            counts["failed"] += 1
+                            counts["verification_failed"] += 1
+                            failure_key = (node_id, task_id)
+                            if failure_key not in existing_failure_learning:
+                                learning_task_id = upsert_mission_failure_learning_task(
+                                    workspace=workspace,
+                                    tenant_manager=tenant_manager,
+                                    tenant_id=tenant_id,
+                                    mission_run=mission_run,
+                                    action=current,
+                                    failed_task=task,
+                                )
+                                refreshed_actions.append(current)
+                                refreshed_actions.append({
+                                    "node_id": node_id,
+                                    "title": current.get("title"),
+                                    "action_type": "failure_learning_ticket",
+                                    "status": "needs_learning",
+                                    "task_id": task_id,
+                                    "mission_run_id": mission_run["mission_run_id"],
+                                    "source_task_id": task_id,
+                                    "mission_node_id": node_id,
+                                    "failure_kind": "verification_failure",
+                                    "detail": "执行成功但独立验收失败，已创建针对验收证据的学习任务",
+                                    "linked_learning_task_id": learning_task_id,
+                                    "next_actions": [
+                                        "检查验收失败的具体 checks 和对应产物",
+                                        "根据失败证据决定修复、重新规划或补充输入",
+                                        "修复后创建新的执行 attempt 并重新验收",
+                                    ],
+                                    "decision_trace": current.get("decision_trace", []),
+                                    "dispatch_authorization": current.get("mission_runtime_authorization"),
+                                })
+                                existing_failure_learning.add(failure_key)
+                        else:
+                            current["status"] = "awaiting_verification"
+                            current["verification_verdict"] = "inconclusive"
+                            current["detail"] = (
+                                "任务执行已结束，但必需的独立验收证据不可用；当前不能判定通过"
+                            )
+                            counts["verification_pending"] += 1
+                    else:
+                        current["status"] = "completed"
+                        current["verification_verdict"] = (
+                            "pass" if verification_required else "not_required"
+                        )
+                        current["detail"] = trim_candidate_text(
+                            (task.result or {}).get("summary") or current.get("detail") or f"{current.get('task_type') or 'task'} 已完成"
+                        )
+                        counts["success"] += 1
+                        successful_task_actions.append(current)
                 elif task_status == "failed":
+                    current["execution_status"] = "failed";
+
                     current["status"] = "failed"
                     current["detail"] = trim_candidate_text(task.error or f"{current.get('task_type') or 'task'} 执行失败")
                     counts["failed"] += 1
@@ -616,6 +687,7 @@ def create_mission_execution_bindings(
                     current["status"] = "running"
                     counts["running"] += 1
                 elif task_status == "cancelled":
+                    current["execution_status"] = "cancelled"
                     current["status"] = "cancelled"
                     current["detail"] = "任务已取消，员工占用将在确认所有关联任务终止后释放"
                     counts["cancelled"] += 1
@@ -800,7 +872,7 @@ def create_mission_execution_bindings(
         )
         failed_node_ids = sorted(
             node_id for node_id, node_status in node_status_by_id.items()
-            if node_status in {"failed", "regressed"}
+            if node_status in {"failed", "verification_failed", "regressed"}
         )
         completed_node_set = set(completed_node_ids)
         failed_node_set = set(failed_node_ids)
@@ -964,7 +1036,9 @@ def create_mission_execution_bindings(
         mission_run["counts"] = counts
 
         overall_status = "planning_only"
-        if counts["learning_validating"]:
+        if counts["verification_pending"]:
+            overall_status = "awaiting_verification"
+        elif counts["learning_validating"]:
             overall_status = "validating"
         elif counts["learning_improved"] and (counts["needs_learning"] or counts["failed"] or counts["success"]):
             overall_status = "partially_completed"
