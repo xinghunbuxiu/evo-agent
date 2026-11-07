@@ -107,6 +107,12 @@ class MissionAutoRepairTests(unittest.TestCase):
                 allow_enterprise_sources=True,
                 source_priority=["local_memory", "ai_assist"],
                 validation_required=True,
+                model_provider={
+                    "enabled": True,
+                    "base_url": "https://model.example/v1",
+                    "api_key": "test-only-key",
+                    "model": "test-model",
+                },
                 auto_repair_enabled=True,
                 max_repair_attempts=2,
             )
@@ -140,6 +146,38 @@ class MissionAutoRepairTests(unittest.TestCase):
             self.assertEqual(child["repair_attempt_number"], 1)
             self.assertEqual(updated_parent["auto_repair_triggered_run_id"], "mission-repair-1")
             self.assertEqual(updated_parent["auto_repair_status"], "triggered")
+
+    def test_refresh_does_not_auto_repair_without_ai_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            save_mission_runs(workspace, {"items": [self._failed_run()]})
+            manager = TenantManager(workspace)
+            manager.set_external_learning_policy(
+                "tenant-a",
+                allow_ai_assist=True,
+                allow_web_research=True,
+                allow_enterprise_sources=True,
+                source_priority=["local_memory"],
+                validation_required=True,
+                auto_repair_enabled=True,
+                max_repair_attempts=2,
+            )
+            started = []
+            result = refresh_mission_runs(
+                workspace=workspace,
+                task_queue=object(),
+                tenant_manager=manager,
+                refresh_runtime_learning_tasks=lambda **kwargs: {},
+                refresh_mission_run=lambda **kwargs: kwargs["mission_run"],
+                mission_starter=lambda payload, refresh_runs=False: (started.append(payload) or {}, None),
+            )
+            self.assertEqual(started, [])
+            parent = result["items"][0]
+            self.assertEqual(parent["auto_repair_status"], "blocked")
+            self.assertEqual(
+                parent["auto_repair_block_reason"],
+                "ai_planning_provider_unavailable_or_disabled",
+            )
 
     def test_tenant_policy_persists_opt_in_and_attempt_budget(self):
         with tempfile.TemporaryDirectory() as tmp:

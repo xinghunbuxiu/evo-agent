@@ -230,6 +230,8 @@ def create_mission_action_runtime_bindings(
                 # This is a recommendation only; the worker must report actual use.
                 extra.setdefault("recommended_strategies", recommended_strategies[:3])
             extra.setdefault("depends_on", list(dependency_graph.get(node_key, [])))
+            if planned_node.get("acceptance"):
+                extra.setdefault("acceptance", planned_node.get("acceptance"))
             decision = brain_decisions.get(node_key)
             coordination = coordination_by_node.get(node_key)
             extra.setdefault("mission_run_id", mission_run_id)

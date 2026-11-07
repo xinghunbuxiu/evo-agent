@@ -615,7 +615,11 @@ def derive_repair_context(mission_run: dict) -> dict:
         or mission_run.get("mission_run_id")
     )
     context["repair_mode"] = "fix_test"
-    context["repair_attempt_count"] = int(context.get("repair_attempt_count") or 0) + 1
+    try:
+        prior_attempts = max(0, int(context.get("repair_attempt_count") or 0))
+    except (TypeError, ValueError):
+        prior_attempts = 0
+    context["repair_attempt_count"] = prior_attempts + 1
     context["repair_of_mission_run_id"] = mission_run.get("mission_run_id")
     context["repair_failure_evidence"] = evidence
     context["auto_repair"] = True
@@ -705,6 +709,15 @@ def refresh_mission_runs(
             except Exception:
                 tenant_policy = {}
             if not should_auto_repair_mission(current, tenant_policy):
+                continue
+            from admin.model_provider_runtime import model_provider_ready, resolve_model_provider
+            if (
+                not isinstance(tenant_policy, dict)
+                or tenant_policy.get("allow_ai_assist") is not True
+                or not model_provider_ready(resolve_model_provider(tenant_manager, tenant_id))
+            ):
+                current["auto_repair_status"] = "blocked"
+                current["auto_repair_block_reason"] = "ai_planning_provider_unavailable_or_disabled"
                 continue
             repair_context = derive_repair_context(current)
             payload = {
