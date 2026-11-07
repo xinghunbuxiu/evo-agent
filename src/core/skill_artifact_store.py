@@ -11,12 +11,22 @@ import json
 import os
 import re
 import stat
+import base64
+import binascii
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v1"
+VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v1"
+VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
+_ATTESTATION_FIELDS = {
+    "schema_version", "validation_id", "validator_id", "tenant_id",
+    "skill_id", "skill_version", "content_sha256", "passed", "signature",
+}
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
 _TRUST_LEVELS = {"verified", "cloud"}
@@ -67,13 +77,53 @@ class SkillArtifactStore:
     """Create-once Skill artifact store rooted outside tenant workspaces.
 
     The deployment must provision the root directory as broker-owned (normally
-    mode 0700) and expose writes only to the trusted validation/promotion path.
-    This class does not itself decide whether a Skill passed independent tests;
-    it accepts only the verified/cloud trust states after that policy gate.
+    mode 0700). Publication requires a detached Ed25519 attestation from the
+    independently trusted validator; a caller-supplied trust_level is not proof.
     """
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, validator_public_key: bytes, validator_key_id: str):
         self.root = _secure_directory(Path(root), create=False)
+        if not isinstance(validator_key_id, str) or not validator_key_id.strip():
+            raise SkillArtifactStoreError("validator_key_id is required")
+        try:
+            self.validator_public_key = Ed25519PublicKey.from_public_bytes(validator_public_key)
+        except (ValueError, TypeError) as exc:
+            raise SkillArtifactStoreError("validator public key is invalid") from exc
+        self.validator_key_id = validator_key_id
+
+    def _verify_validation_attestation(
+        self, attestation: Any, *, tenant_id: str, skill_id: str,
+        version: str, digest: str,
+    ) -> None:
+        if not isinstance(attestation, Mapping) or set(attestation) != _ATTESTATION_FIELDS:
+            raise SkillArtifactStoreError("validation attestation has unsupported or missing fields")
+        if attestation.get("schema_version") != VALIDATION_ATTESTATION_SCHEMA:
+            raise SkillArtifactStoreError("unsupported validation attestation schema")
+        if attestation.get("passed") is not True:
+            raise SkillArtifactStoreError("Skill validation attestation did not pass")
+        for field in ("validation_id", "validator_id"):
+            _identity(attestation.get(field), field, _ID_RE)
+        expected = {
+            "tenant_id": tenant_id,
+            "skill_id": skill_id,
+            "skill_version": version,
+            "content_sha256": digest,
+        }
+        if any(attestation.get(field) != value for field, value in expected.items()):
+            raise SkillArtifactStoreError("validation attestation does not bind this exact Skill artifact")
+        signature = attestation.get("signature")
+        if not isinstance(signature, Mapping) or set(signature) != {"algorithm", "key_id", "value"}:
+            raise SkillArtifactStoreError("validation attestation signature metadata is invalid")
+        if signature.get("algorithm") != VALIDATION_SIGNATURE_ALGORITHM or signature.get("key_id") != self.validator_key_id:
+            raise SkillArtifactStoreError("validation attestation signer is not trusted")
+        encoded = signature.get("value")
+        if not isinstance(encoded, str) or not encoded:
+            raise SkillArtifactStoreError("validation attestation signature is missing")
+        payload = {key: attestation[key] for key in _ATTESTATION_FIELDS if key != "signature"}
+        try:
+            self.validator_public_key.verify(base64.b64decode(encoded, validate=True), _canonical_json(payload))
+        except (ValueError, TypeError, binascii.Error, InvalidSignature) as exc:
+            raise SkillArtifactStoreError("validation attestation signature verification failed") from exc
 
     def _artifact_path(self, tenant_id: str, skill_id: str, version: str, *, create: bool) -> Path:
         tenant = _identity(tenant_id, "tenant_id", _ID_RE)
@@ -95,7 +145,7 @@ class SkillArtifactStore:
                 raise SkillArtifactStoreError("trusted Skill artifact directory is unavailable")
         return skill_dir / f"{revision}.json"
 
-    def publish(self, *, tenant_id: str, skill: Any) -> dict[str, str]:
+    def publish(self, *, tenant_id: str, skill: Any, validation_attestation: Mapping[str, Any]) -> dict[str, str]:
         """Atomically publish a verified Skill once; existing versions never mutate."""
         skill_id = _identity(getattr(skill, "id", None), "skill_id", _ID_RE)
         version = _identity(getattr(skill, "version", None), "skill_version", _VERSION_RE)
@@ -111,9 +161,14 @@ class SkillArtifactStore:
             raise SkillArtifactStoreError("only verified or cloud Skills may be published")
 
         digest = hashlib.sha256(code_bytes).hexdigest()
+        normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        self._verify_validation_attestation(
+            validation_attestation, tenant_id=normalized_tenant,
+            skill_id=skill_id, version=version, digest=digest,
+        )
         artifact = {
             "schema_version": ARTIFACT_SCHEMA,
-            "tenant_id": _identity(tenant_id, "tenant_id", _ID_RE),
+            "tenant_id": normalized_tenant,
             "skill_id": skill_id,
             "skill_version": version,
             "trust_level": trust,
