@@ -224,6 +224,8 @@ class SkillArtifactStore:
         }:
             raise SkillArtifactStoreError("Skill replay binding mission context is invalid")
         tenant_id = _identity(context.get("tenant_id"), "tenant_id", _ID_RE)
+        for field in ("mission_run_id", "node_id", "task_id"):
+            _identity(context.get(field), field, _ID_RE)
         skill_id = _identity(binding.get("skill_id"), "skill_id", _ID_RE)
         version = _identity(binding.get("skill_version"), "skill_version", _VERSION_RE)
         expected_digest = binding.get("content_sha256")
@@ -256,7 +258,10 @@ class SkillArtifactStore:
         code = artifact.get("code")
         if not isinstance(code, str) or not code.strip():
             raise SkillArtifactStoreError("stored Skill artifact code is invalid")
-        actual_digest = hashlib.sha256(code.encode("utf-8", errors="strict")).hexdigest()
+        try:
+            actual_digest = hashlib.sha256(code.encode("utf-8", errors="strict")).hexdigest()
+        except UnicodeError as exc:
+            raise SkillArtifactStoreError("stored Skill artifact code is not valid UTF-8") from exc
         expected = {
             "schema_version": ARTIFACT_SCHEMA,
             "tenant_id": tenant_id,
