@@ -38,7 +38,14 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
             "image": IMAGE,
             "allowed_uids": [os.getuid()],
             "max_workers": 2,
+            "artifact_store_root": str(Path(self.temp.name) / "trusted-artifacts"),
+            "validator_public_key": str(Path(self.temp.name) / "validator.pub"),
+            "validator_key_id": "validator-test-key",
         }
+        Path(self.config["artifact_store_root"]).mkdir(mode=0o700)
+        validator = Ed25519PrivateKey.generate()
+        Path(self.config["validator_public_key"]).write_bytes(validator.public_key().public_bytes_raw())
+        Path(self.config["validator_public_key"]).chmod(0o400)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -52,6 +59,7 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
         self.assertEqual(allowed_uids, (os.getuid(),))
         self.assertEqual(workers, 2)
         self.assertIn("workspace-one", service.workspace_roots)
+        self.assertIsNotNone(service.skill_artifact_store)
 
     def test_rejects_symlink_workspace_root(self):
         link = Path(self.temp.name) / "workspace-link"
