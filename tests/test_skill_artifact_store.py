@@ -156,6 +156,36 @@ class SkillArtifactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillArtifactStoreError, "content digest mismatch"):
             self.store.load_for_binding(binding)
 
+    def test_rejects_malformed_mission_lineage_values(self):
+        binding = self._publish_binding()
+        for field, value in (
+            ("mission_run_id", "../mission"),
+            ("node_id", ""),
+            ("task_id", "task/other"),
+        ):
+            malformed = dict(
+                binding,
+                mission_context={**self.context, field: value},
+            )
+            with self.subTest(field=field), self.assertRaisesRegex(
+                SkillArtifactStoreError, field
+            ):
+                self.store.load_for_binding(malformed)
+
+    def test_rejects_surrogate_code_as_invalid_utf8(self):
+        candidate = SimpleNamespace(
+            id="skill_surrogate",
+            version="1.0.0",
+            code="bad\ud800code",
+            trust_level="verified",
+        )
+        with self.assertRaisesRegex(SkillArtifactStoreError, "valid UTF-8"):
+            self.store.publish(
+                tenant_id="tenant-one",
+                skill=candidate,
+                validation_attestation={},
+            )
+
     def test_rejects_cross_tenant_and_cross_skill_bindings(self):
         binding = self._publish_binding()
         other_tenant = dict(binding, mission_context={**self.context, "tenant_id": "tenant-two"})
