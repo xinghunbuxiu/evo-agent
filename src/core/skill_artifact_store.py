@@ -229,7 +229,7 @@ class SkillArtifactStore:
         if not isinstance(expected_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
             raise SkillArtifactStoreError("Skill replay content digest is invalid")
         expected_trust = binding.get("trust_level")
-        if expected_trust not in _TRUST_LEVELS:
+        if not isinstance(expected_trust, str) or expected_trust not in _TRUST_LEVELS:
             raise SkillArtifactStoreError("Skill replay trust level is not executable")
 
         path = self._artifact_path(tenant_id, skill_id, version, create=False)
