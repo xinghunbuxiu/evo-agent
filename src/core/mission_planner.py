@@ -251,16 +251,27 @@ class MissionPlanner:
         templates = self._mission_kind_templates()
         requested_kind = str(mission_kind or context.get("mission_kind") or "").strip()
         if mission_kind:
-            if mission_kind not in templates:
+            if mission_kind in templates:
+                resolved_kind = mission_kind
+                resolution_source = "explicit_mission_kind"
+            elif mission_kind == "automation_operation":
+                # Legacy callers may still send this old default kind. Keep the
+                # identifier accepted, but route it to the new goal-driven plan
+                # instead of restoring the former fixed five-step sequence.
+                resolved_kind = ""
+                resolution_source = "legacy_kind_goal_driven"
+            else:
                 raise ValueError(f"Unsupported mission_kind: {mission_kind}")
-            resolved_kind = mission_kind
-            resolution_source = "explicit_mission_kind"
         elif context.get("mission_kind"):
             context_kind = str(context.get("mission_kind")).strip()
-            if context_kind not in templates:
+            if context_kind in templates:
+                resolved_kind = context_kind
+                resolution_source = "context_mission_kind"
+            elif context_kind == "automation_operation":
+                resolved_kind = ""
+                resolution_source = "legacy_kind_goal_driven"
+            else:
                 raise ValueError(f"Unsupported context mission_kind: {context_kind}")
-            resolved_kind = context_kind
-            resolution_source = "context_mission_kind"
         elif context.get("work_type_id") and str(context.get("work_type_id")).strip() in templates:
             resolved_kind = str(context.get("work_type_id")).strip()
             resolution_source = "work_type_template_match"

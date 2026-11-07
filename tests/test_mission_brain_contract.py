@@ -190,6 +190,12 @@ class MissionBrainContractTests(unittest.TestCase):
             item["workforce_decision"]["decision"] == "catalog_unavailable"
             for item in plan["nodes"]
         ))
+        self.assertIsNone(plan["mission_kind"])
+        self.assertEqual(len(plan["nodes"]), 1)
+        self.assertEqual(
+            plan["decision_trace"][0]["evidence"]["resolution_source"],
+            "legacy_kind_goal_driven",
+        )
 
     def test_planner_uses_organization_catalog_but_only_recommends_dispatch(self):
         class EmptyRegistry:
