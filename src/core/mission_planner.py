@@ -83,61 +83,10 @@ def _validate_template_dependencies(template: dict[str, Any]) -> dict[str, list[
     return graph
 
 
-MISSION_KIND_TEMPLATES: dict[str, dict[str, Any]] = {
-    "automation_operation": {
-        "title": "Automation Operation Mission",
-        "description": "面向运营目标的自动化拆解、执行、异常处理和持续优化。",
-        "primary_capability_type": "automation",
-        "delivery": [
-            "可执行的流程设计",
-            "自动化节点与异常处理机制",
-            "运行经验与优化建议",
-        ],
-        "tasks": [
-            {
-                "id": "understand_goal",
-                "title": "理解运营目标",
-                "objective": "识别运营目标、交付物、账号体系、节奏和限制条件。",
-                "task_type": "plan",
-                "capability_type": "automation",
-                "acceptance": "明确输出目标、渠道、频率与限制。",
-            },
-            {
-                "id": "prepare_material",
-                "title": "准备素材与内容链",
-                "objective": "确定需要的头像、文案、素材、模板和数据来源。",
-                "task_type": "collect",
-                "capability_type": "automation",
-                "acceptance": "明确内容来源和生成/采集方式。",
-            },
-            {
-                "id": "build_flow",
-                "title": "搭建自动化流程",
-                "objective": "形成登录、发布、反馈回收、重试和调度闭环。",
-                "task_type": "execute",
-                "capability_type": "automation",
-                "acceptance": "流程链可执行，关键节点有错误处理。",
-            },
-            {
-                "id": "learn_missing_parts",
-                "title": "补足缺口能力",
-                "objective": "对平台限制、验证码、上传链路、发布规则等缺口进行学习。",
-                "task_type": "learn",
-                "capability_type": "automation",
-                "acceptance": "缺口被归类并形成可验证方案。",
-            },
-            {
-                "id": "review_and_iterate",
-                "title": "复盘并持续优化",
-                "objective": "跟踪成效、复盘失败原因并持续沉淀运营经验。",
-                "task_type": "promote",
-                "capability_type": "automation",
-                "acceptance": "形成可复用的经验和下一轮优化点。",
-            },
-        ],
-    },
-}
-
+# Task sequences are supplied by Worker Manifest assets. The core planner has no
+# default business workflow: tasks without a registered template use a goal-driven
+# node and are planned by the selected worker.
+MISSION_KIND_TEMPLATES: dict[str, dict[str, Any]] = {}
 
 @dataclass
 class MissionNode:
@@ -221,6 +170,74 @@ class MissionPlanner:
             templates.update(load_worker_mission_kind_templates(self.workspace))
         return templates
 
+    def _goal_driven_template(self, goal: str, context: dict[str, Any]) -> dict[str, Any]:
+        """Build one task envelope without imposing a domain-specific workflow.
+
+        The selected worker owns the detailed approach and execution plan. A worker
+        manifest may advertise supported task types; otherwise the request can
+        provide an explicit task_type and the generic fallback is execute.
+        """
+        runtime_route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        workers = runtime_route.get("workers", []) if isinstance(runtime_route.get("workers"), list) else []
+        primary_worker_id = str(
+            runtime_route.get("primary_worker_id")
+            or context.get("runtime_primary_worker_id")
+            or ""
+        ).strip()
+        selected_worker = next(
+            (
+                item for item in workers
+                if isinstance(item, dict)
+                and str(item.get("worker_id") or "").strip() == primary_worker_id
+            ),
+            None,
+        )
+        if selected_worker is None:
+            selected_worker = next(
+                (item for item in workers if isinstance(item, dict) and item.get("enabled") is not False),
+                None,
+            )
+        worker_task_types = (
+            selected_worker.get("task_types", [])
+            if isinstance(selected_worker, dict) and isinstance(selected_worker.get("task_types"), list)
+            else []
+        )
+        task_type = str(
+            context.get("task_type")
+            or context.get("preferred_task_type")
+            or next((item for item in worker_task_types if str(item).strip()), "execute")
+        ).strip() or "execute"
+        capability_type = str(
+            context.get("capability_type")
+            or runtime_route.get("capability_type")
+            or context.get("runtime_capability_type")
+            or (selected_worker.get("capability_type") if isinstance(selected_worker, dict) else "")
+            or "general"
+        ).strip() or "general"
+        deliverables = context.get("work_type_deliverables", [])
+        if not isinstance(deliverables, list):
+            deliverables = []
+        acceptance = str(context.get("acceptance") or "").strip()
+        if not acceptance:
+            acceptance = (
+                "；".join(str(item).strip() for item in deliverables if str(item).strip())
+                or "完成用户目标，并提供与目标匹配的可验证交付结果。"
+            )
+        return {
+            "title": str(context.get("mission_title") or "目标驱动任务").strip(),
+            "description": "核心规划不预设固定业务步骤；由目标和所选 Worker 决定具体工作方法。",
+            "primary_capability_type": capability_type,
+            "delivery": [str(item).strip() for item in deliverables if str(item).strip()],
+            "tasks": [{
+                "id": str(context.get("mission_node_id") or "goal_execution").strip() or "goal_execution",
+                "title": str(context.get("task_title") or "分析并完成目标").strip(),
+                "objective": goal,
+                "task_type": task_type,
+                "capability_type": capability_type,
+                "acceptance": acceptance,
+            }],
+        }
+
     def plan(
         self,
         *,
@@ -248,8 +265,10 @@ class MissionPlanner:
             resolution_source = "work_type_template_match"
         else:
             resolved_kind = self._infer_mission_kind(goal, context)
-            resolution_source = "default_template" if resolved_kind == "automation_operation" else "inferred_template"
-        template = templates[resolved_kind]
+            resolution_source = "worker_manifest_template" if resolved_kind else "goal_driven_fallback"
+        template = templates.get(resolved_kind) if resolved_kind else None
+        if not isinstance(template, dict):
+            template = self._goal_driven_template(goal, context)
         dependency_graph = _validate_template_dependencies(template)
         resolved_template_kind = resolved_kind
         mission_decision_trace = [
@@ -280,7 +299,8 @@ class MissionPlanner:
                 "result": "assembled",
                 "evidence": {
                     "node_count": sum(1 for item in template.get("tasks", []) if isinstance(item, dict)),
-                    "uses_registered_template": resolved_template_kind in templates,
+                    "planning_mode": "registered_worker_template" if resolved_template_kind else "goal_driven",
+                    "uses_registered_template": bool(resolved_template_kind),
                     "work_type_id": str(context.get("work_type_id") or "").strip() or None,
                 },
             },
@@ -341,7 +361,7 @@ class MissionPlanner:
             "decision_trace": mission_decision_trace,
             "tenant_id": tenant_id,
             "goal": goal,
-            "mission_kind": resolved_template_kind,
+            "mission_kind": resolved_template_kind or None,
             "title": template.get("title"),
             "description": template.get("description"),
             "primary_capability_type": template.get("primary_capability_type"),
@@ -366,7 +386,22 @@ class MissionPlanner:
         work_type_id = str(context.get("work_type_id") or "").strip()
         if work_type_id in templates:
             return work_type_id
-        return "automation_operation"
+        runtime_route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        worker_candidates = [
+            runtime_route.get("primary_worker_id"),
+            context.get("runtime_primary_worker_id"),
+        ]
+        workers = runtime_route.get("workers", []) if isinstance(runtime_route.get("workers"), list) else []
+        worker_candidates.extend(
+            item.get("worker_id")
+            for item in workers
+            if isinstance(item, dict) and item.get("enabled") is not False
+        )
+        for candidate in worker_candidates:
+            worker_id = str(candidate or "").strip()
+            if worker_id and worker_id in templates:
+                return worker_id
+        return ""
 
     def _build_node(
         self,

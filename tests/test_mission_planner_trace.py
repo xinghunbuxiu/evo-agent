@@ -208,7 +208,7 @@ class MissionPlannerTraceTests(unittest.TestCase):
             context={"channel": "test-channel", "deliverable_goal": "test output"},
         )
 
-        node = next(item for item in result["nodes"] if item["id"] == "understand_goal")
+        node = next(item for item in result["nodes"] if item["id"] == "goal_execution")
         trace = {item["step"]: item for item in node["decision_trace"]}
         self.assertEqual(node["status"], "needs_learning")
         self.assertEqual(node["gap_type"], "capability_gap")
@@ -228,10 +228,62 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(result["plan_version"], "mission.plan.v1")
         trace = {item["step"]: item for item in result["decision_trace"]}
         self.assertEqual(trace["mission_kind_resolution"]["rule_id"], "mission.kind_resolution.v1")
-        self.assertEqual(trace["mission_kind_resolution"]["result"], "automation_operation")
-        self.assertEqual(trace["mission_kind_resolution"]["evidence"]["resolution_source"], "default_template")
+        self.assertEqual(trace["mission_kind_resolution"]["result"], "goal_driven")
+        self.assertEqual(trace["mission_kind_resolution"]["evidence"]["resolution_source"], "goal_driven_fallback")
         self.assertEqual(trace["plan_assembly"]["rule_id"], "mission.plan_assembly.v1")
-        self.assertGreater(trace["plan_assembly"]["evidence"]["node_count"], 0)
+        self.assertEqual(trace["plan_assembly"]["evidence"]["planning_mode"], "goal_driven")
+        self.assertEqual(trace["plan_assembly"]["evidence"]["node_count"], 1)
+
+    def test_registered_worker_template_is_selected_from_runtime_route(self):
+        planner = self._planner()
+        custom_templates = {
+            "javascript_reverse": {
+                "title": "JavaScript reverse",
+                "description": "Worker-owned reference workflow",
+                "primary_capability_type": "javascript_reverse",
+                "tasks": [{
+                    "id": "inspect_bundle",
+                    "title": "Inspect bundle",
+                    "objective": "Inspect the supplied JavaScript bundle",
+                    "task_type": "analyze",
+                    "capability_type": "javascript_reverse",
+                    "acceptance": "Record bundle structure and evidence",
+                }],
+            }
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=custom_templates):
+            result = planner.plan(
+                tenant_id="test-tenant",
+                goal="分析这个 JavaScript bundle",
+                context={
+                    "runtime_route": {
+                        "primary_worker_id": "javascript_reverse",
+                        "workers": [{
+                            "worker_id": "javascript_reverse",
+                            "enabled": True,
+                            "task_types": ["analyze", "reconstruct"],
+                        }],
+                    },
+                },
+            )
+        self.assertEqual(result["mission_kind"], "javascript_reverse")
+        self.assertEqual(result["nodes"][0]["id"], "inspect_bundle")
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(trace["mission_kind_resolution"]["evidence"]["resolution_source"], "worker_manifest_template")
+
+    def test_unregistered_goal_uses_single_goal_node_not_fixed_business_sequence(self):
+        planner = self._planner()
+        result = planner.plan(
+            tenant_id="test-tenant",
+            goal="编写一个文件校验脚本",
+            context={"task_type": "execute", "capability_type": "python"},
+        )
+        self.assertIsNone(result["mission_kind"])
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["nodes"][0]["id"], "goal_execution")
+        self.assertEqual(result["nodes"][0]["objective"], "编写一个文件校验脚本")
+        self.assertEqual(result["nodes"][0]["task_type"], "execute")
+        self.assertEqual(result["decision_trace"][0]["evidence"]["resolution_source"], "goal_driven_fallback")
 
     def test_template_dependency_graph_is_preserved_and_validated(self):
         planner = self._planner()
