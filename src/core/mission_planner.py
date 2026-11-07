@@ -18,8 +18,10 @@ from typing import Any, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry, get_capability_registry
 from .capability_types import capability_type_label, infer_capability_type
-from .learning import ExperienceStore, normalize_task_type
+from .learning import ExperienceStore, StrategyEngine, normalize_task_type
 from .skill_system import SkillRegistry
+from .mission_brain import build_mission_brain_contract
+from .organization_runtime import OrganizationRegistry, recommend_workforce_for_nodes
 
 try:
     from workers.registry import load_worker_mission_kind_templates
@@ -27,60 +29,64 @@ except ImportError:
     load_worker_mission_kind_templates = None  # type: ignore[assignment]
 
 
-MISSION_KIND_TEMPLATES: dict[str, dict[str, Any]] = {
-    "automation_operation": {
-        "title": "Automation Operation Mission",
-        "description": "面向运营目标的自动化拆解、执行、异常处理和持续优化。",
-        "primary_capability_type": "automation",
-        "delivery": [
-            "可执行的流程设计",
-            "自动化节点与异常处理机制",
-            "运行经验与优化建议",
-        ],
-        "tasks": [
-            {
-                "id": "understand_goal",
-                "title": "理解运营目标",
-                "objective": "识别运营目标、交付物、账号体系、节奏和限制条件。",
-                "task_type": "plan",
-                "capability_type": "automation",
-                "acceptance": "明确输出目标、渠道、频率与限制。",
-            },
-            {
-                "id": "prepare_material",
-                "title": "准备素材与内容链",
-                "objective": "确定需要的头像、文案、素材、模板和数据来源。",
-                "task_type": "collect",
-                "capability_type": "automation",
-                "acceptance": "明确内容来源和生成/采集方式。",
-            },
-            {
-                "id": "build_flow",
-                "title": "搭建自动化流程",
-                "objective": "形成登录、发布、反馈回收、重试和调度闭环。",
-                "task_type": "execute",
-                "capability_type": "automation",
-                "acceptance": "流程链可执行，关键节点有错误处理。",
-            },
-            {
-                "id": "learn_missing_parts",
-                "title": "补足缺口能力",
-                "objective": "对平台限制、验证码、上传链路、发布规则等缺口进行学习。",
-                "task_type": "learn",
-                "capability_type": "automation",
-                "acceptance": "缺口被归类并形成可验证方案。",
-            },
-            {
-                "id": "review_and_iterate",
-                "title": "复盘并持续优化",
-                "objective": "跟踪成效、复盘失败原因并持续沉淀运营经验。",
-                "task_type": "promote",
-                "capability_type": "automation",
-                "acceptance": "形成可复用的经验和下一轮优化点。",
-            },
-        ],
-    },
-}
+def _validate_template_dependencies(template: dict[str, Any]) -> dict[str, list[str]]:
+    """Validate task dependency references and reject cycles before creating a plan."""
+    tasks = template.get("tasks", [])
+    if not isinstance(tasks, list):
+        raise ValueError("Mission template tasks must be a list")
+    task_ids: list[str] = []
+    task_by_id: dict[str, dict[str, Any]] = {}
+    for index, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            raise ValueError(f"Mission template task at index {index} must be an object")
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            raise ValueError(f"Mission template task at index {index} requires a non-empty id")
+        if task_id in task_by_id:
+            raise ValueError(f"Duplicate Mission template task id: {task_id}")
+        task_ids.append(task_id)
+        task_by_id[task_id] = task
+
+    graph: dict[str, list[str]] = {}
+    for task_id, task in task_by_id.items():
+        raw_dependencies = task.get("depends_on", [])
+        if not isinstance(raw_dependencies, list):
+            raise ValueError(f"Mission template task {task_id!r} requires list field 'depends_on'")
+        dependencies = [str(item).strip() for item in raw_dependencies]
+        if any(not item for item in dependencies):
+            raise ValueError(f"Mission template task {task_id!r} has an empty dependency id")
+        if len(dependencies) != len(set(dependencies)):
+            raise ValueError(f"Mission template task {task_id!r} has duplicate dependencies")
+        for dependency in dependencies:
+            if dependency == task_id:
+                raise ValueError(f"Mission template task {task_id!r} cannot depend on itself")
+            if dependency not in task_by_id:
+                raise ValueError(f"Mission template task {task_id!r} depends on unknown task {dependency!r}")
+        graph[task_id] = dependencies
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(task_id: str) -> None:
+        if task_id in visiting:
+            raise ValueError(f"Mission template dependency cycle detected at task {task_id!r}")
+        if task_id in visited:
+            return
+        visiting.add(task_id)
+        for dependency in graph[task_id]:
+            visit(dependency)
+        visiting.remove(task_id)
+        visited.add(task_id)
+
+    for task_id in task_ids:
+        visit(task_id)
+    return graph
+
+
+# Task sequences are supplied by Worker Manifest assets. The core planner has no
+# default business workflow: tasks without a registered template use a goal-driven
+# node and are planned by the selected worker.
+MISSION_KIND_TEMPLATES: dict[str, dict[str, Any]] = {}
 
 
 @dataclass
@@ -95,14 +101,19 @@ class MissionNode:
     reasoning: List[str] = field(default_factory=list)
     decision_trace: List[Dict[str, Any]] = field(default_factory=list)
     available_capability_ids: List[str] = field(default_factory=list)
+    required_capabilities: List[str] = field(default_factory=list)
+    parallel_safe: bool = False
+    depends_on: List[str] = field(default_factory=list)
     recommended_skill_ids: List[str] = field(default_factory=list)
     recommended_skills: List[Dict[str, Any]] = field(default_factory=list)
+    recommended_strategies: List[Dict[str, Any]] = field(default_factory=list)
     knowledge_signals: Dict[str, Any] = field(default_factory=dict)
     role_reflection_context: Dict[str, Any] = field(default_factory=dict)
     gap_type: str = ""
     blockers: List[str] = field(default_factory=list)
     learning_objectives: List[str] = field(default_factory=list)
     validation_checks: List[str] = field(default_factory=list)
+    verification_contract: Any = field(default_factory=dict)
     priority: str = "medium"
     next_actions: List[str] = field(default_factory=list)
 
@@ -118,14 +129,19 @@ class MissionNode:
             "reasoning": self.reasoning,
             "decision_trace": self.decision_trace,
             "available_capability_ids": self.available_capability_ids,
+            "required_capabilities": self.required_capabilities,
+            "parallel_safe": self.parallel_safe,
+            "depends_on": self.depends_on,
             "recommended_skill_ids": self.recommended_skill_ids,
             "recommended_skills": self.recommended_skills,
+            "recommended_strategies": self.recommended_strategies,
             "knowledge_signals": self.knowledge_signals,
             "role_reflection_context": self.role_reflection_context,
             "gap_type": self.gap_type,
             "blockers": self.blockers,
             "learning_objectives": self.learning_objectives,
             "validation_checks": self.validation_checks,
+            "verification_contract": self.verification_contract,
             "priority": self.priority,
             "next_actions": self.next_actions,
         }
@@ -135,12 +151,93 @@ class MissionPlanner:
     def __init__(self, workspace: Path, registry: Optional[CapabilityRegistry] = None):
         self.workspace = workspace
         self.registry = registry or get_capability_registry()
+        self._strategy_engines: dict[str, StrategyEngine] = {}
+        organization_root = Path(workspace) / ".organization"
+        required_registry_files = (
+            organization_root / "roles.json",
+            organization_root / "workers.json",
+            organization_root / "knowledge_assets.json",
+        )
+        # Planning is read-only: do not initialize an empty organization registry as a side effect.
+        self.organization_registry = (
+            OrganizationRegistry(workspace)
+            if all(path.is_file() for path in required_registry_files)
+            else None
+        )
 
     def _mission_kind_templates(self) -> dict[str, dict[str, Any]]:
         templates = dict(MISSION_KIND_TEMPLATES)
         if callable(load_worker_mission_kind_templates):
             templates.update(load_worker_mission_kind_templates(self.workspace))
         return templates
+
+    def _goal_driven_template(self, goal: str, context: dict[str, Any]) -> dict[str, Any]:
+        """Build one task envelope without imposing a domain-specific workflow.
+
+        The selected worker owns the detailed approach and execution plan. A worker
+        manifest may advertise supported task types; otherwise the request can
+        provide an explicit task_type and the generic fallback is execute.
+        """
+        runtime_route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        workers = runtime_route.get("workers", []) if isinstance(runtime_route.get("workers"), list) else []
+        primary_worker_id = str(
+            runtime_route.get("primary_worker_id")
+            or context.get("runtime_primary_worker_id")
+            or ""
+        ).strip()
+        selected_worker = next(
+            (
+                item for item in workers
+                if isinstance(item, dict)
+                and str(item.get("worker_id") or "").strip() == primary_worker_id
+            ),
+            None,
+        )
+        if selected_worker is None:
+            selected_worker = next(
+                (item for item in workers if isinstance(item, dict) and item.get("enabled") is not False),
+                None,
+            )
+        worker_task_types = (
+            selected_worker.get("task_types", [])
+            if isinstance(selected_worker, dict) and isinstance(selected_worker.get("task_types"), list)
+            else []
+        )
+        task_type = str(
+            context.get("task_type")
+            or context.get("preferred_task_type")
+            or next((item for item in worker_task_types if str(item).strip()), "execute")
+        ).strip() or "execute"
+        capability_type = str(
+            context.get("capability_type")
+            or runtime_route.get("capability_type")
+            or context.get("runtime_capability_type")
+            or (selected_worker.get("capability_type") if isinstance(selected_worker, dict) else "")
+            or "general"
+        ).strip() or "general"
+        deliverables = context.get("work_type_deliverables", [])
+        if not isinstance(deliverables, list):
+            deliverables = []
+        acceptance = str(context.get("acceptance") or "").strip()
+        if not acceptance:
+            acceptance = (
+                "；".join(str(item).strip() for item in deliverables if str(item).strip())
+                or "完成用户目标，并提供与目标匹配的可验证交付结果。"
+            )
+        return {
+            "title": str(context.get("mission_title") or "目标驱动任务").strip(),
+            "description": "核心规划不预设固定业务步骤；由目标和所选 Worker 决定具体工作方法。",
+            "primary_capability_type": capability_type,
+            "delivery": [str(item).strip() for item in deliverables if str(item).strip()],
+            "tasks": [{
+                "id": str(context.get("mission_node_id") or "goal_execution").strip() or "goal_execution",
+                "title": str(context.get("task_title") or "分析并完成目标").strip(),
+                "objective": goal,
+                "task_type": task_type,
+                "capability_type": capability_type,
+                "acceptance": acceptance,
+            }],
+        }
 
     def plan(
         self,
@@ -151,9 +248,75 @@ class MissionPlanner:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         context = context or {}
-        resolved_kind = mission_kind or self._infer_mission_kind(goal, context)
         templates = self._mission_kind_templates()
-        template = templates.get(resolved_kind, templates["automation_operation"])
+        requested_kind = str(mission_kind or context.get("mission_kind") or "").strip()
+        if mission_kind:
+            if mission_kind in templates:
+                resolved_kind = mission_kind
+                resolution_source = "explicit_mission_kind"
+            elif mission_kind == "automation_operation":
+                # Legacy callers may still send this old default kind. Keep the
+                # identifier accepted, but route it to the new goal-driven plan
+                # instead of restoring the former fixed five-step sequence.
+                resolved_kind = ""
+                resolution_source = "legacy_kind_goal_driven"
+            else:
+                raise ValueError(f"Unsupported mission_kind: {mission_kind}")
+        elif context.get("mission_kind"):
+            context_kind = str(context.get("mission_kind")).strip()
+            if context_kind in templates:
+                resolved_kind = context_kind
+                resolution_source = "context_mission_kind"
+            elif context_kind == "automation_operation":
+                resolved_kind = ""
+                resolution_source = "legacy_kind_goal_driven"
+            else:
+                raise ValueError(f"Unsupported context mission_kind: {context_kind}")
+        elif context.get("work_type_id") and str(context.get("work_type_id")).strip() in templates:
+            resolved_kind = str(context.get("work_type_id")).strip()
+            resolution_source = "work_type_template_match"
+        else:
+            resolved_kind = self._infer_mission_kind(goal, context)
+            resolution_source = "worker_manifest_template" if resolved_kind else "goal_driven_fallback"
+        template = templates.get(resolved_kind) if resolved_kind else None
+        if not isinstance(template, dict):
+            template = self._goal_driven_template(goal, context)
+        dependency_graph = _validate_template_dependencies(template)
+        resolved_template_kind = resolved_kind
+        mission_decision_trace = [
+            {
+                "step": "mission_kind_resolution",
+                "rule_id": "mission.kind_resolution.v1",
+                "result": resolved_template_kind or "goal_driven",
+                "evidence": {
+                    "resolution_source": resolution_source,
+                    "requested_kind": requested_kind or None,
+                    "selected_template": resolved_template_kind or None,
+                    "available_template_count": len(templates),
+                },
+            },
+            {
+                "step": "dependency_graph_validation",
+                "rule_id": "mission.dependency_graph.validated.v1",
+                "result": "validated",
+                "evidence": {
+                    "node_count": len(dependency_graph),
+                    "dependency_edge_count": sum(len(items) for items in dependency_graph.values()),
+                    "topological_validation": "passed",
+                },
+            },
+            {
+                "step": "plan_assembly",
+                "rule_id": "mission.plan_assembly.v1",
+                "result": "assembled",
+                "evidence": {
+                    "node_count": sum(1 for item in template.get("tasks", []) if isinstance(item, dict)),
+                    "planning_mode": "registered_worker_template" if resolved_template_kind else "goal_driven",
+                    "uses_registered_template": bool(resolved_template_kind),
+                    "work_type_id": str(context.get("work_type_id") or "").strip() or None,
+                },
+            },
+        ]
         nodes = [
             self._build_node(
                 tenant_id=tenant_id,
@@ -174,10 +337,43 @@ class MissionPlanner:
             context=context,
             nodes=nodes,
         )
+        serialized_nodes = [node.to_dict() for node in nodes]
+        preferred_handler_id = str(
+            context.get("runtime_primary_worker_id")
+            or context.get("primary_worker_id")
+            or ""
+        ).strip()
+        if preferred_handler_id:
+            for node_payload in serialized_nodes:
+                node_payload["preferred_handler_id"] = preferred_handler_id
+        workforce_decisions = recommend_workforce_for_nodes(serialized_nodes, self.organization_registry)
+        workforce_by_node = {
+            str(item.get("node_id")): item
+            for item in workforce_decisions
+            if item.get("node_id")
+        }
+        for node_payload in serialized_nodes:
+            node_id = str(node_payload.get("id") or "")
+            workforce_decision = workforce_by_node.get(node_id)
+            if workforce_decision:
+                node_payload["workforce_decision"] = workforce_decision
+                node_payload["decision_trace"] = list(node_payload.get("decision_trace", [])) + [{
+                    "step": "workforce_catalog_match",
+                    "rule_id": "mission.workforce_recommendation.v1",
+                    "result": workforce_decision.get("decision"),
+                    "evidence": {
+                        "required_capabilities": workforce_decision.get("required_capabilities", []),
+                        "recommended_role_id": workforce_decision.get("recommended_role_id"),
+                        "recommended_worker_id": workforce_decision.get("recommended_worker_id"),
+                        "dispatch_state": workforce_decision.get("dispatch_state"),
+                    },
+                }]
         return {
+            "plan_version": "mission.plan.v1",
+            "decision_trace": mission_decision_trace,
             "tenant_id": tenant_id,
             "goal": goal,
-            "mission_kind": resolved_kind,
+            "mission_kind": resolved_template_kind or None,
             "title": template.get("title"),
             "description": template.get("description"),
             "primary_capability_type": template.get("primary_capability_type"),
@@ -188,7 +384,9 @@ class MissionPlanner:
             "status_summary": status_summary,
             "gap_summary": gap_summary,
             "learning_tasks": learning_tasks,
-            "nodes": [node.to_dict() for node in nodes],
+            "nodes": serialized_nodes,
+            "dependency_graph": dependency_graph,
+            "orchestration": build_mission_brain_contract(serialized_nodes),
             "recommended_next_actions": self._recommended_actions(nodes, gap_summary, learning_tasks),
         }
 
@@ -200,7 +398,22 @@ class MissionPlanner:
         work_type_id = str(context.get("work_type_id") or "").strip()
         if work_type_id in templates:
             return work_type_id
-        return "automation_operation"
+        runtime_route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        worker_candidates = [
+            runtime_route.get("primary_worker_id"),
+            context.get("runtime_primary_worker_id"),
+        ]
+        workers = runtime_route.get("workers", []) if isinstance(runtime_route.get("workers"), list) else []
+        worker_candidates.extend(
+            item.get("worker_id")
+            for item in workers
+            if isinstance(item, dict) and item.get("enabled") is not False
+        )
+        for candidate in worker_candidates:
+            worker_id = str(candidate or "").strip()
+            if worker_id and worker_id in templates:
+                return worker_id
+        return ""
 
     def _build_node(
         self,
@@ -232,6 +445,34 @@ class MissionPlanner:
         )
         recommended_skill_ids = [skill.id for skill in matched_skills[:3]]
         recommended_skills = [self._skill_summary(skill) for skill in matched_skills[:3]]
+        strategy_engine = self._strategy_engines.get(tenant_id)
+        if strategy_engine is None:
+            strategy_engine = StrategyEngine(self.workspace, tenant_id=tenant_id)
+            self._strategy_engines[tenant_id] = strategy_engine
+        else:
+            # Feedback is written by execution workers through a separate engine.
+            # Refresh the cached planner view so the next plan can reuse new evidence.
+            strategy_engine._load_strategies()
+        strategy_context = {
+            "goal": goal,
+            "objective": str(node_template.get("objective") or ""),
+            "title": str(node_template.get("title") or ""),
+            "task_type": str(node_template.get("task_type") or ""),
+            "capability_type": capability_type,
+            "context": context,
+        }
+        matched_strategy = strategy_engine.find_strategy(capability_type, strategy_context)
+        recommended_strategies = []
+        if matched_strategy is not None:
+            recommended_strategies.append({
+                "id": matched_strategy.id,
+                "name": matched_strategy.name,
+                "domain": matched_strategy.domain,
+                "description": matched_strategy.description,
+                "steps": matched_strategy.steps,
+                "success_rate": matched_strategy.success_rate,
+                "usage_count": matched_strategy.usage_count,
+            })
         blockers = self._node_blockers(goal=goal, context=context, task_type=str(node_template.get("task_type") or ""))
         if role_reflection_context.get("blocked_reason"):
             blockers.append(str(role_reflection_context.get("blocked_reason")))
@@ -334,6 +575,10 @@ class MissionPlanner:
             gap_type = "experience_gap"
             learning_objectives.append("当前经验不足，先用真实案例补首批可验证样本")
 
+        if recommended_strategies:
+            strategy = recommended_strategies[0]
+            reasoning.append(f"检索到可复用策略 {strategy['name']}（历史成功率 {strategy['success_rate']:.0%}，使用 {strategy['usage_count']} 次）")
+            next_actions.insert(0, f"先评估并复用策略 {strategy['id']}，逐步验证适用条件")
         # Keep an auditable evidence trail, not hidden chain-of-thought: each record
         # names the rule, observable evidence, and outcome used by the planner.
         if blockers:
@@ -380,6 +625,17 @@ class MissionPlanner:
                 },
             },
             {
+                "step": "strategy_retrieval",
+                "rule_id": "mission.strategy_retrieval.v1",
+                "result": "matched" if recommended_strategies else "no_match",
+                "evidence": {
+                    "tenant_id": tenant_id,
+                    "domain": capability_type,
+                    "strategy_ids": [item["id"] for item in recommended_strategies],
+                    "context_fields": ["goal", "objective", "task_type", "capability_type"],
+                },
+            },
+            {
                 "step": "status_decision",
                 "rule_id": decision_rule,
                 "result": status,
@@ -404,14 +660,31 @@ class MissionPlanner:
             available_capability_ids=available_capability_ids,
             recommended_skill_ids=recommended_skill_ids,
             recommended_skills=recommended_skills,
+            recommended_strategies=recommended_strategies,
             knowledge_signals=knowledge_signals,
             role_reflection_context=role_reflection_context,
             gap_type=gap_type,
             blockers=blockers,
             learning_objectives=self._unique_list(learning_objectives),
             validation_checks=validation_checks,
+            verification_contract=(
+                node_template.get("verification_contract")
+                if "verification_contract" in node_template
+                else (
+                    context.get("verification_contracts", {}).get(str(node_template.get("id") or "").strip(), {})
+                    if isinstance(context.get("verification_contracts"), dict)
+                    else {}
+                )
+            ),
             priority=priority,
             next_actions=next_actions,
+            required_capabilities=self._node_required_capabilities(
+                node_template=node_template,
+                context=context,
+                capability_type=capability_type,
+            ),
+            parallel_safe=node_template.get("parallel_safe") is True,
+            depends_on=[str(item).strip() for item in node_template.get("depends_on", [])],
         )
 
     def _node_blockers(self, *, goal: str, context: dict[str, Any], task_type: str) -> list[str]:
@@ -738,6 +1011,22 @@ class MissionPlanner:
                 "next_actions": node.next_actions,
             })
         return tasks
+
+    def _node_required_capabilities(
+        self,
+        *,
+        node_template: dict[str, Any],
+        context: dict[str, Any],
+        capability_type: str,
+    ) -> list[str]:
+        """Prefer task-specific requirements, then explicit mission requirements, then category."""
+        template_requirements = node_template.get("required_capabilities")
+        if isinstance(template_requirements, list) and template_requirements:
+            return self._unique_list(template_requirements)
+        mission_requirements = context.get("required_capabilities") if isinstance(context, dict) else None
+        if isinstance(mission_requirements, list) and mission_requirements:
+            return self._unique_list(mission_requirements)
+        return self._unique_list([capability_type]) if capability_type else []
 
     def _unique_list(self, items: list[str]) -> list[str]:
         seen: set[str] = set()

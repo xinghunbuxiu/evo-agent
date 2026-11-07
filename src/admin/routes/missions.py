@@ -9,6 +9,8 @@ from typing import Callable
 
 from fastapi import Request
 
+from admin.mission_runtime import load_mission_runs, load_mission_runs_strict, release_worker_claim_for_review
+
 
 def register_mission_routes(
     app,
@@ -26,6 +28,10 @@ def register_mission_routes(
     derive_follow_up_context: Callable[[dict], dict],
     success_response: Callable[[dict | None, str], dict],
     error_response: Callable[[str, int], object],
+    get_session_user: Callable[[Request], dict | None],
+    authorize_tenant: Callable[[dict, str], bool],
+    tenant_role: Callable[[dict, str], str | None],
+    organization_registry,
 ) -> None:
     @app.post("/api/missions/plan")
     async def plan_mission(request: Request):
@@ -95,6 +101,111 @@ def register_mission_routes(
             "updated_at": state.get("updated_at"),
             "items": filtered,
         })
+
+    @app.get("/api/missions/worker-claims/recovery-review")
+    async def list_worker_claims_for_recovery_review(request: Request, tenant_id: str | None = None, limit: int = 100):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if not tenant_id or not str(tenant_id).strip():
+            return error_response("必须指定 tenant_id", 400)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+
+        # Read persisted evidence directly: do not refresh missions or trigger dispatch here.
+        # Corrupt/incomplete storage must not masquerade as an empty review queue.
+        try:
+            state = load_mission_runs_strict(workspace)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return error_response(f"Mission 复核数据读取失败: {type(exc).__name__}", 500)
+        items = state["items"]
+        reviews = []
+        for mission_run in items:
+            if not isinstance(mission_run, dict):
+                continue
+            if tenant_id and mission_run.get("tenant_id") != tenant_id:
+                continue
+            actions = mission_run.get("actions", [])
+            if not isinstance(actions, list):
+                continue
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                claim = action.get("worker_claim")
+                if not isinstance(claim, dict):
+                    continue
+                if claim.get("state") != "claimed" or claim.get("recovery_status") != "needs_review":
+                    continue
+                reviews.append({
+                    "mission_run_id": mission_run.get("mission_run_id"),
+                    "tenant_id": mission_run.get("tenant_id") or "default",
+                    "goal": mission_run.get("goal"),
+                    "node_id": action.get("node_id"),
+                    "action_title": action.get("title"),
+                    "task_id": action.get("task_id"),
+                    "worker_claim": {
+                        "claim_id": claim.get("claim_id"),
+                        "worker_id": claim.get("worker_id"),
+                        "state": claim.get("state"),
+                        "recovery_status": claim.get("recovery_status"),
+                        "recovery_reason": claim.get("recovery_reason"),
+                        "recovery_checked_at": claim.get("recovery_checked_at"),
+                        "release_error_type": claim.get("release_error_type"),
+                    },
+                })
+                if len(reviews) >= max(1, min(limit, 500)):
+                    return success_response({
+                        "count": len(reviews),
+                        "items": reviews,
+                    }, "待人工复核的 Worker Claim")
+        return success_response({
+            "count": len(reviews),
+            "items": reviews,
+        }, "待人工复核的 Worker Claim")
+
+
+    @app.post("/api/missions/worker-claims/{claim_id}/release")
+    async def release_worker_claim(request: Request, claim_id: str):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict):
+            return error_response("请求内容必须是 JSON 对象", 400)
+        tenant_id = str(data.get("tenant_id") or "").strip()
+        mission_run_id = str(data.get("mission_run_id") or "").strip()
+        reason = str(data.get("reason") or "").strip()
+        if not tenant_id or not mission_run_id:
+            return error_response("必须提供 tenant_id 和 mission_run_id", 400)
+        if len(reason) < 10 or len(reason) > 500:
+            return error_response("人工释放原因长度必须为 10 到 500 个字符", 400)
+        if tenant_role(user, tenant_id) != "tenant_admin":
+            return error_response("仅租户管理员可以释放 Worker Claim", 403)
+        try:
+            result = release_worker_claim_for_review(
+                workspace=workspace,
+                mission_run_id=mission_run_id,
+                tenant_id=tenant_id,
+                claim_id=claim_id,
+                actor=user,
+                reason=reason,
+                task_queue=task_queue,
+                organization_registry=organization_registry,
+            )
+        except PermissionError:
+            return error_response("无权操作该租户的 Worker Claim", 403)
+        except KeyError:
+            return error_response("未找到对应的 Mission 或 Worker Claim", 404)
+        except ValueError as exc:
+            return error_response(f"Worker Claim 当前不满足释放条件: {str(exc)}", 409)
+        except (OSError, RuntimeError):
+            return error_response("Worker Claim 释放过程未能完成；请检查复核记录和审计日志", 503)
+        except Exception:
+            return error_response("Worker Claim 释放失败；占用状态已保留待复核", 503)
+        return success_response(result, "Worker Claim 已人工释放")
 
     @app.get("/api/missions/{mission_run_id}")
     async def get_mission_run(mission_run_id: str):

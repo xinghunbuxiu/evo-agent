@@ -2,17 +2,66 @@ import { get, post } from './request'
 import type { GitKnowledgeConfig, KnowledgeContainer } from './git'
 import type { KnowledgeLayerAdvice } from './evolution'
 
+export interface KnowledgeSkillSourceExperience {
+  experience_id?: string
+  mission_run_id?: string
+  mission_node_id?: string
+  primary_worker_id?: string
+  evidence_ids?: string[]
+  validation_evidence?: Record<string, unknown>
+  decision_trace?: unknown[]
+  skill_execution?: {
+    schema_version?: string
+    skill_id?: string
+    skill_name?: string
+    skill_version?: string
+    skill_trust_level?: string
+    application_mode?: string
+    task_type?: string
+    execution_success?: boolean
+    execution_status?: string
+    quality_score?: number
+    task_id?: string
+    mission_run_id?: string
+    mission_node_id?: string
+    worker_id?: string
+    evaluation?: Record<string, unknown>
+  }
+}
+
 export interface KnowledgeSkill {
   id?: string
   name: string
   domain?: string
+  capability_type?: string
   trust_level?: string
   source?: string
   path?: string
+  version?: string
   description?: string
   usage_count?: number
   success_rate?: number
+  created_at?: string
   updated_at?: string
+  provenance?: {
+    mission_run_id?: string
+    mission_node_id?: string
+    mission_kind?: string
+    primary_worker_id?: string
+    worker_id?: string
+    evidence_ids?: string[]
+    validation_evidence?: Record<string, unknown>
+    source_experience_ids?: string[]
+    source_mission_run_ids?: string[]
+    source_worker_ids?: string[]
+    source_experiences?: KnowledgeSkillSourceExperience[]
+  }
+  parameters?: Record<string, unknown> & {
+    source_experience_ids?: string[]
+    source_mission_run_ids?: string[]
+    source_worker_ids?: string[]
+    source_experiences?: KnowledgeSkillSourceExperience[]
+  }
 }
 
 export interface KnowledgeSkillsPayload {
@@ -29,6 +78,44 @@ export interface KnowledgeSkillsPayload {
   }
   recent_autonomy_skills?: KnowledgeSkill[]
   skills: KnowledgeSkill[]
+}
+
+export interface KnowledgeShard {
+  repository_id: string
+  domain: string
+  provider: string
+  status: string
+  writable: boolean
+  full_name?: string
+  url?: string
+  branch?: string
+  capacity_ratio?: number
+  capacity_warning?: boolean
+  usage?: {
+    used_bytes?: number
+    file_count?: number
+    largest_file_bytes?: number
+    measured_at?: number
+  }
+}
+
+export interface KnowledgeShardInventory {
+  tenant_id: string
+  shards: KnowledgeShard[]
+  total: number
+  domains: Record<string, {
+    total: number
+    active: number
+    sealed: number
+    provisioning: number
+  }>
+  registry_path: string
+}
+
+export function getKnowledgeShards(tenantId: string) {
+  return get<KnowledgeShardInventory>(
+    `/api/tenants/${encodeURIComponent(tenantId)}/knowledge-shards`
+  )
 }
 
 export function getKnowledgeSkills(tenantId: string) {
