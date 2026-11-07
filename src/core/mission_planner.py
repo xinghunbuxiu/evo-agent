@@ -258,10 +258,13 @@ class MissionPlanner:
                 raise ValueError(f"worker plan task {index} verification_contract must be an object")
             tasks.append(task)
 
+        primary_capability = str(proposal.get("primary_capability_type") or manifest_capability).strip()
+        if allowed_capabilities and primary_capability and primary_capability not in allowed_capabilities:
+            raise ValueError("worker plan primary capability exceeds worker capability boundary")
         normalized = {
             "title": str(proposal.get("title") or worker_manifest.get("title") or "Worker proposed mission").strip(),
             "description": str(proposal.get("description") or f"Worker plan for: {goal}").strip(),
-            "primary_capability_type": str(proposal.get("primary_capability_type") or manifest_capability).strip(),
+            "primary_capability_type": primary_capability,
             "delivery": [
                 str(item).strip() for item in proposal.get("delivery", [])
                 if str(item).strip()

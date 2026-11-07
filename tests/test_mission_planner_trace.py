@@ -127,23 +127,39 @@ class MissionPlannerTraceTests(unittest.TestCase):
         })
         planner._role_reflection_context = mock.Mock(return_value={})
         planner._match_verified_skills = mock.Mock(return_value=[])
-        result = planner.plan(
-            tenant_id="tenant-a",
-            goal="Build a Python utility",
-            mission_kind="python-worker",
-            context={
-                "work_type_id": "python-work",
-                "runtime_route": {
-                    "work_type_id": "python-work",
-                    "primary_worker_id": "python-worker",
-                    "workers": [{
-                        "worker_id": "python-worker",
-                        "enabled": True,
-                        "capability_type": "python",
-                    }],
-                },
+        reference_templates = {
+            "python-worker": {
+                "title": "Python worker reference",
+                "description": "Reference only",
+                "primary_capability_type": "python",
+                "tasks": [{
+                    "id": "reference_step",
+                    "title": "Reference step",
+                    "objective": "Reference objective",
+                    "task_type": "execute",
+                    "capability_type": "python",
+                    "acceptance": "Reference acceptance",
+                }],
             },
-        )
+        }
+        with mock.patch("core.mission_planner.load_worker_mission_kind_templates", return_value=reference_templates):
+            result = planner.plan(
+                tenant_id="tenant-a",
+                goal="Build a Python utility",
+                mission_kind="python-worker",
+                context={
+                    "work_type_id": "python-work",
+                    "runtime_route": {
+                        "work_type_id": "python-work",
+                        "primary_worker_id": "python-worker",
+                        "workers": [{
+                            "worker_id": "python-worker",
+                            "enabled": True,
+                            "capability_type": "python",
+                        }],
+                    },
+                },
+            )
         self.assertEqual(result["nodes"][0]["id"], "worker_specific_plan")
         self.assertTrue(result["planning_proposal"]["accepted"])
 
