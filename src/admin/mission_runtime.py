@@ -542,11 +542,10 @@ def should_auto_repair_mission(mission_run: dict, tenant_policy: dict | None = N
         return False
     if tenant_policy.get("auto_repair_enabled") is not True:
         return False
+    context = mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
     try:
         max_attempts = max(0, int(tenant_policy.get("max_repair_attempts") or 0))
-        attempts = max(0, int(
-            (mission_run.get("context") or {}).get("repair_attempt_count") or 0
-        ))
+        attempts = max(0, int(context.get("repair_attempt_count") or 0))
     except (TypeError, ValueError):
         return False
     if max_attempts < 1 or attempts >= max_attempts:
@@ -740,32 +739,32 @@ def refresh_mission_runs(
             for current in refreshed_items:
                 if not should_auto_continue_mission(current):
                     continue
-            payload = {
-                "tenant_id": current.get("tenant_id") or "default",
-                "work_type_id": (
-                    current.get("work_type", {}).get("work_type_id")
-                    if isinstance(current.get("work_type"), dict)
-                    else None
-                ),
-                "mission_kind": current.get("mission_kind"),
-                "goal": derive_follow_up_goal(current),
-                "context": derive_follow_up_context(current),
-            }
-            latest, error = mission_starter(payload, refresh_runs=False)
-            if error is not None or not isinstance(latest, dict):
-                current["auto_continue_status"] = "failed"
-                current["auto_continue_error"] = "自动续跑启动失败"
-                if isinstance(error, dict):
-                    detail = str(error.get("error") or error.get("message") or "").strip()
-                else:
-                    detail = str(error or "").strip()
-                if detail:
-                    current["auto_continue_error_detail"] = detail[:500]
-                continue
-            current["auto_continue_triggered_at"] = datetime.now().isoformat()
-            current["auto_continue_triggered_run_id"] = latest.get("mission_run_id")
-            current["auto_continue_status"] = "triggered"
-            latest["auto_continue_source_mission_run_id"] = current.get("mission_run_id")
+                payload = {
+                    "tenant_id": current.get("tenant_id") or "default",
+                    "work_type_id": (
+                        current.get("work_type", {}).get("work_type_id")
+                        if isinstance(current.get("work_type"), dict)
+                        else None
+                    ),
+                    "mission_kind": current.get("mission_kind"),
+                    "goal": derive_follow_up_goal(current),
+                    "context": derive_follow_up_context(current),
+                }
+                latest, error = mission_starter(payload, refresh_runs=False)
+                if error is not None or not isinstance(latest, dict):
+                    current["auto_continue_status"] = "failed"
+                    current["auto_continue_error"] = "自动续跑启动失败"
+                    if isinstance(error, dict):
+                        detail = str(error.get("error") or error.get("message") or "").strip()
+                    else:
+                        detail = str(error or "").strip()
+                    if detail:
+                        current["auto_continue_error_detail"] = detail[:500]
+                    continue
+                current["auto_continue_triggered_at"] = datetime.now().isoformat()
+                current["auto_continue_triggered_run_id"] = latest.get("mission_run_id")
+                current["auto_continue_status"] = "triggered"
+                latest["auto_continue_source_mission_run_id"] = current.get("mission_run_id")
                 refreshed_items.insert(0, latest)
                 break
 
