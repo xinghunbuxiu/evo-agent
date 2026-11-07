@@ -163,6 +163,47 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(result["nodes"][0]["id"], "worker_specific_plan")
         self.assertTrue(result["planning_proposal"]["accepted"])
 
+    def test_repair_mode_blocks_dispatch_when_worker_plan_is_not_accepted(self):
+        planner = MissionPlanner(
+            Path(tempfile.gettempdir()),
+            registry=FakeRegistry(),
+            plan_proposer=lambda **kwargs: {
+                "status": "unavailable",
+                "detail": "model_provider_timeout",
+            },
+        )
+        planner._knowledge_signals = mock.Mock(return_value={
+            "experience_count": 0, "verified_skill_count": 0,
+            "top_experience_ids": [], "top_verified_skill_ids": [],
+        })
+        planner._role_reflection_context = mock.Mock(return_value={})
+        planner._match_verified_skills = mock.Mock(return_value=[])
+        result = planner.plan(
+            tenant_id="tenant-a",
+            goal="Build and verify a Python utility",
+            context={
+                "repair_mode": "fix_test",
+                "repair_failure_evidence": [{
+                    "failure_kind": "verification_failure",
+                    "failure_detail": "output file missing",
+                }],
+                "runtime_route": {
+                    "primary_worker_id": "python-worker",
+                    "workers": [{
+                        "worker_id": "python-worker",
+                        "enabled": True,
+                        "capability_type": "python",
+                    }],
+                },
+            },
+        )
+        self.assertEqual(result["planning_proposal"]["status"], "unavailable")
+        self.assertEqual(result["nodes"][0]["status"], "needs_learning")
+        self.assertIn("repair_plan_proposal_unavailable", result["nodes"][0]["blockers"])
+        trace = {item["step"]: item for item in result["nodes"][0]["decision_trace"]}
+        self.assertEqual(trace["repair_plan_gate"]["rule_id"], "mission.repair_plan.required.v1")
+        self.assertFalse(trace["repair_plan_gate"]["evidence"]["automatic_dispatch"])
+
     def test_worker_ai_plan_outside_manifest_capability_is_rejected(self):
         planner = MissionPlanner(
             Path(tempfile.gettempdir()),

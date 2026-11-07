@@ -434,9 +434,13 @@ class MissionPlanner:
             template = self._goal_driven_template(goal, context)
         dependency_graph = _validate_template_dependencies(template)
         resolved_template_kind = resolved_kind
+        repair_plan_blocked = context.get("repair_mode") == "fix_test" and not planning_proposal.get("accepted")
         planning_mode = (
-            "worker_ai_plan" if planning_proposal.get("accepted")
-            else ("registered_worker_template" if resolved_template_kind else "goal_driven")
+            "repair_plan_blocked" if repair_plan_blocked
+            else (
+                "worker_ai_plan" if planning_proposal.get("accepted")
+                else ("registered_worker_template" if resolved_template_kind else "goal_driven")
+            )
         )
         mission_decision_trace = [
             {
@@ -490,6 +494,26 @@ class MissionPlanner:
             for node_template in template.get("tasks", [])
             if isinstance(node_template, dict)
         ]
+        if repair_plan_blocked:
+            for node in nodes:
+                if "repair_plan_proposal_unavailable" not in node.blockers:
+                    node.blockers.append("repair_plan_proposal_unavailable")
+                node.status = "needs_learning"
+                node.gap_type = "repair_plan_unavailable"
+                node.reasoning.append(
+                    "当前是失败修复轮次，但 Worker 没有提交通过审核的修复计划；为避免重复执行旧流程，Mission 暂停派发。"
+                )
+                node.next_actions.insert(0, "恢复 AI 计划服务或补齐 Worker 修复方案后，再重新提交本轮修复计划")
+                node.decision_trace.append({
+                    "step": "repair_plan_gate",
+                    "rule_id": "mission.repair_plan.required.v1",
+                    "result": "blocked",
+                    "evidence": {
+                        "proposal_status": planning_proposal.get("status"),
+                        "reason": planning_proposal.get("detail") or "worker_repair_plan_not_accepted",
+                        "automatic_dispatch": False,
+                    },
+                })
         status_summary = self._summarize_nodes(nodes)
         work_type_summary = self._work_type_summary(context)
         gap_summary = self._gap_summary(nodes, context)

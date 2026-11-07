@@ -585,6 +585,16 @@ def derive_repair_context(mission_run: dict) -> dict:
             "node_id": str(action.get("node_id") or "")[:80],
             "title": str(action.get("title") or "")[:240],
             "task_id": str(action.get("task_id") or "")[:120],
+            "task_type": str(action.get("task_type") or "")[:80],
+            "capability_type": str(action.get("capability_type") or "")[:80],
+            "verification_contract": (
+                copy.deepcopy(action.get("verification_contract"))
+                if isinstance(action.get("verification_contract"), dict) else {}
+            ),
+            "validation_checks": [
+                str(item)[:240] for item in action.get("validation_checks", [])
+                if str(item).strip()
+            ][:20] if isinstance(action.get("validation_checks"), list) else [],
             "failure_kind": (
                 "verification_failure"
                 if action.get("status") == "verification_failed"
@@ -623,6 +633,7 @@ def derive_repair_context(mission_run: dict) -> dict:
     context["repair_of_mission_run_id"] = mission_run.get("mission_run_id")
     context["repair_failure_evidence"] = evidence
     context["auto_repair"] = True
+    context["auto_continue"] = False
     return context
 
 
