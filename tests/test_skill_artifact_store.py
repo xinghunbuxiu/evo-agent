@@ -156,6 +156,18 @@ class SkillArtifactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillArtifactStoreError, "content digest mismatch"):
             self.store.load_for_binding(binding)
 
+    def test_reverifies_persisted_validator_attestation_on_every_load(self):
+        binding = self._publish_binding()
+        path = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
+        os.chmod(path, 0o600)
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIn("validation_attestation", artifact)
+        artifact["validation_attestation"]["passed"] = False
+        path.write_text(json.dumps(artifact), encoding="utf-8")
+        os.chmod(path, 0o400)
+        with self.assertRaisesRegex(SkillArtifactStoreError, "did not pass"):
+            self.store.load_for_binding(binding)
+
     def test_rejects_malformed_mission_lineage_values(self):
         binding = self._publish_binding()
         for field, value in (
