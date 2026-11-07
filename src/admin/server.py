@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 from admin.spa_static import register_spa_static
 from admin.experience_outbox_runtime import sync_experience_outbox
+from admin.mission_plan_ai_runtime import create_worker_mission_plan_proposer
 
 # 核心组件
 import sys
@@ -1149,8 +1150,12 @@ def create_app() -> FastAPI:
     project_packages = load_project_packages(workspace)
     plugin_summary = PluginLoader(capability_registry=capability_registry).load_default(workspace)
     decision_engine = DecisionEngine(workspace, capability_registry)
-    mission_planner = MissionPlanner(workspace, capability_registry)
     tenant_manager = TenantManager(workspace)
+    mission_planner = MissionPlanner(
+        workspace,
+        capability_registry,
+        plan_proposer=create_worker_mission_plan_proposer(tenant_manager),
+    )
     if plugin_summary.loaded:
         print(f"✅ 已加载插件: {[item.plugin_name for item in plugin_summary.loaded]}")
     if plugin_summary.skipped:

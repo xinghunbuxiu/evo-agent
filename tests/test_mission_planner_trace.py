@@ -35,6 +35,118 @@ class MissionPlannerTraceTests(unittest.TestCase):
         return planner
 
 
+    def test_routed_worker_ai_plan_is_validated_and_used_by_mission(self):
+        proposal = {
+            "status": "completed",
+            "provider": "test-provider",
+            "model": "test-model",
+            "plan": {
+                "title": "Python task plan",
+                "description": "Plan proposed by the routed worker",
+                "primary_capability_type": "python",
+                "delivery": ["working function", "assertion evidence"],
+                "tasks": [
+                    {
+                        "id": "inspect_requirements",
+                        "title": "Inspect requirements",
+                        "objective": "Identify input and output constraints",
+                        "task_type": "analyze",
+                        "capability_type": "python",
+                        "acceptance": "Input and output constraints are recorded",
+                    },
+                    {
+                        "id": "implement_and_test",
+                        "title": "Implement and test",
+                        "objective": "Implement the function and test edge cases",
+                        "task_type": "execute",
+                        "capability_type": "python",
+                        "acceptance": "Positive, negative and boundary cases pass",
+                        "depends_on": ["inspect_requirements"],
+                    },
+                ],
+            },
+        }
+        planner = MissionPlanner(
+            Path(tempfile.gettempdir()),
+            registry=FakeRegistry(),
+            plan_proposer=lambda **kwargs: proposal,
+        )
+        planner._knowledge_signals = mock.Mock(return_value={
+            "experience_count": 0, "verified_skill_count": 0,
+            "top_experience_ids": [], "top_verified_skill_ids": [],
+        })
+        planner._role_reflection_context = mock.Mock(return_value={})
+        planner._match_verified_skills = mock.Mock(return_value=[])
+        result = planner.plan(
+            tenant_id="tenant-a",
+            goal="Build a Python utility and prove it works",
+            context={
+                "runtime_route": {
+                    "primary_worker_id": "python-worker",
+                    "workers": [{
+                        "worker_id": "python-worker",
+                        "title": "Python Worker",
+                        "enabled": True,
+                        "capability_type": "python",
+                        "task_types": ["analyze", "execute"],
+                    }],
+                },
+            },
+        )
+        self.assertEqual([node["id"] for node in result["nodes"]], [
+            "inspect_requirements", "implement_and_test",
+        ])
+        self.assertEqual(result["nodes"][1]["depends_on"], ["inspect_requirements"])
+        self.assertEqual(result["planning_proposal"]["status"], "accepted")
+        self.assertTrue(result["planning_proposal"]["accepted"])
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(trace["plan_assembly"]["evidence"]["planning_mode"], "worker_ai_plan")
+        self.assertEqual(trace["plan_assembly"]["evidence"]["worker_plan_proposal"]["provider"], "test-provider")
+
+    def test_worker_ai_plan_outside_manifest_capability_is_rejected(self):
+        planner = MissionPlanner(
+            Path(tempfile.gettempdir()),
+            registry=FakeRegistry(),
+            plan_proposer=lambda **kwargs: {
+                "status": "completed",
+                "plan": {
+                    "tasks": [{
+                        "id": "escape_capability",
+                        "title": "Run unrelated capability",
+                        "objective": "Do something outside this worker",
+                        "task_type": "execute",
+                        "capability_type": "finance",
+                        "acceptance": "Unrelated result",
+                    }],
+                },
+            },
+        )
+        planner._knowledge_signals = mock.Mock(return_value={
+            "experience_count": 0, "verified_skill_count": 0,
+            "top_experience_ids": [], "top_verified_skill_ids": [],
+        })
+        planner._role_reflection_context = mock.Mock(return_value={})
+        planner._match_verified_skills = mock.Mock(return_value=[])
+        result = planner.plan(
+            tenant_id="tenant-a",
+            goal="Do a Python task",
+            context={
+                "runtime_route": {
+                    "primary_worker_id": "python-worker",
+                    "workers": [{
+                        "worker_id": "python-worker",
+                        "enabled": True,
+                        "capability_type": "python",
+                    }],
+                },
+            },
+        )
+        self.assertEqual(result["planning_proposal"]["status"], "rejected")
+        self.assertFalse(result["planning_proposal"]["accepted"])
+        self.assertEqual(result["nodes"][0]["id"], "goal_execution")
+        trace = {item["step"]: item for item in result["decision_trace"]}
+        self.assertEqual(trace["plan_assembly"]["evidence"]["planning_mode"], "goal_driven")
+
     def test_matching_verified_strategy_is_recommended_and_traced_per_tenant(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

@@ -13,8 +13,9 @@ Evo Core - Mission Planner
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry, get_capability_registry
 from .capability_types import capability_type_label, infer_capability_type
@@ -148,9 +149,16 @@ class MissionNode:
 
 
 class MissionPlanner:
-    def __init__(self, workspace: Path, registry: Optional[CapabilityRegistry] = None):
+    def __init__(
+        self,
+        workspace: Path,
+        registry: Optional[CapabilityRegistry] = None,
+        *,
+        plan_proposer: Callable[..., dict[str, Any]] | None = None,
+    ):
         self.workspace = workspace
         self.registry = registry or get_capability_registry()
+        self.plan_proposer = plan_proposer
         self._strategy_engines: dict[str, StrategyEngine] = {}
         organization_root = Path(workspace) / ".organization"
         required_registry_files = (
@@ -170,6 +178,98 @@ class MissionPlanner:
         if callable(load_worker_mission_kind_templates):
             templates.update(load_worker_mission_kind_templates(self.workspace))
         return templates
+
+    @staticmethod
+    def _selected_worker_manifest(context: dict[str, Any]) -> dict[str, Any]:
+        route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        workers = route.get("workers", []) if isinstance(route.get("workers"), list) else []
+        worker_id = str(route.get("primary_worker_id") or context.get("runtime_primary_worker_id") or "").strip()
+        selected = next(
+            (
+                item for item in workers
+                if isinstance(item, dict)
+                and str(item.get("worker_id") or "").strip() == worker_id
+                and item.get("enabled") is not False
+            ),
+            None,
+        )
+        if selected is None:
+            selected = next(
+                (item for item in workers if isinstance(item, dict) and item.get("enabled") is not False),
+                None,
+            )
+        return dict(selected) if isinstance(selected, dict) else {}
+
+    @staticmethod
+    def _validate_worker_plan_proposal(
+        proposal: dict[str, Any],
+        *,
+        worker_manifest: dict[str, Any],
+        goal: str,
+    ) -> dict[str, Any]:
+        if not isinstance(proposal, dict):
+            raise ValueError("worker plan must be an object")
+        raw_tasks = proposal.get("tasks")
+        if not isinstance(raw_tasks, list) or not raw_tasks:
+            raise ValueError("worker plan requires a non-empty tasks list")
+        if len(raw_tasks) > 24:
+            raise ValueError("worker plan exceeds the 24-node safety limit")
+
+        manifest_capability = str(worker_manifest.get("capability_type") or "").strip()
+        allowed_capabilities = {manifest_capability} if manifest_capability else set()
+        raw_capabilities = worker_manifest.get("capabilities")
+        if isinstance(raw_capabilities, list):
+            allowed_capabilities.update(str(item).strip() for item in raw_capabilities if str(item).strip())
+
+        tasks: list[dict[str, Any]] = []
+        allowed_fields = {
+            "id", "title", "objective", "task_type", "capability_type",
+            "acceptance", "depends_on", "parallel_safe", "verification_contract",
+        }
+        for index, raw in enumerate(raw_tasks):
+            if not isinstance(raw, dict):
+                raise ValueError(f"worker plan task {index} must be an object")
+            task = {key: raw[key] for key in allowed_fields if key in raw}
+            for field_name in ("id", "title", "objective", "task_type", "acceptance"):
+                value = str(task.get(field_name) or "").strip()
+                if not value:
+                    raise ValueError(f"worker plan task {index} requires {field_name}")
+                if len(value) > 2400:
+                    raise ValueError(f"worker plan task {index} field {field_name} is too long")
+                task[field_name] = value
+            task_id = task["id"]
+            if len(task_id) > 80 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", task_id):
+                raise ValueError(f"worker plan task {index} has an invalid id")
+            capability = str(task.get("capability_type") or manifest_capability).strip()
+            if not capability:
+                raise ValueError(f"worker plan task {index} requires capability_type")
+            if allowed_capabilities and capability not in allowed_capabilities:
+                raise ValueError(f"worker plan task {index} exceeds worker capability boundary")
+            task["capability_type"] = capability
+            dependencies = task.get("depends_on", [])
+            if not isinstance(dependencies, list):
+                raise ValueError(f"worker plan task {index} depends_on must be a list")
+            task["depends_on"] = [str(item).strip() for item in dependencies]
+            if any(not item for item in task["depends_on"]):
+                raise ValueError(f"worker plan task {index} has an empty dependency")
+            if "parallel_safe" in task and not isinstance(task["parallel_safe"], bool):
+                raise ValueError(f"worker plan task {index} parallel_safe must be boolean")
+            if "verification_contract" in task and not isinstance(task["verification_contract"], dict):
+                raise ValueError(f"worker plan task {index} verification_contract must be an object")
+            tasks.append(task)
+
+        normalized = {
+            "title": str(proposal.get("title") or worker_manifest.get("title") or "Worker proposed mission").strip(),
+            "description": str(proposal.get("description") or f"Worker plan for: {goal}").strip(),
+            "primary_capability_type": str(proposal.get("primary_capability_type") or manifest_capability).strip(),
+            "delivery": [
+                str(item).strip() for item in proposal.get("delivery", [])
+                if str(item).strip()
+            ] if isinstance(proposal.get("delivery", []), list) else [],
+            "tasks": tasks,
+        }
+        _validate_template_dependencies(normalized)
+        return normalized
 
     def _goal_driven_template(self, goal: str, context: dict[str, Any]) -> dict[str, Any]:
         """Build one task envelope without imposing a domain-specific workflow.
@@ -279,10 +379,56 @@ class MissionPlanner:
             resolved_kind = self._infer_mission_kind(goal, context)
             resolution_source = "worker_manifest_template" if resolved_kind else "goal_driven_fallback"
         template = templates.get(resolved_kind) if resolved_kind else None
+        planning_proposal: dict[str, Any] = {
+            "status": "not_requested",
+            "accepted": False,
+            "source": "worker_ai_planner",
+        }
+        selected_worker = self._selected_worker_manifest(context)
+        # Explicitly selected templates remain authoritative. For ordinary goal-driven
+        # requests, let the routed Worker propose the detailed steps; Mission validates
+        # the proposal before any node can reach dispatch authorization.
+        should_request_worker_plan = (
+            callable(self.plan_proposer)
+            and bool(selected_worker)
+            and (not mission_kind or mission_kind == "automation_operation")
+        )
+        if should_request_worker_plan:
+            try:
+                proposal_result = self.plan_proposer(
+                    tenant_id=tenant_id,
+                    goal=goal,
+                    context=context,
+                    worker_manifest=selected_worker,
+                    reference_template=template if isinstance(template, dict) else {},
+                )
+                proposal_result = proposal_result if isinstance(proposal_result, dict) else {}
+                planning_proposal.update({
+                    "status": str(proposal_result.get("status") or "unavailable"),
+                    "provider": proposal_result.get("provider"),
+                    "model": proposal_result.get("model"),
+                    "detail": str(proposal_result.get("detail") or "")[:240] or None,
+                })
+                if proposal_result.get("status") == "completed":
+                    validated = self._validate_worker_plan_proposal(
+                        proposal_result.get("plan"),
+                        worker_manifest=selected_worker,
+                        goal=goal,
+                    )
+                    template = validated
+                    planning_proposal["status"] = "accepted"
+                    planning_proposal["accepted"] = True
+            except Exception as exc:  # Fail closed to registered manifest/reference plan.
+                planning_proposal["status"] = "rejected"
+                planning_proposal["detail"] = f"{type(exc).__name__}: {exc}"[:240]
         if not isinstance(template, dict):
             template = self._goal_driven_template(goal, context)
         dependency_graph = _validate_template_dependencies(template)
         resolved_template_kind = resolved_kind
+        planning_mode = (
+            "worker_ai_plan" if planning_proposal.get("accepted")
+            else ("registered_worker_template" if resolved_template_kind else "goal_driven")
+        )
         mission_decision_trace = [
             {
                 "step": "mission_kind_resolution",
@@ -311,8 +457,16 @@ class MissionPlanner:
                 "result": "assembled",
                 "evidence": {
                     "node_count": sum(1 for item in template.get("tasks", []) if isinstance(item, dict)),
-                    "planning_mode": "registered_worker_template" if resolved_template_kind else "goal_driven",
+                    "planning_mode": planning_mode,
                     "uses_registered_template": bool(resolved_template_kind),
+                    "worker_plan_proposal": {
+                        "status": planning_proposal.get("status"),
+                        "accepted": planning_proposal.get("accepted"),
+                        "worker_id": selected_worker.get("worker_id") or None,
+                        "provider": planning_proposal.get("provider"),
+                        "model": planning_proposal.get("model"),
+                        "detail": planning_proposal.get("detail"),
+                    },
                     "work_type_id": str(context.get("work_type_id") or "").strip() or None,
                 },
             },
@@ -386,6 +540,14 @@ class MissionPlanner:
             "learning_tasks": learning_tasks,
             "nodes": serialized_nodes,
             "dependency_graph": dependency_graph,
+            "planning_proposal": {
+                "status": planning_proposal.get("status"),
+                "accepted": planning_proposal.get("accepted"),
+                "worker_id": selected_worker.get("worker_id") or None,
+                "provider": planning_proposal.get("provider"),
+                "model": planning_proposal.get("model"),
+                "detail": planning_proposal.get("detail"),
+            },
             "orchestration": build_mission_brain_contract(serialized_nodes),
             "recommended_next_actions": self._recommended_actions(nodes, gap_summary, learning_tasks),
         }
