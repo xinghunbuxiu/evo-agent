@@ -85,7 +85,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         artifact["code"] = "def run():\n    return False\n"
         path.write_text(json.dumps(artifact), encoding="utf-8")
         os.chmod(path, 0o400)
-        with self.assertRaisesRegex(SkillArtifactStoreError, "read-only"):
+        with self.assertRaisesRegex(SkillArtifactStoreError, "content digest mismatch"):
             self.store.load_for_binding(binding)
 
     def test_rejects_cross_tenant_and_cross_skill_bindings(self):
