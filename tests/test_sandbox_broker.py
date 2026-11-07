@@ -158,6 +158,25 @@ class SandboxBrokerServiceTests(unittest.TestCase):
                 expected_skill_binding=wrong_binding,
             )
 
+    def test_skill_binding_fails_closed_without_trusted_artifact_store(self):
+        context = {
+            "tenant_id": "tenant-test", "mission_run_id": "mission-test",
+            "node_id": "node-test", "task_id": "task-test",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-untrusted", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "verified",
+            "mission_context": context,
+        }
+        request = build_broker_request(
+            "project-test", self.spec, mission_context=context,
+            request_id=str(uuid.uuid4()), skill_binding=binding,
+        )
+        with self.assertRaisesRegex(BrokerRequestRejected, "Artifact Store is not configured"):
+            self.service.handle_request(request)
+        self.assertEqual(self.calls, [])
+
     def test_replay_is_rejected_before_second_execution(self):
         self.service.handle_request(self.request)
         with self.assertRaisesRegex(BrokerRequestRejected, "already been used"):
