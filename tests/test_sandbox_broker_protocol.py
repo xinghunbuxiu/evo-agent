@@ -60,6 +60,8 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             "request_id": self.request_id,
             "workspace_id": "project-evo-os",
             "mission_context": {"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+            "skill_binding": None,
+            "skill_artifact": None,
             "result": result,
         }
         canonical = json.dumps(
@@ -86,7 +88,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
         self.assertNotIn("workspace_path", request)
         self.assertEqual(
             set(request),
-            {"schema_version", "request_id", "workspace_id", "mission_context", "profile_id", "target", "timeout_seconds"},
+            {"schema_version", "request_id", "workspace_id", "mission_context", "skill_binding", "profile_id", "target", "timeout_seconds"},
         )
 
     def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
