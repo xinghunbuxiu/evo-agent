@@ -55,6 +55,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
             "skill_id": candidate.id,
             "skill_version": candidate.version,
             "content_sha256": hashlib.sha256(candidate.code.encode("utf-8")).hexdigest(),
+            "trust_level": candidate.trust_level,
             "passed": True,
         }
         signature = self.validator_key.sign(json.dumps(
@@ -131,6 +132,13 @@ class SkillArtifactStoreTests(unittest.TestCase):
             self.store.publish(
                 tenant_id="tenant-one", skill=self.skill,
                 validation_attestation=wrong_skill,
+            )
+        elevated = self._attestation()
+        elevated["trust_level"] = "cloud"
+        with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind"):
+            self.store.publish(
+                tenant_id="tenant-one", skill=self.skill,
+                validation_attestation=elevated,
             )
 
     def test_rejects_tampered_digest_and_artifact_content(self):
