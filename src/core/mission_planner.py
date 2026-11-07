@@ -88,6 +88,7 @@ def _validate_template_dependencies(template: dict[str, Any]) -> dict[str, list[
 # node and are planned by the selected worker.
 MISSION_KIND_TEMPLATES: dict[str, dict[str, Any]] = {}
 
+
 @dataclass
 class MissionNode:
     id: str
@@ -275,11 +276,11 @@ class MissionPlanner:
             {
                 "step": "mission_kind_resolution",
                 "rule_id": "mission.kind_resolution.v1",
-                "result": resolved_template_kind,
+                "result": resolved_template_kind or "goal_driven",
                 "evidence": {
                     "resolution_source": resolution_source,
                     "requested_kind": requested_kind or None,
-                    "selected_template": resolved_template_kind,
+                    "selected_template": resolved_template_kind or None,
                     "available_template_count": len(templates),
                 },
             },
