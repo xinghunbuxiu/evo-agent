@@ -90,7 +90,11 @@ def create_mission_execution_bindings(
         else:
             observed_signals = []
         task_error = trim_candidate_text(
-            str(getattr(failed_task, "error", "") or result.get("error") or ""),
+            str(
+                action.get("detail")
+                if str(action.get("status") or "") == "verification_failed"
+                else (getattr(failed_task, "error", "") or result.get("error") or "")
+            ),
             1200,
         )
         base_snapshot = {
@@ -598,7 +602,6 @@ def create_mission_execution_bindings(
                                     action=current,
                                     failed_task=task,
                                 )
-                                refreshed_actions.append(current)
                                 refreshed_actions.append({
                                     "node_id": node_id,
                                     "title": current.get("title"),
@@ -638,8 +641,7 @@ def create_mission_execution_bindings(
                         counts["success"] += 1
                         successful_task_actions.append(current)
                 elif task_status == "failed":
-                    current["execution_status"] = "failed";
-
+                    current["execution_status"] = "failed"
                     current["status"] = "failed"
                     current["detail"] = trim_candidate_text(task.error or f"{current.get('task_type') or 'task'} 执行失败")
                     counts["failed"] += 1
