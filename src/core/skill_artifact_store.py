@@ -280,6 +280,7 @@ class SkillArtifactStore:
 
 __all__ = [
     "ARTIFACT_SCHEMA",
+    "VALIDATION_ATTESTATION_SCHEMA",
     "SkillArtifactStore",
     "SkillArtifactStoreError",
 ]
