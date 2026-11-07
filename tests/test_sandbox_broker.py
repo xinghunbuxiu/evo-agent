@@ -76,87 +76,25 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(len(self.calls), 1)
 
-    def test_broker_resolves_exact_attested_skill_and_signs_binding(self):
-        validator_key = Ed25519PrivateKey.generate()
-        artifact_root = Path(self.temp.name) / "trusted-artifacts"
-        artifact_root.mkdir(mode=0o700)
-        artifact_store = SkillArtifactStore(
-            artifact_root,
-            validator_public_key=validator_key.public_key().public_bytes_raw(),
-            validator_key_id="validator-key",
-        )
-        skill = SimpleNamespace(
-            id="skill-demo", version="1.0.0",
-            code="def run():\\n    return 'trusted'\\n",
-            trust_level="verified",
-        )
-        digest = hashlib.sha256(skill.code.encode("utf-8")).hexdigest()
-        unsigned = {
-            "schema_version": VALIDATION_ATTESTATION_SCHEMA,
-            "validation_id": "validation-demo",
-            "validator_id": "independent-validator",
-            "tenant_id": "tenant-test",
-            "skill_id": skill.id,
-            "skill_version": skill.version,
-            "content_sha256": digest,
-            "trust_level": "verified",
-            "passed": True,
-        }
-        signature = validator_key.sign(json.dumps(
-            unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        ).encode("utf-8"))
-        attestation = {
-            **unsigned,
-            "signature": {
-                "algorithm": "ed25519", "key_id": "validator-key",
-                "value": base64.b64encode(signature).decode("ascii"),
-            },
-        }
-        artifact_store.publish(
-            tenant_id="tenant-test", skill=skill, validation_attestation=attestation,
-        )
+    def test_skill_binding_is_rejected_until_dedicated_replay_executor_exists(self):
         context = {
             "tenant_id": "tenant-test", "mission_run_id": "mission-test",
             "node_id": "node-test", "task_id": "task-test",
         }
         binding = {
             "schema_version": "mission.skill-replay-binding.v1",
-            "skill_id": skill.id, "skill_version": skill.version,
-            "content_sha256": digest, "trust_level": "verified",
+            "skill_id": "skill-demo", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "verified",
             "mission_context": context,
         }
-        service = SandboxBrokerService(
-            workspace_roots={"project-test": self.root},
-            replay_store=self.store, executor=self._execute,
-            signing_key=self.key, key_id="broker-test-key",
-            skill_artifact_store=artifact_store,
-        )
         request = build_broker_request(
             "project-test", self.spec, mission_context=context,
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
-        response = service.handle_request(request)
-        self.assertEqual(response["skill_binding"], binding)
-        self.assertEqual(response["skill_artifact"]["content_sha256"], digest)
-        self.assertEqual(response["result"]["profile_id"], "python.pytest")
-        self.assertEqual(len(self.calls), 1)
-        verified = verify_broker_response(
-            response, public_key=self.key.public_key().public_bytes_raw(),
-            expected_key_id="broker-test-key", expected_request_id=request["request_id"],
-            expected_workspace_id="project-test", expected_mission_context=context,
-            expected_profile_id="python.pytest", expected_target="tests/test_sample.py",
-            expected_skill_binding=binding,
-        )
-        self.assertTrue(verified["execution_succeeded"])
-        wrong_binding = dict(binding, content_sha256="0" * 64)
-        with self.assertRaisesRegex(ValueError, "binding does not match"):
-            verify_broker_response(
-                response, public_key=self.key.public_key().public_bytes_raw(),
-                expected_key_id="broker-test-key", expected_request_id=request["request_id"],
-                expected_workspace_id="project-test", expected_mission_context=context,
-                expected_profile_id="python.pytest", expected_target="tests/test_sample.py",
-                expected_skill_binding=wrong_binding,
-            )
+        with self.assertRaisesRegex(BrokerRequestRejected, "Skill Replay executor is not configured"):
+            self.service.handle_request(request)
+        # Crucially, a generic pytest target must not run under a Skill binding.
+        self.assertEqual(self.calls, [])
 
     def test_skill_binding_fails_closed_without_trusted_artifact_store(self):
         context = {
@@ -173,7 +111,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "project-test", self.spec, mission_context=context,
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
-        with self.assertRaisesRegex(BrokerRequestRejected, "Artifact Store is not configured"):
+        with self.assertRaisesRegex(BrokerRequestRejected, "Skill Replay executor is not configured"):
             self.service.handle_request(request)
         self.assertEqual(self.calls, [])
 
