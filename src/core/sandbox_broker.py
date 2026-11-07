@@ -25,12 +25,13 @@ from .sandbox_broker_protocol import (
     BROKER_SIGNATURE_ALGORITHM,
     _canonical_json,
     _normalize_mission_context,
+    _normalize_skill_binding,
 )
 from .sandbox_runner import RunnerProcessOutput
 
 
 _REQUEST_FIELDS = {
-    "schema_version", "request_id", "workspace_id", "mission_context",
+    "schema_version", "request_id", "workspace_id", "mission_context", "skill_binding",
     "profile_id", "target", "timeout_seconds",
 }
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -132,7 +133,11 @@ def validate_broker_request(request: object) -> dict:
     timeout = request.get("timeout_seconds")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
         raise BrokerRequestRejected("timeout_seconds must be between 1 and 300")
-    return {**request, "mission_context": mission_context}
+    try:
+        binding = _normalize_skill_binding(request.get("skill_binding"), expected_context=mission_context)
+    except ValueError as exc:
+        raise BrokerRequestRejected("skill_binding is invalid") from exc
+    return {**request, "mission_context": mission_context, "skill_binding": binding}
 
 
 def _validate_workspace_root(raw_root: Path) -> Path:
@@ -178,6 +183,7 @@ class SandboxBrokerService:
         key_id: str,
         runner_id: str = "evo-sandbox-broker",
         runner_version: str = "1",
+        skill_artifact_store: object | None = None,
     ):
         if not key_id or len(key_id) > 128:
             raise ValueError("broker key_id must be a non-empty bounded value")
@@ -194,6 +200,7 @@ class SandboxBrokerService:
         self.key_id = key_id
         self.runner_id = runner_id
         self.runner_version = runner_version
+        self.skill_artifact_store = skill_artifact_store
 
     def handle_request(self, request: object) -> dict:
         validated = validate_broker_request(request)
@@ -202,6 +209,23 @@ class SandboxBrokerService:
         root = self.workspace_roots.get(workspace_id)
         if root is None:
             raise BrokerRequestRejected("workspace_id is not registered with this broker")
+        binding = validated["skill_binding"]
+        skill_artifact = None
+        if binding is not None:
+            if self.skill_artifact_store is None:
+                raise BrokerRequestRejected("trusted Skill Artifact Store is not configured")
+            try:
+                artifact = self.skill_artifact_store.load_for_binding(binding)
+            except Exception as exc:
+                raise BrokerRequestRejected("trusted Skill artifact attestation or digest verification failed") from exc
+            # This is artifact resolution only, not Skill Replay execution.
+            skill_artifact = {
+                "schema_version": "mission.skill-artifact-resolution.v1",
+                "skill_id": artifact.id,
+                "skill_version": artifact.version,
+                "content_sha256": artifact.content_sha256,
+                "trust_level": artifact.trust_level,
+            }
         self.replay_store.claim(request_id, validated)
 
         spec = resolve_execution_profile(root, {
@@ -228,6 +252,8 @@ class SandboxBrokerService:
             "request_id": request_id,
             "workspace_id": workspace_id,
             "mission_context": validated["mission_context"],
+            "skill_binding": binding,
+            "skill_artifact": skill_artifact,
             "result": result,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
