@@ -117,6 +117,22 @@ class SkillArtifactStoreTests(unittest.TestCase):
                 validation_attestation=self._attestation(changed),
             )
 
+    def test_rejects_unsigned_or_mismatched_validation_attestation(self):
+        forged = self._attestation()
+        forged["signature"] = dict(forged["signature"], value=base64.b64encode(b"invalid").decode("ascii"))
+        with self.assertRaisesRegex(SkillArtifactStoreError, "signature verification failed"):
+            self.store.publish(
+                tenant_id="tenant-one", skill=self.skill,
+                validation_attestation=forged,
+            )
+        wrong_skill = self._attestation()
+        wrong_skill["skill_id"] = "skill_other"
+        with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind"):
+            self.store.publish(
+                tenant_id="tenant-one", skill=self.skill,
+                validation_attestation=wrong_skill,
+            )
+
     def test_rejects_tampered_digest_and_artifact_content(self):
         binding = self._publish_binding()
         changed_binding = dict(binding, content_sha256="0" * 64)
@@ -150,6 +166,9 @@ class SkillArtifactStoreTests(unittest.TestCase):
             "trust_level": "verified",
             "mission_context": self.context,
         }
+        malformed_trust = dict(missing, trust_level=[])
+        with self.assertRaises(SkillArtifactStoreError):
+            self.store.load_for_binding(malformed_trust)
         with self.assertRaises(SkillArtifactStoreError):
             self.store.load_for_binding(missing)
         self.assertFalse((self.root / "tenant-one").exists())
