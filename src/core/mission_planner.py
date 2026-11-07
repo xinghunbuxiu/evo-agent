@@ -388,10 +388,16 @@ class MissionPlanner:
         # Explicitly selected templates remain authoritative. For ordinary goal-driven
         # requests, let the routed Worker propose the detailed steps; Mission validates
         # the proposal before any node can reach dispatch authorization.
+        runtime_route = context.get("runtime_route", {}) if isinstance(context.get("runtime_route"), dict) else {}
+        worker_id = str(selected_worker.get("worker_id") or "").strip()
+        work_type_id = str(runtime_route.get("work_type_id") or context.get("work_type_id") or "").strip()
+        # A work type commonly points mission_kind at its routed Worker. Treat those
+        # as routing metadata, not as a request to freeze the manifest template.
+        route_kinds = {item for item in (worker_id, work_type_id, "automation_operation") if item}
         should_request_worker_plan = (
             callable(self.plan_proposer)
             and bool(selected_worker)
-            and (not mission_kind or mission_kind == "automation_operation")
+            and (not mission_kind or str(mission_kind).strip() in route_kinds)
         )
         if should_request_worker_plan:
             try:

@@ -103,6 +103,50 @@ class MissionPlannerTraceTests(unittest.TestCase):
         self.assertEqual(trace["plan_assembly"]["evidence"]["planning_mode"], "worker_ai_plan")
         self.assertEqual(trace["plan_assembly"]["evidence"]["worker_plan_proposal"]["provider"], "test-provider")
 
+    def test_work_type_worker_kind_still_allows_worker_ai_planning(self):
+        planner = MissionPlanner(
+            Path(tempfile.gettempdir()),
+            registry=FakeRegistry(),
+            plan_proposer=lambda **kwargs: {
+                "status": "completed",
+                "plan": {
+                    "tasks": [{
+                        "id": "worker_specific_plan",
+                        "title": "Worker-specific plan",
+                        "objective": "Use the routed worker to decide task steps",
+                        "task_type": "execute",
+                        "capability_type": "python",
+                        "acceptance": "The task result is independently verifiable",
+                    }],
+                },
+            },
+        )
+        planner._knowledge_signals = mock.Mock(return_value={
+            "experience_count": 0, "verified_skill_count": 0,
+            "top_experience_ids": [], "top_verified_skill_ids": [],
+        })
+        planner._role_reflection_context = mock.Mock(return_value={})
+        planner._match_verified_skills = mock.Mock(return_value=[])
+        result = planner.plan(
+            tenant_id="tenant-a",
+            goal="Build a Python utility",
+            mission_kind="python-worker",
+            context={
+                "work_type_id": "python-work",
+                "runtime_route": {
+                    "work_type_id": "python-work",
+                    "primary_worker_id": "python-worker",
+                    "workers": [{
+                        "worker_id": "python-worker",
+                        "enabled": True,
+                        "capability_type": "python",
+                    }],
+                },
+            },
+        )
+        self.assertEqual(result["nodes"][0]["id"], "worker_specific_plan")
+        self.assertTrue(result["planning_proposal"]["accepted"])
+
     def test_worker_ai_plan_outside_manifest_capability_is_rejected(self):
         planner = MissionPlanner(
             Path(tempfile.gettempdir()),
