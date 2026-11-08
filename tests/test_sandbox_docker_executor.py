@@ -1,8 +1,11 @@
 """Policy tests for the Docker-backed sandbox executor (no daemon required)."""
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -147,6 +150,78 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         result = self.executor(spec)
         self.assertEqual((len(result.stdout), len(result.stderr)), (50, 50))
         self.assertEqual((result.stdout_available_bytes, result.stderr_available_bytes), (200, 200))
+
+    def test_skill_replay_uses_a_separate_read_only_networkless_container(self):
+        staging = self.root / "trusted-artifacts"
+        staging.mkdir(mode=0o700)
+        code = "def run(context):\\n    return {'ok': True}\\n"
+        skill = SimpleNamespace(
+            id="skill-demo",
+            version="1.0.0",
+            code=code,
+            content_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+        )
+        envelope = {
+            "schema_version": "mission.skill-replay-output.v1",
+            "success": True,
+            "value": {"ok": True},
+            "error": None,
+            "logs": "",
+        }
+        self.container.logs_result = (json.dumps(envelope).encode("utf-8"), b"")
+        executor = DockerSandboxExecutor(
+            docker_client=self.client, image=IMAGE, replay_staging_root=staging,
+        )
+        result = executor.execute_skill_replay(
+            skill,
+            {"tenant_id": "tenant-a", "mission_run_id": "mission-1", "node_id": "node-1", "task_id": "task-1"},
+            timeout_seconds=9,
+        )
+        config = self.client.containers.config
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(config["network_mode"], "none")
+        self.assertTrue(config["read_only"])
+        self.assertEqual(config["user"], "65532:65532")
+        self.assertEqual(config["cap_drop"], ["ALL"])
+        self.assertEqual(config["security_opt"], ["no-new-privileges:true"])
+        mount = next(iter(config["volumes"].values()))
+        self.assertEqual((mount["bind"], mount["mode"]), ("/replay", "ro"))
+        self.assertNotIn(str(self.root.resolve()), config["volumes"])
+        self.assertIn("-I", config["command"])
+        self.assertIn("-S", config["command"])
+        self.assertEqual(config["labels"]["com.evo-agent.skill-replay"], "true")
+        self.assertTrue(self.container.removed)
+        self.assertFalse(Path(next(iter(config["volumes"]))).exists())
+
+    def test_skill_replay_rejects_changed_artifact_digest_before_container_creation(self):
+        staging = self.root / "trusted-artifacts"
+        staging.mkdir(mode=0o700)
+        executor = DockerSandboxExecutor(
+            docker_client=self.client, image=IMAGE, replay_staging_root=staging,
+        )
+        skill = SimpleNamespace(
+            id="skill-demo", version="1.0.0", code="def run(context): return True",
+            content_sha256="0" * 64,
+        )
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "digest changed"):
+            executor.execute_skill_replay(
+                skill,
+                {"tenant_id": "tenant-a", "mission_run_id": "mission-1", "node_id": "node-1", "task_id": "task-1"},
+                timeout_seconds=5,
+            )
+        self.assertIsNone(self.client.containers.config)
+
+    def test_skill_replay_requires_private_broker_staging_root(self):
+        skill = SimpleNamespace(
+            id="skill-demo", version="1.0.0", code="def run(context): return True",
+            content_sha256=hashlib.sha256(b"def run(context): return True").hexdigest(),
+        )
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "staging root"):
+            self.executor.execute_skill_replay(
+                skill,
+                {"tenant_id": "tenant-a", "mission_run_id": "mission-1", "node_id": "node-1", "task_id": "task-1"},
+                timeout_seconds=5,
+            )
 
     def test_rejects_tag_only_image(self):
         with self.assertRaises(DockerSandboxConfigurationError):

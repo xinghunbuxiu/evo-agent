@@ -17,7 +17,7 @@ from typing import Callable, Mapping
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from .execution_profiles import resolve_execution_profile
+from .execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES, resolve_execution_profile
 from .execution_results import build_execution_result
 from .sandbox_broker_protocol import (
     BROKER_REQUEST_SCHEMA,
@@ -27,6 +27,7 @@ from .sandbox_broker_protocol import (
     _normalize_mission_context,
     _normalize_skill_binding,
     SKILL_ARTIFACT_RESOLUTION_SCHEMA,
+    SKILL_REPLAY_PROFILE_ID,
 )
 from .sandbox_runner import RunnerProcessOutput
 
@@ -118,7 +119,7 @@ def validate_broker_request(request: object) -> dict:
     except ValueError as exc:
         raise BrokerRequestRejected("mission_context is invalid") from exc
     profile_id = request.get("profile_id")
-    if profile_id not in {"python.unittest", "python.pytest"}:
+    if profile_id not in {"python.unittest", "python.pytest", SKILL_REPLAY_PROFILE_ID}:
         raise BrokerRequestRejected("unsupported execution profile")
     target = request.get("target")
     if not isinstance(target, str) or not target or len(target) > 512 or "\x00" in target:
@@ -129,8 +130,9 @@ def validate_broker_request(request: object) -> dict:
             part in {"", ".", ".."} for part in target.split("/")
         ):
             raise BrokerRequestRejected("pytest target must be workspace-relative")
-    elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
-        raise BrokerRequestRejected("unittest target must be a dotted module name")
+    elif profile_id == "python.unittest":
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
+            raise BrokerRequestRejected("unittest target must be a dotted module name")
     timeout = request.get("timeout_seconds")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 300:
         raise BrokerRequestRejected("timeout_seconds must be between 1 and 300")
@@ -138,6 +140,13 @@ def validate_broker_request(request: object) -> dict:
         binding = _normalize_skill_binding(request.get("skill_binding"), expected_context=mission_context)
     except ValueError as exc:
         raise BrokerRequestRejected("skill_binding is invalid") from exc
+    if profile_id == SKILL_REPLAY_PROFILE_ID:
+        if binding is None:
+            raise BrokerRequestRejected("Skill Replay requires an immutable Skill binding")
+        if target != f"{binding['skill_id']}@{binding['skill_version']}":
+            raise BrokerRequestRejected("Skill Replay target does not match its immutable binding")
+    elif binding is not None:
+        raise BrokerRequestRejected("generic test-runner requests cannot carry a Skill binding")
     return {**request, "mission_context": mission_context, "skill_binding": binding}
 
 
@@ -185,6 +194,7 @@ class SandboxBrokerService:
         runner_id: str = "evo-sandbox-broker",
         runner_version: str = "1",
         skill_artifact_store: object | None = None,
+        skill_replay_executor: Callable[..., RunnerProcessOutput] | None = None,
     ):
         if not key_id or len(key_id) > 128:
             raise ValueError("broker key_id must be a non-empty bounded value")
@@ -202,6 +212,7 @@ class SandboxBrokerService:
         self.runner_id = runner_id
         self.runner_version = runner_version
         self.skill_artifact_store = skill_artifact_store
+        self.skill_replay_executor = skill_replay_executor
 
     def handle_request(self, request: object) -> dict:
         validated = validate_broker_request(request)
@@ -211,23 +222,51 @@ class SandboxBrokerService:
         if root is None:
             raise BrokerRequestRejected("workspace_id is not registered with this broker")
         binding = validated["skill_binding"]
-        if binding is not None:
-            # Artifact lookup is not execution. Until a dedicated, isolated
-            # SkillReplayExecutor is configured, never run the request's generic
-            # pytest/unittest target and report it as a Skill Replay result.
+        if binding is not None and (
+            self.skill_artifact_store is None or not callable(self.skill_replay_executor)
+        ):
             raise BrokerRequestRejected(
-                "trusted Skill Replay executor is not configured; "
-                "artifact resolution alone cannot authorize generic profile execution"
+                "trusted Skill Artifact Store or isolated Skill Replay executor is not configured"
             )
-        skill_artifact = None
         self.replay_store.claim(request_id, validated)
+        skill_artifact = None
 
-        spec = resolve_execution_profile(root, {
-            "profile_id": validated["profile_id"],
-            "target": validated["target"],
-            "timeout_seconds": validated["timeout_seconds"],
-        })
-        output = self.executor(spec)
+        if binding is not None:
+            try:
+                skill = self.skill_artifact_store.load_for_binding(binding)
+            except Exception as exc:
+                raise BrokerRequestRejected("trusted Skill artifact failed independent verification") from exc
+            if getattr(skill, "tenant_id", None) != validated["mission_context"]["tenant_id"]:
+                raise BrokerRequestRejected("trusted Skill artifact tenant does not match Mission")
+            spec = ExecutionProfileSpec(
+                profile_id=SKILL_REPLAY_PROFILE_ID,
+                target=validated["target"],
+                argv=(),
+                cwd=root,
+                timeout_seconds=validated["timeout_seconds"],
+                max_output_bytes=MAX_OUTPUT_BYTES,
+                network_access=False,
+            )
+            output = self.skill_replay_executor(
+                skill,
+                validated["mission_context"],
+                timeout_seconds=validated["timeout_seconds"],
+            )
+            skill_artifact = {
+                "schema_version": SKILL_ARTIFACT_RESOLUTION_SCHEMA,
+                "skill_id": binding["skill_id"],
+                "skill_version": binding["skill_version"],
+                "content_sha256": binding["content_sha256"],
+                "trust_level": binding["trust_level"],
+            }
+        else:
+            spec = resolve_execution_profile(root, {
+                "profile_id": validated["profile_id"],
+                "target": validated["target"],
+                "timeout_seconds": validated["timeout_seconds"],
+            })
+            output = self.executor(spec)
+
         if not isinstance(output, RunnerProcessOutput):
             raise TypeError("broker executor must return RunnerProcessOutput")
         result = build_execution_result(

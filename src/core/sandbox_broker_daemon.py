@@ -147,6 +147,7 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
     executor = DockerSandboxExecutor(
         docker_client=DockerSandboxExecutor.connect_docker_socket(),
         image=config["image"],
+        replay_staging_root=artifact_store.root,
     )
     service = SandboxBrokerService(
         workspace_roots=resolved_roots,
@@ -155,6 +156,7 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
         signing_key=signing_key,
         key_id=key_id,
         skill_artifact_store=artifact_store,
+        skill_replay_executor=executor.execute_skill_replay,
     )
     return service, tuple(allowed), workers
 

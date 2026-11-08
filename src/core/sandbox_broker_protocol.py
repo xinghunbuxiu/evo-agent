@@ -24,6 +24,7 @@ from .execution_results import EXECUTION_RESULT_SCHEMA
 BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v3"
 BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v3"
 SKILL_ARTIFACT_RESOLUTION_SCHEMA = "mission.skill-artifact-resolution.v1"
+SKILL_REPLAY_PROFILE_ID = "skill.replay.python.v1"
 _SKILL_BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -113,8 +114,11 @@ def build_broker_request(
         "workspace_id": workspace_id,
         "mission_context": mission_context,
         "skill_binding": skill_binding,
-        "profile_id": spec.profile_id,
-        "target": target,
+        "profile_id": SKILL_REPLAY_PROFILE_ID if skill_binding is not None else spec.profile_id,
+        "target": (
+            f"{skill_binding['skill_id']}@{skill_binding['skill_version']}"
+            if skill_binding is not None else target
+        ),
         "timeout_seconds": spec.timeout_seconds,
     }
 
@@ -187,8 +191,15 @@ def verify_broker_response(
         raise ValueError("broker execution result timeout and exit_code conflict")
     if succeeded != (not timed_out and exit_code == 0):
         raise ValueError("broker execution result success flag is inconsistent")
-    if result.get("profile_id") not in {"python.unittest", "python.pytest"}:
+    if result.get("profile_id") not in {"python.unittest", "python.pytest", SKILL_REPLAY_PROFILE_ID}:
         raise ValueError("broker execution result profile is invalid")
+    if expected_profile_id == SKILL_REPLAY_PROFILE_ID:
+        if expected_binding is None:
+            raise ValueError("Skill Replay response requires an expected Skill binding")
+        if expected_target != f"{expected_binding['skill_id']}@{expected_binding['skill_version']}":
+            raise ValueError("Skill Replay target does not match the expected Skill binding")
+    elif expected_binding is not None:
+        raise ValueError("Skill binding cannot be attached to a generic test-runner profile")
     if result.get("profile_id") != expected_profile_id or result.get("target") != expected_target:
         raise ValueError("broker result does not match the requested profile and target")
     for stream_name in ("stdout", "stderr"):
@@ -236,6 +247,7 @@ __all__ = [
     "BROKER_REQUEST_SCHEMA",
     "BROKER_RESPONSE_SCHEMA",
     "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
+    "SKILL_REPLAY_PROFILE_ID",
     "BROKER_SIGNATURE_ALGORITHM",
     "build_broker_request",
     "verify_broker_response",

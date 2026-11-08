@@ -15,7 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 from .sandbox_broker import BrokerRequestRejected, SandboxBrokerService
-from .sandbox_broker_protocol import build_broker_request, verify_broker_response
+from .sandbox_broker_protocol import (
+    SKILL_REPLAY_PROFILE_ID,
+    build_broker_request,
+    verify_broker_response,
+)
 from .execution_profiles import ExecutionProfileSpec
 
 
@@ -196,8 +200,13 @@ def execute_via_broker_attested(
         expected_request_id=request["request_id"],
         expected_workspace_id=workspace_id,
         expected_mission_context=mission_context,
-        expected_profile_id=spec.profile_id,
-        expected_target=spec.target,
+        expected_profile_id=(
+            SKILL_REPLAY_PROFILE_ID if skill_binding is not None else spec.profile_id
+        ),
+        expected_target=(
+            f"{skill_binding['skill_id']}@{skill_binding['skill_version']}"
+            if skill_binding is not None else spec.target
+        ),
         expected_skill_binding=skill_binding,
     )
     return {
