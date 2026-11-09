@@ -474,6 +474,11 @@ def create_mission_delivery_skill_candidate(
             "6. 将成功结果沉淀为经验、验证摘要与后续成长候选。"
         ),
         parameters={
+            "execution_contract": {
+                "kind": "non_executable_recipe",
+                "reason": "This candidate is a natural-language delivery recipe, not Python run(context) source.",
+                "replay_eligible": False,
+            },
             "mission_kind": mission_run.get("mission_kind"),
             "mission_run_id": mission_run["mission_run_id"],
             "mission_node_id": promotion_node["id"],
