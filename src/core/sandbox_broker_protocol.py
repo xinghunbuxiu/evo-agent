@@ -22,8 +22,11 @@ from .execution_results import EXECUTION_RESULT_SCHEMA
 
 
 BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v3"
-BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v3"
+BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v4"
 SKILL_ARTIFACT_RESOLUTION_SCHEMA = "mission.skill-artifact-resolution.v1"
+SKILL_REPLAY_OUTPUT_SCHEMA = "mission.skill-replay-output.v1"
+_MAX_SKILL_REPLAY_VALUE_BYTES = 16 * 1024
+_MAX_SKILL_REPLAY_LOG_BYTES = 8 * 1024
 SKILL_REPLAY_PROFILE_ID = "skill.replay.python.v1"
 _SKILL_BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
@@ -78,6 +81,62 @@ def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | N
             "content_sha256": digest, "trust_level": trust, "mission_context": context}
 
 
+def _normalize_skill_replay_output(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version", "success", "value", "error", "logs",
+    }:
+        raise ValueError("Skill Replay output has unsupported or missing fields")
+    if value.get("schema_version") != SKILL_REPLAY_OUTPUT_SCHEMA:
+        raise ValueError("unsupported Skill Replay output schema")
+    success = value.get("success")
+    logs = value.get("logs")
+    if not isinstance(success, bool) or not isinstance(logs, str):
+        raise ValueError("Skill Replay output status or logs are invalid")
+    try:
+        log_bytes = logs.encode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        raise ValueError("Skill Replay logs are not valid UTF-8") from exc
+    if len(log_bytes) > _MAX_SKILL_REPLAY_LOG_BYTES:
+        raise ValueError("Skill Replay logs exceed the 8 KiB limit")
+    error = value.get("error")
+    result_value = value.get("value")
+    if success:
+        if error is not None:
+            raise ValueError("successful Skill Replay output cannot contain an error")
+        try:
+            encoded_value = json.dumps(
+                result_value, ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+            ).encode("utf-8", errors="strict")
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError("Skill Replay result is not strict JSON") from exc
+        if len(encoded_value) > _MAX_SKILL_REPLAY_VALUE_BYTES:
+            raise ValueError("Skill Replay result exceeds the 16 KiB limit")
+    else:
+        if result_value is not None or not isinstance(error, dict) or set(error) != {"type", "message"}:
+            raise ValueError("failed Skill Replay output must contain a bounded error and null value")
+        if (
+            not isinstance(error.get("type"), str) or not error["type"].strip()
+            or len(error["type"]) > 128
+            or not isinstance(error.get("message"), str)
+            or len(error["message"]) > 240
+        ):
+            raise ValueError("Skill Replay error metadata is invalid")
+        try:
+            error["type"].encode("utf-8", errors="strict")
+            error["message"].encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise ValueError("Skill Replay error metadata is not valid UTF-8") from exc
+    return {
+        "schema_version": SKILL_REPLAY_OUTPUT_SCHEMA,
+        "success": success,
+        "value": result_value,
+        "error": error,
+        "logs": logs,
+    }
+
+
 def build_broker_request(
     workspace_id: str, spec: ExecutionProfileSpec, *, mission_context: dict[str, str],
     request_id: str | None = None, skill_binding: dict[str, Any] | None = None,
@@ -91,16 +150,23 @@ def build_broker_request(
     request_id = str(request_id or uuid.uuid4()).lower()
     if not _REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError("request_id must be a UUID")
-    if spec.profile_id not in {"python.unittest", "python.pytest"}:
-        raise ValueError("unsupported broker execution profile")
     target = str(spec.target or "").strip()
-    if spec.profile_id == "python.pytest":
-        path = PurePosixPath(target)
-        if (not target or path.is_absolute() or ":" in target or "\\" in target or "\x00" in target
-                or any(part in {"", ".", ".."} for part in target.split("/"))):
-            raise ValueError("pytest broker target must be a safe workspace-relative path")
-    elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
-        raise ValueError("unittest broker target must be a dotted module name")
+    if skill_binding is None:
+        if spec.profile_id not in {"python.unittest", "python.pytest"}:
+            raise ValueError("generic broker requests require a fixed Python test profile")
+        if spec.profile_id == "python.pytest":
+            path = PurePosixPath(target)
+            if (not target or path.is_absolute() or ":" in target or "\\" in target or "\x00" in target
+                    or any(part in {"", ".", ".."} for part in target.split("/"))):
+                raise ValueError("pytest broker target must be a safe workspace-relative path")
+        elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
+            raise ValueError("unittest broker target must be a dotted module name")
+    else:
+        if spec.profile_id not in {"python.unittest", "python.pytest", SKILL_REPLAY_PROFILE_ID}:
+            raise ValueError("Skill Replay cannot be combined with an unsupported profile")
+        expected_skill_target = f"{skill_binding['skill_id']}@{skill_binding['skill_version']}"
+        if spec.profile_id == SKILL_REPLAY_PROFILE_ID and target != expected_skill_target:
+            raise ValueError("Skill Replay profile target must match its immutable binding")
     if not isinstance(spec.timeout_seconds, int) or isinstance(spec.timeout_seconds, bool):
         raise ValueError("timeout_seconds must be an integer")
     if not 1 <= spec.timeout_seconds <= 300:
@@ -138,7 +204,10 @@ def verify_broker_response(
     """Verify broker attestation before returning its signed execution result."""
     if not isinstance(response, dict):
         raise ValueError("broker response must be an object")
-    if set(response) != {"schema_version", "request_id", "workspace_id", "mission_context", "skill_binding", "skill_artifact", "result", "signature"}:
+    if set(response) != {
+        "schema_version", "request_id", "workspace_id", "mission_context",
+        "skill_binding", "skill_artifact", "skill_replay_output", "result", "signature",
+    }:
         raise ValueError("broker response has unsupported or missing fields")
     if response.get("schema_version") != BROKER_RESPONSE_SCHEMA:
         raise ValueError("unsupported broker response schema")
@@ -202,6 +271,14 @@ def verify_broker_response(
         raise ValueError("Skill binding cannot be attached to a generic test-runner profile")
     if result.get("profile_id") != expected_profile_id or result.get("target") != expected_target:
         raise ValueError("broker result does not match the requested profile and target")
+    skill_replay_output = _normalize_skill_replay_output(response.get("skill_replay_output"))
+    if expected_profile_id == SKILL_REPLAY_PROFILE_ID:
+        if skill_replay_output is None:
+            raise ValueError("Skill Replay response is missing its structured output")
+        if skill_replay_output["success"] != succeeded:
+            raise ValueError("Skill Replay output status conflicts with execution result")
+    elif skill_replay_output is not None:
+        raise ValueError("generic test-runner response cannot carry Skill Replay output")
     for stream_name in ("stdout", "stderr"):
         stream = result.get(stream_name)
         if (not isinstance(stream, dict) or set(stream) != {"bytes", "available_bytes", "capture_truncated", "sha256"}
@@ -235,6 +312,7 @@ def verify_broker_response(
                 "mission_context": mission_context,
                 "skill_binding": response_binding,
                 "skill_artifact": artifact,
+                "skill_replay_output": skill_replay_output,
                 "result": result,
             }),
         )
@@ -247,6 +325,7 @@ __all__ = [
     "BROKER_REQUEST_SCHEMA",
     "BROKER_RESPONSE_SCHEMA",
     "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
+    "SKILL_REPLAY_OUTPUT_SCHEMA",
     "SKILL_REPLAY_PROFILE_ID",
     "BROKER_SIGNATURE_ALGORITHM",
     "build_broker_request",

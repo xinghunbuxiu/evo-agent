@@ -186,6 +186,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.assertEqual(evidence["attestation"]["signature"]["key_id"], "test-key")
         self.assertTrue(evidence["result"]["execution_succeeded"])
         self.assertEqual(evidence["result"]["target"], "tests/test_sample.py")
+        self.assertIsNone(evidence["skill_replay_output"])
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")

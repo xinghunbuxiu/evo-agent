@@ -213,6 +213,7 @@ def execute_via_broker_attested(
         "schema_version": "mission.sandbox-broker-attestation.v1",
         "attestation": response,
         "result": result,
+        "skill_replay_output": response.get("skill_replay_output"),
     }
 
 

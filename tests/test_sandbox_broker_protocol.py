@@ -18,6 +18,7 @@ from core.sandbox_broker_protocol import (
     BROKER_RESPONSE_SCHEMA,
     build_broker_request,
     verify_broker_response,
+    SKILL_REPLAY_PROFILE_ID,
 )
 
 
@@ -62,6 +63,7 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             "mission_context": {"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
             "skill_binding": None,
             "skill_artifact": None,
+            "skill_replay_output": None,
             "result": result,
         }
         canonical = json.dumps(
@@ -91,6 +93,29 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             {"schema_version", "request_id", "workspace_id", "mission_context", "skill_binding", "profile_id", "target", "timeout_seconds"},
         )
 
+    def test_builds_explicit_skill_replay_profile_from_immutable_binding(self):
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-test",
+            "node_id": "node-test",
+            "task_id": "task-test",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-demo",
+            "skill_version": "1.0.0",
+            "content_sha256": "a" * 64,
+            "trust_level": "verified",
+            "mission_context": context,
+        }
+        spec = replace(self.spec, profile_id=SKILL_REPLAY_PROFILE_ID, target="skill-demo@1.0.0")
+        request = build_broker_request(
+            "project-evo-os", spec, mission_context=context, skill_binding=binding,
+        )
+        self.assertEqual(request["profile_id"], SKILL_REPLAY_PROFILE_ID)
+        self.assertEqual(request["target"], "skill-demo@1.0.0")
+        self.assertEqual(request["skill_binding"], binding)
+
     def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
         for target in ("../escape.py", "/etc/passwd", "tests\\\\escape.py", "tests/../escape.py"):
             with self.subTest(target=target), self.assertRaises(ValueError):
@@ -114,6 +139,30 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
             expected_target="tests/test_sample.py",
         )
         self.assertTrue(result["execution_succeeded"])
+
+    def test_generic_response_rejects_skill_replay_output_even_before_signature_check(self):
+        response = self._signed_response()
+        response["skill_replay_output"] = {
+            "schema_version": "mission.skill-replay-output.v1",
+            "success": True,
+            "value": {"ok": True},
+            "error": None,
+            "logs": "",
+        }
+        with self.assertRaisesRegex(ValueError, "generic test-runner response"):
+            verify_broker_response(
+                response,
+                public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={
+                    "tenant_id": "tenant-test", "mission_run_id": "mission-test",
+                    "node_id": "node-test", "task_id": "task-test",
+                },
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
 
     def test_rejects_tampering_wrong_key_and_wrong_request(self):
         response = self._signed_response()

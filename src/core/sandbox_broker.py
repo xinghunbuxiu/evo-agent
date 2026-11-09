@@ -28,6 +28,8 @@ from .sandbox_broker_protocol import (
     _normalize_skill_binding,
     SKILL_ARTIFACT_RESOLUTION_SCHEMA,
     SKILL_REPLAY_PROFILE_ID,
+    _normalize_skill_replay_output,
+    SKILL_REPLAY_OUTPUT_SCHEMA,
 )
 from .sandbox_runner import RunnerProcessOutput
 
@@ -180,6 +182,36 @@ def _validate_workspace_root(raw_root: Path) -> Path:
     return resolved
 
 
+def _skill_replay_output_from_runner(output: RunnerProcessOutput) -> dict:
+    """Accept only the bounded JSON envelope emitted by the isolated replay bootstrap."""
+    if output.timed_out:
+        return {
+            "schema_version": SKILL_REPLAY_OUTPUT_SCHEMA,
+            "success": False,
+            "value": None,
+            "error": {"type": "TimeoutError", "message": "Skill Replay exceeded its execution deadline"},
+            "logs": "",
+        }
+    if not isinstance(output.stdout, bytes) or len(output.stdout) > 32 * 1024:
+        raise BrokerRequestRejected("isolated Skill Replay output envelope exceeds its limit")
+    available = output.stdout_available_bytes
+    if available is not None and (
+        isinstance(available, bool) or not isinstance(available, int) or available != len(output.stdout)
+    ):
+        raise BrokerRequestRejected("isolated Skill Replay output envelope was truncated")
+    try:
+        envelope = json.loads(output.stdout.decode("utf-8"))
+        normalized = _normalize_skill_replay_output(envelope)
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BrokerRequestRejected("isolated Skill Replay returned an invalid structured output envelope") from exc
+    if normalized is None:
+        raise BrokerRequestRejected("isolated Skill Replay output envelope is missing")
+    expected_success = output.exit_code == 0
+    if normalized["success"] != expected_success:
+        raise BrokerRequestRejected("isolated Skill Replay output conflicts with process exit status")
+    return normalized
+
+
 class SandboxBrokerService:
     """Validate, de-duplicate, execute through an injected isolated runner, sign."""
 
@@ -280,6 +312,9 @@ class SandboxBrokerService:
             stdout_available_bytes=output.stdout_available_bytes,
             stderr_available_bytes=output.stderr_available_bytes,
         )
+        skill_replay_output = (
+            _skill_replay_output_from_runner(output) if binding is not None else None
+        )
         signed_payload = {
             "schema_version": BROKER_RESPONSE_SCHEMA,
             "request_id": request_id,
@@ -287,6 +322,7 @@ class SandboxBrokerService:
             "mission_context": validated["mission_context"],
             "skill_binding": binding,
             "skill_artifact": skill_artifact,
+            "skill_replay_output": skill_replay_output,
             "result": result,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))

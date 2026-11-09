@@ -148,7 +148,13 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.skill_calls.append((skill, mission_context, timeout_seconds))
         return RunnerProcessOutput(
             exit_code=0,
-            stdout=b'{"schema_version":"mission.skill-replay-output.v1","success":true}',
+            stdout=json.dumps({
+                "schema_version": "mission.skill-replay-output.v1",
+                "success": True,
+                "value": {"tenant_id": mission_context["tenant_id"], "ok": True},
+                "error": None,
+                "logs": "",
+            }, separators=(",", ":")).encode("utf-8"),
             stderr=b"",
         )
 
@@ -174,6 +180,23 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(len(self.skill_calls), 1)
         self.assertEqual(self.calls, [])
         self.assertEqual(response["skill_artifact"]["content_sha256"], binding["content_sha256"])
+        self.assertEqual(response["skill_replay_output"]["value"], {"tenant_id": "tenant-test", "ok": True})
+        tampered = dict(response, skill_replay_output={
+            **response["skill_replay_output"],
+            "value": {"tenant_id": "tenant-other", "ok": True},
+        })
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
+            verify_broker_response(
+                tampered,
+                public_key=self.key.public_key().public_bytes_raw(),
+                expected_key_id="broker-test-key",
+                expected_request_id=request["request_id"],
+                expected_workspace_id="project-test",
+                expected_mission_context=binding["mission_context"],
+                expected_profile_id=SKILL_REPLAY_PROFILE_ID,
+                expected_target=f"{binding['skill_id']}@{binding['skill_version']}",
+                expected_skill_binding=binding,
+            )
 
     def test_skill_replay_is_tenant_isolated_and_rejects_missing_artifact(self):
         service, binding = self._trusted_skill_service()
@@ -186,6 +209,18 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(BrokerRequestRejected, "independent verification"):
             service.handle_request(request)
         self.assertEqual(self.skill_calls, [])
+
+    def test_skill_replay_rejects_malformed_or_truncated_executor_output(self):
+        service, binding = self._trusted_skill_service()
+        service.skill_replay_executor = lambda *_args, **_kwargs: RunnerProcessOutput(
+            exit_code=0, stdout=b'{"success":true}', stderr=b"",
+        )
+        request = build_broker_request(
+            "project-test", self.spec, mission_context=binding["mission_context"],
+            request_id=str(uuid.uuid4()), skill_binding=binding,
+        )
+        with self.assertRaisesRegex(BrokerRequestRejected, "invalid structured output"):
+            service.handle_request(request)
 
     def test_skill_replay_request_id_cannot_be_reused(self):
         service, binding = self._trusted_skill_service()
