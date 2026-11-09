@@ -81,7 +81,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(len(self.calls), 1)
 
-    def _trusted_skill_service(self):
+    def _trusted_skill_service(self, *, trust_level="verified"):
         artifact_root = Path(self.temp.name) / "trusted-artifacts"
         artifact_root.mkdir(mode=0o700)
         validator_key = Ed25519PrivateKey.generate()
@@ -94,7 +94,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             id="skill-python-demo",
             version="1.0.0",
             code="def run(context):\n    return {'tenant_id': context['tenant_id'], 'ok': True}\n",
-            trust_level="verified",
+            trust_level=trust_level,
         )
         digest = hashlib.sha256(skill.code.encode("utf-8")).hexdigest()
         statement = {
@@ -105,27 +105,30 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": digest,
-            "trust_level": "verified",
+            "trust_level": trust_level,
             "passed": True,
         }
-        signature = validator_key.sign(json.dumps(
-            statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        ).encode("utf-8"))
-        attestation = {
-            **statement,
-            "signature": {
-                "algorithm": "ed25519",
-                "key_id": "validator-test-key",
-                "value": base64.b64encode(signature).decode("ascii"),
-            },
-        }
-        store.publish(tenant_id="tenant-test", skill=skill, validation_attestation=attestation)
+        if trust_level == "draft":
+            store.stage_candidate(tenant_id="tenant-test", skill=skill)
+        else:
+            signature = validator_key.sign(json.dumps(
+                statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            ).encode("utf-8"))
+            attestation = {
+                **statement,
+                "signature": {
+                    "algorithm": "ed25519",
+                    "key_id": "validator-test-key",
+                    "value": base64.b64encode(signature).decode("ascii"),
+                },
+            }
+            store.publish(tenant_id="tenant-test", skill=skill, validation_attestation=attestation)
         binding = {
             "schema_version": "mission.skill-replay-binding.v1",
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": digest,
-            "trust_level": "verified",
+            "trust_level": trust_level,
             "mission_context": {
                 "tenant_id": "tenant-test",
                 "mission_run_id": "mission-test",
@@ -157,6 +160,29 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             }, separators=(",", ":")).encode("utf-8"),
             stderr=b"",
         )
+
+    def test_draft_candidate_can_only_enter_dedicated_isolated_replay(self):
+        service, binding = self._trusted_skill_service(trust_level="draft")
+        request = build_broker_request(
+            "project-test", self.spec, mission_context=binding["mission_context"],
+            request_id=str(uuid.uuid4()), skill_binding=binding,
+        )
+        response = service.handle_request(request)
+        result = verify_broker_response(
+            response,
+            public_key=self.key.public_key().public_bytes_raw(),
+            expected_key_id="broker-test-key",
+            expected_request_id=request["request_id"],
+            expected_workspace_id="project-test",
+            expected_mission_context=binding["mission_context"],
+            expected_profile_id=SKILL_REPLAY_PROFILE_ID,
+            expected_target=f"{binding['skill_id']}@{binding['skill_version']}",
+            expected_skill_binding=binding,
+        )
+        self.assertTrue(result["execution_succeeded"])
+        self.assertEqual(len(self.skill_calls), 1)
+        self.assertEqual(self.skill_calls[0][0].trust_level, "draft")
+        self.assertEqual(response["skill_artifact"]["trust_level"], "draft")
 
     def test_trusted_skill_replay_uses_dedicated_executor_and_signed_binding(self):
         service, binding = self._trusted_skill_service()

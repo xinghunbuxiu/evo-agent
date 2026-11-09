@@ -116,6 +116,33 @@ class SandboxBrokerProtocolTests(unittest.TestCase):
         self.assertEqual(request["target"], "skill-demo@1.0.0")
         self.assertEqual(request["skill_binding"], binding)
 
+    def test_builds_draft_candidate_binding_only_for_skill_replay(self):
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-test",
+            "node_id": "node-test",
+            "task_id": "task-test",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-draft",
+            "skill_version": "1.0.0",
+            "content_sha256": "b" * 64,
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        spec = replace(self.spec, profile_id=SKILL_REPLAY_PROFILE_ID, target="skill-draft@1.0.0")
+        request = build_broker_request(
+            "project-evo-os", spec, mission_context=context, skill_binding=binding,
+        )
+        self.assertEqual(request["profile_id"], SKILL_REPLAY_PROFILE_ID)
+        self.assertEqual(request["skill_binding"]["trust_level"], "draft")
+        with self.assertRaises(ValueError):
+            build_broker_request(
+                "project-evo-os", replace(self.spec, profile_id="python.pytest"),
+                mission_context=context, skill_binding=binding,
+            )
+
     def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
         for target in ("../escape.py", "/etc/passwd", "tests\\\\escape.py", "tests/../escape.py"):
             with self.subTest(target=target), self.assertRaises(ValueError):
