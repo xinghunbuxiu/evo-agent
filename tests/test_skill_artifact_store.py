@@ -129,7 +129,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         changed_candidate = SimpleNamespace(
             id=candidate.id,
             version=candidate.version,
-            code="def run(context):\\n    return False\\n",
+            code="different source",
             trust_level="draft",
         )
         with self.assertRaisesRegex(SkillArtifactStoreError, "different content"):
