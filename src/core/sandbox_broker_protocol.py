@@ -30,6 +30,9 @@ _MAX_SKILL_REPLAY_LOG_BYTES = 8 * 1024
 SKILL_REPLAY_PROFILE_ID = "skill.replay.python.v1"
 _SKILL_BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 BROKER_SIGNATURE_ALGORITHM = "ed25519"
+SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA = "mission.skill-candidate-stage-request.v1"
+SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA = "mission.skill-candidate-stage-response.v1"
+SKILL_CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
