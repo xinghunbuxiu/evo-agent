@@ -27,7 +27,7 @@ from core.sandbox_broker_protocol import (
     verify_broker_response,
 )
 from core.sandbox_runner import RunnerProcessOutput
-from core.execution_profiles import resolve_execution_profile
+from core.execution_profiles import ExecutionProfileSpec, resolve_execution_profile
 
 
 class SandboxBrokerServiceTests(unittest.TestCase):
@@ -64,6 +64,17 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def _execute(self, spec):
         self.calls.append(spec)
         return RunnerProcessOutput(exit_code=0, stdout=b"ok", stderr=b"")
+
+    def _skill_replay_spec(self, binding):
+        return ExecutionProfileSpec(
+            profile_id=SKILL_REPLAY_PROFILE_ID,
+            target=f"{binding['skill_id']}@{binding['skill_version']}",
+            argv=(),
+            cwd=self.root,
+            timeout_seconds=self.spec.timeout_seconds,
+            max_output_bytes=self.spec.max_output_bytes,
+            network_access=False,
+        )
 
     def test_service_executes_allowlisted_workspace_and_returns_verifiable_signature(self):
         response = self.service.handle_request(self.request)
@@ -164,7 +175,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def test_draft_candidate_can_only_enter_dedicated_isolated_replay(self):
         service, binding = self._trusted_skill_service(trust_level="draft")
         request = build_broker_request(
-            "project-test", self.spec, mission_context=binding["mission_context"],
+            "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         response = service.handle_request(request)
@@ -229,7 +240,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         other_context = {**binding["mission_context"], "tenant_id": "tenant-other"}
         other_binding = {**binding, "mission_context": other_context}
         request = build_broker_request(
-            "project-test", self.spec, mission_context=other_context,
+            "project-test", self._skill_replay_spec(other_binding), mission_context=other_context,
             request_id=str(uuid.uuid4()), skill_binding=other_binding,
         )
         with self.assertRaisesRegex(BrokerRequestRejected, "independent verification"):
@@ -291,8 +302,14 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "content_sha256": "a" * 64, "trust_level": "verified",
             "mission_context": context,
         }
+        # Generic pytest requests must never be upgraded into Skill Replay requests.
+        with self.assertRaisesRegex(ValueError, "dedicated Skill Replay profile"):
+            build_broker_request(
+                "project-test", self.spec, mission_context=context,
+                request_id=str(uuid.uuid4()), skill_binding=binding,
+            )
         request = build_broker_request(
-            "project-test", self.spec, mission_context=context,
+            "project-test", self._skill_replay_spec(binding), mission_context=context,
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         with self.assertRaisesRegex(BrokerRequestRejected, "Skill Artifact Store or isolated Skill Replay executor is not configured"):
