@@ -23,6 +23,7 @@ from core.sandbox_broker import (
 )
 from core.sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
+    SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
     build_broker_request,
     verify_broker_response,
 )
@@ -75,6 +76,76 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             max_output_bytes=self.spec.max_output_bytes,
             network_access=False,
         )
+
+
+    def test_broker_stages_only_executable_draft_and_signs_candidate_receipt(self):
+        artifact_root = Path(self.temp.name) / "broker-owned-candidates"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-stage",
+            "node_id": "node-stage",
+            "task_id": "task-stage",
+        }
+        code = "def run(context):\n    return {'ok': True}\n"
+        request = {
+            "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "project-test",
+            "mission_context": context,
+            "skill_id": "skill-stage-demo",
+            "skill_version": "1.0.0",
+            "code": code,
+        }
+        response = service.stage_skill_candidate(request)
+        signed_payload = {
+            key: response[key]
+            for key in (
+                "schema_version", "request_id", "workspace_id",
+                "mission_context", "candidate_artifact",
+            )
+        }
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps(
+                signed_payload, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8"),
+        )
+        artifact = response["candidate_artifact"]
+        self.assertEqual(artifact["trust_level"], "draft")
+        self.assertEqual(artifact["tenant_id"], "tenant-test")
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": artifact["skill_id"],
+            "skill_version": artifact["skill_version"],
+            "content_sha256": artifact["content_sha256"],
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        staged = artifact_store.load_for_binding(binding)
+        self.assertEqual(staged.code, code)
+        self.assertEqual(staged.trust_level, "draft")
+        self.assertEqual(self.skill_calls, [])
+
+        invalid = dict(request, request_id=str(uuid.uuid4()), skill_id="skill-prose", code="第 1 步：打开项目并分析")
+        with self.assertRaisesRegex(BrokerRequestRejected, "valid Python"):
+            service.stage_skill_candidate(invalid)
 
     def test_service_executes_allowlisted_workspace_and_returns_verifiable_signature(self):
         response = self.service.handle_request(self.request)
