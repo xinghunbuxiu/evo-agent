@@ -9,12 +9,15 @@ import unittest
 import uuid
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from core.execution_profiles import resolve_execution_profile
 from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
+from core.skill_artifact_store import SkillArtifactStore
 from core.sandbox_broker_protocol import build_broker_request
 from core.sandbox_broker_transport import (
     execute_via_broker,
@@ -23,6 +26,7 @@ from core.sandbox_broker_transport import (
     handle_broker_connection,
     request_broker,
     serve_listener,
+    stage_skill_candidate_via_broker,
 )
 from core.sandbox_runner import RunnerProcessOutput
 
@@ -187,6 +191,80 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.assertTrue(evidence["result"]["execution_succeeded"])
         self.assertEqual(evidence["result"]["target"], "tests/test_sample.py")
         self.assertIsNone(evidence["skill_replay_output"])
+
+
+    def test_stage_skill_candidate_uses_broker_socket_and_verifies_signed_receipt(self):
+        import os
+        root = Path(self.temp.name) / "workspace"
+        artifact_root = Path(self.temp.name) / "broker-candidates"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"test-workspace": root},
+            replay_store=self.service.replay_store,
+            executor=lambda _spec: RunnerProcessOutput(0, b"ok", b""),
+            signing_key=self.key,
+            key_id="test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=lambda *_args, **_kwargs: RunnerProcessOutput(0, b"", b""),
+        )
+        path = str(Path(self.temp.name) / "broker-stage.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(8)
+        stop = threading.Event()
+        server_thread = threading.Thread(
+            target=serve_listener,
+            kwargs={
+                "listener": listener,
+                "service": service,
+                "allowed_uids": [os.getuid()],
+                "stop_event": stop,
+                "max_workers": 2,
+            },
+        )
+        server_thread.start()
+        context = {
+            "tenant_id": "tenant-transport",
+            "mission_run_id": "mission-stage",
+            "node_id": "node-stage",
+            "task_id": "task-stage",
+        }
+        code = "def run(context):\n    return {'task_id': context['task_id']}\n"
+        try:
+            receipt = stage_skill_candidate_via_broker(
+                path,
+                "test-workspace",
+                tenant_id="tenant-transport",
+                mission_context=context,
+                skill_id="skill-transport-demo",
+                skill_version="1.0.0",
+                code=code,
+                public_key=self.key.public_key().public_bytes_raw(),
+                expected_key_id="test-key",
+            )
+        finally:
+            stop.set()
+            server_thread.join(timeout=3)
+            listener.close()
+        self.assertFalse(server_thread.is_alive())
+        artifact = receipt["candidate_artifact"]
+        self.assertEqual(artifact["trust_level"], "draft")
+        self.assertEqual(artifact["tenant_id"], "tenant-transport")
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": artifact["skill_id"],
+            "skill_version": artifact["skill_version"],
+            "content_sha256": artifact["content_sha256"],
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        self.assertEqual(artifact_store.load_for_binding(binding).code, code)
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")
