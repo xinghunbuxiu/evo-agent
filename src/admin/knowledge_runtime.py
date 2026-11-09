@@ -339,7 +339,9 @@ def auto_draft_stable_experience_skills(
                 "source_experiences": source_experiences,
                 "example_outputs": summaries,
             },
-            trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
+            # Experience clusters can inform a draft, but cannot transfer trust
+            # from an older artifact with the same stable ID.
+            trust_level=SkillTrustLevel.DRAFT,
             source="stable_experience_auto_generated",
             version="1.0.0",
             usage_count=max(existing_usage, int(group.get("count") or 0)),

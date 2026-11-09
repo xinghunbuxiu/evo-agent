@@ -112,7 +112,11 @@ class SkillReplayVerificationTests(unittest.TestCase):
             for experience in experiences:
                 store.save(experience)
 
-            with mock.patch.object(knowledge_runtime, "collect_stable_experience_skill_groups", return_value=[{
+            with mock.patch.object(
+                knowledge_runtime,
+                "load_local_skill_payload",
+                return_value={"trust_level": "verified", "usage_count": 7},
+            ), mock.patch.object(knowledge_runtime, "collect_stable_experience_skill_groups", return_value=[{
                 "domain": "javascript",
                 "task_type": "mission_delivery",
                 "capability_type": "frontend",
@@ -131,6 +135,8 @@ class SkillReplayVerificationTests(unittest.TestCase):
             skill_path = workspace / ".tenants" / "tenant-a" / "skills" / "draft" / "skill_auto_javascript_mission_delivery.json"
             skill = json.loads(skill_path.read_text(encoding="utf-8"))
             parameters = skill["parameters"]
+            self.assertEqual(skill["trust_level"], "draft")
+            self.assertEqual(skill["usage_count"], 7)
             self.assertEqual(parameters["source_experience_ids"], ["experience-1", "experience-2"])
             self.assertEqual(parameters["source_mission_run_ids"], ["run-1", "run-2"])
             self.assertEqual(parameters["source_worker_ids"], ["worker-vue", "worker-vue-2"])
