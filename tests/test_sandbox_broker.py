@@ -198,7 +198,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def test_trusted_skill_replay_uses_dedicated_executor_and_signed_binding(self):
         service, binding = self._trusted_skill_service()
         request = build_broker_request(
-            "project-test", self.spec, mission_context=binding["mission_context"],
+            "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         response = service.handle_request(request)
@@ -253,7 +253,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             exit_code=0, stdout=b'{"success":true}', stderr=b"",
         )
         request = build_broker_request(
-            "project-test", self.spec, mission_context=binding["mission_context"],
+            "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         with self.assertRaisesRegex(BrokerRequestRejected, "invalid structured output"):
@@ -262,7 +262,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def test_skill_replay_request_id_cannot_be_reused(self):
         service, binding = self._trusted_skill_service()
         request = build_broker_request(
-            "project-test", self.spec, mission_context=binding["mission_context"],
+            "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         service.handle_request(request)
@@ -273,7 +273,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
     def test_response_skill_binding_is_bound_to_broker_signature_and_caller_expectation(self):
         service, binding = self._trusted_skill_service()
         request = build_broker_request(
-            "project-test", self.spec, mission_context=binding["mission_context"],
+            "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         response = service.handle_request(request)
@@ -329,7 +329,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "mission_context": context,
         }
         request = build_broker_request(
-            "project-test", self.spec, mission_context=context,
+            "project-test", self._skill_replay_spec(binding), mission_context=context,
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
         with self.assertRaisesRegex(BrokerRequestRejected, "Skill Replay executor is not configured"):
