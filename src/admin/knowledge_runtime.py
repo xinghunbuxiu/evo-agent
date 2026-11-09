@@ -366,9 +366,7 @@ def auto_draft_stable_experience_skills(
                 "source_experiences": source_experiences,
                 "example_outputs": summaries,
             },
-            # A newly generated artifact is always a new draft, even if an older
-        # artifact with the same stable ID was previously verified.
-        trust_level=SkillTrustLevel.DRAFT,
+            trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
             source="stable_experience_auto_generated",
             version="1.0.0",
             usage_count=max(existing_usage, int(group.get("count") or 0)),
@@ -498,7 +496,9 @@ def create_mission_delivery_skill_candidate(
                 "components_min": components,
             },
         },
-        trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
+        # A newly generated artifact is always a new draft, even if an older
+        # artifact with the same stable ID was previously verified.
+        trust_level=SkillTrustLevel.DRAFT,
         source="mission_delivery_auto_generated",
         version="1.0.0",
         usage_count=existing_usage + 1,
