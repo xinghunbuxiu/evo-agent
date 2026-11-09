@@ -94,6 +94,60 @@ class SkillArtifactStoreTests(unittest.TestCase):
         artifact = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
         self.assertEqual(artifact.stat().st_mode & 0o777, 0o400)
 
+    def test_stages_draft_candidate_for_isolated_replay_without_trust_promotion(self):
+        candidate = SimpleNamespace(
+            id=self.skill.id,
+            version=self.skill.version,
+            code=self.skill.code,
+            trust_level="draft",
+        )
+        identity = self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": identity["skill_id"],
+            "skill_version": identity["skill_version"],
+            "content_sha256": identity["content_sha256"],
+            "trust_level": "draft",
+            "mission_context": self.context,
+        }
+
+        loaded = self.store.load_for_binding(binding)
+        self.assertEqual(loaded.code, candidate.code)
+        self.assertEqual(loaded.trust_level, "draft")
+        self.assertEqual(loaded.tenant_id, "tenant-one")
+        candidate_path = self.root / "tenant-one" / candidate.id / "1.2.0.candidate.json"
+        self.assertEqual(candidate_path.stat().st_mode & 0o777, 0o400)
+        self.assertNotIn("validation_attestation", json.loads(candidate_path.read_text(encoding="utf-8")))
+
+        with self.assertRaisesRegex(SkillArtifactStoreError, "only verified or cloud"):
+            self.store.publish(
+                tenant_id="tenant-one", skill=candidate,
+                validation_attestation=self._attestation(candidate),
+            )
+        with self.assertRaisesRegex(SkillArtifactStoreError, "already exists"):
+            self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+
+    def test_draft_candidate_is_tenant_scoped_and_digest_pinned(self):
+        candidate = SimpleNamespace(
+            id=self.skill.id, version=self.skill.version,
+            code=self.skill.code, trust_level="draft",
+        )
+        identity = self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": identity["skill_id"],
+            "skill_version": identity["skill_version"],
+            "content_sha256": identity["content_sha256"],
+            "trust_level": "draft",
+            "mission_context": self.context,
+        }
+        wrong_tenant = {**binding, "mission_context": {**self.context, "tenant_id": "tenant-other"}}
+        with self.assertRaisesRegex(SkillArtifactStoreError, "unavailable"):
+            self.store.load_for_binding(wrong_tenant)
+        changed = dict(binding, content_sha256="0" * 64)
+        with self.assertRaisesRegex(SkillArtifactStoreError, "identity"):
+            self.store.load_for_binding(changed)
+
     def test_rejects_draft_and_empty_code(self):
         for trust, code in (("draft", self.skill.code), ("verified", "  ")):
             candidate = SimpleNamespace(

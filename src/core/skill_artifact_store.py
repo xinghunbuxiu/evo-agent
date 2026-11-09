@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v1"
+CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
 VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v1"
 VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
 _ATTESTATION_FIELDS = {
@@ -126,7 +127,10 @@ class SkillArtifactStore:
         except (ValueError, TypeError, binascii.Error, InvalidSignature) as exc:
             raise SkillArtifactStoreError("validation attestation signature verification failed") from exc
 
-    def _artifact_path(self, tenant_id: str, skill_id: str, version: str, *, create: bool) -> Path:
+    def _artifact_path(
+        self, tenant_id: str, skill_id: str, version: str, *, create: bool,
+        candidate: bool = False,
+    ) -> Path:
         tenant = _identity(tenant_id, "tenant_id", _ID_RE)
         skill = _identity(skill_id, "skill_id", _ID_RE)
         revision = _identity(version, "skill_version", _VERSION_RE)
@@ -144,7 +148,8 @@ class SkillArtifactStore:
                 directory.mkdir(mode=0o700)
             else:
                 raise SkillArtifactStoreError("trusted Skill artifact directory is unavailable")
-        return skill_dir / f"{revision}.json"
+        suffix = ".candidate.json" if candidate else ".json"
+        return skill_dir / f"{revision}{suffix}"
 
     def publish(self, *, tenant_id: str, skill: Any, validation_attestation: Mapping[str, Any]) -> dict[str, str]:
         """Atomically publish a verified Skill once; existing versions never mutate."""
@@ -215,6 +220,74 @@ class SkillArtifactStore:
             "trust_level": trust,
         }
 
+    def stage_candidate(self, *, tenant_id: str, skill: Any) -> dict[str, str]:
+        """Stage an immutable draft for isolated replay; this does not validate or publish it.
+
+        Candidate artifacts are stored separately from verified artifacts and can
+        only be resolved through the Skill Replay broker profile. The broker's
+        sandbox remains the execution boundary; no trust is inferred from staging.
+        """
+        skill_id = _identity(getattr(skill, "id", None), "skill_id", _ID_RE)
+        version = _identity(getattr(skill, "version", None), "skill_version", _VERSION_RE)
+        code = getattr(skill, "code", None)
+        if not isinstance(code, str) or not code.strip():
+            raise SkillArtifactStoreError("candidate Skill code must be a non-empty UTF-8 string")
+        try:
+            code_bytes = code.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise SkillArtifactStoreError("candidate Skill code is not valid UTF-8") from exc
+        trust = getattr(getattr(skill, "trust_level", None), "value", getattr(skill, "trust_level", None))
+        if trust != "draft":
+            raise SkillArtifactStoreError("only draft Skills may be staged as replay candidates")
+        normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        digest = hashlib.sha256(code_bytes).hexdigest()
+        artifact = {
+            "schema_version": CANDIDATE_ARTIFACT_SCHEMA,
+            "tenant_id": normalized_tenant,
+            "skill_id": skill_id,
+            "skill_version": version,
+            "trust_level": "draft",
+            "content_sha256": digest,
+            "code": code,
+        }
+        payload = _canonical_json(artifact)
+        path = self._artifact_path(
+            normalized_tenant, skill_id, version, create=True, candidate=True,
+        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(path, flags, 0o400)
+        except FileExistsError as exc:
+            raise SkillArtifactStoreError("Skill candidate version already exists; create a new version") from exc
+        except OSError as exc:
+            raise SkillArtifactStoreError("Skill candidate could not be staged safely") from exc
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(path, 0o400)
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        return {
+            "tenant_id": normalized_tenant,
+            "skill_id": skill_id,
+            "skill_version": version,
+            "content_sha256": digest,
+            "trust_level": "draft",
+        }
+
     def load_for_binding(self, binding: Any) -> SimpleNamespace:
         """Load and independently verify the exact artifact named by a replay binding."""
         if not isinstance(binding, Mapping) or set(binding) != _BINDING_FIELDS:
@@ -235,10 +308,13 @@ class SkillArtifactStore:
         if not isinstance(expected_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
             raise SkillArtifactStoreError("Skill replay content digest is invalid")
         expected_trust = binding.get("trust_level")
-        if not isinstance(expected_trust, str) or expected_trust not in _TRUST_LEVELS:
+        if not isinstance(expected_trust, str) or expected_trust not in (_TRUST_LEVELS | {"draft"}):
             raise SkillArtifactStoreError("Skill replay trust level is not executable")
 
-        path = self._artifact_path(tenant_id, skill_id, version, create=False)
+        is_candidate = expected_trust == "draft"
+        path = self._artifact_path(
+            tenant_id, skill_id, version, create=False, candidate=is_candidate,
+        )
         try:
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
@@ -254,8 +330,10 @@ class SkillArtifactStore:
 
         fields = {
             "schema_version", "tenant_id", "skill_id", "skill_version",
-            "trust_level", "content_sha256", "code", "validation_attestation",
+            "trust_level", "content_sha256", "code",
         }
+        if not is_candidate:
+            fields.add("validation_attestation")
         if not isinstance(artifact, dict) or set(artifact) != fields:
             raise SkillArtifactStoreError("stored Skill artifact has unsupported or missing fields")
         code = artifact.get("code")
@@ -266,7 +344,7 @@ class SkillArtifactStore:
         except UnicodeError as exc:
             raise SkillArtifactStoreError("stored Skill artifact code is not valid UTF-8") from exc
         expected = {
-            "schema_version": ARTIFACT_SCHEMA,
+            "schema_version": CANDIDATE_ARTIFACT_SCHEMA if is_candidate else ARTIFACT_SCHEMA,
             "tenant_id": tenant_id,
             "skill_id": skill_id,
             "skill_version": version,
@@ -277,16 +355,17 @@ class SkillArtifactStore:
             raise SkillArtifactStoreError("stored Skill artifact identity does not match replay binding")
         if actual_digest != expected_digest or artifact.get("content_sha256") != actual_digest:
             raise SkillArtifactStoreError("stored Skill artifact content digest mismatch")
-        # Re-check the independent validator signature on every broker load.
-        # A matching file digest alone is not proof that this Skill was validated.
-        self._verify_validation_attestation(
-            artifact.get("validation_attestation"),
-            tenant_id=tenant_id,
-            skill_id=skill_id,
-            version=version,
-            digest=actual_digest,
-            trust_level=expected_trust,
-        )
+        if not is_candidate:
+            # Re-check the independent validator signature on every trusted
+            # artifact load. Draft candidates deliberately carry no trust claim.
+            self._verify_validation_attestation(
+                artifact.get("validation_attestation"),
+                tenant_id=tenant_id,
+                skill_id=skill_id,
+                version=version,
+                digest=actual_digest,
+                trust_level=expected_trust,
+            )
         return SimpleNamespace(
             id=skill_id,
             version=version,
@@ -299,6 +378,7 @@ class SkillArtifactStore:
 
 __all__ = [
     "ARTIFACT_SCHEMA",
+    "CANDIDATE_ARTIFACT_SCHEMA",
     "VALIDATION_ATTESTATION_SCHEMA",
     "SkillArtifactStore",
     "SkillArtifactStoreError",
