@@ -6,7 +6,11 @@ are additionally checked against kernel peer credentials before parsing.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import re
+import uuid
 import socket
 import struct
 import threading
@@ -14,16 +18,22 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from .sandbox_broker import BrokerRequestRejected, SandboxBrokerService
 from .sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
     build_broker_request,
     verify_broker_response,
+    SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_SCHEMA,
 )
 from .execution_profiles import ExecutionProfileSpec
 
 
-MAX_REQUEST_BYTES = 64 * 1024
+MAX_REQUEST_BYTES = 320 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 _FRAME = struct.Struct("!I")
 
@@ -112,7 +122,10 @@ def handle_broker_connection(
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BrokerTransportError("request frame is not valid UTF-8 JSON") from exc
         connection.settimeout(330.0)
-        response = service.handle_request(request)
+        if isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
+            response = service.stage_skill_candidate(request)
+        else:
+            response = service.handle_request(request)
         payload = json.dumps(
             response, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode("utf-8")
@@ -217,6 +230,93 @@ def execute_via_broker_attested(
     }
 
 
+
+def stage_skill_candidate_via_broker(
+    socket_path: str,
+    workspace_id: str,
+    *,
+    tenant_id: str,
+    mission_context: dict[str, str],
+    skill_id: str,
+    skill_version: str,
+    code: str,
+    public_key: bytes,
+    expected_key_id: str,
+    timeout_seconds: float = 30.0,
+) -> dict:
+    """Transfer one executable draft to Broker storage and verify its signed receipt."""
+    context_fields = {"tenant_id", "mission_run_id", "node_id", "task_id"}
+    if not isinstance(mission_context, dict) or set(mission_context) != context_fields:
+        raise ValueError("mission_context must contain exact Tenant, Mission, node, and task identities")
+    context = dict(mission_context)
+    if context.get("tenant_id") != tenant_id:
+        raise ValueError("candidate tenant_id does not match Mission context")
+    for field, value in context.items():
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value):
+            raise ValueError(f"mission_context {field} is invalid")
+    if not isinstance(workspace_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", workspace_id):
+        raise ValueError("workspace_id is invalid")
+    if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
+        raise ValueError("skill_id is invalid")
+    if not isinstance(skill_version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", skill_version):
+        raise ValueError("skill_version is invalid")
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("candidate code must be a non-empty UTF-8 string")
+    code_bytes = code.encode("utf-8", errors="strict")
+    if len(code_bytes) > 256 * 1024:
+        raise ValueError("candidate code exceeds the 256 KiB limit")
+    request = {
+        "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+        "request_id": str(uuid.uuid4()),
+        "workspace_id": workspace_id,
+        "mission_context": context,
+        "skill_id": skill_id,
+        "skill_version": skill_version,
+        "code": code,
+    }
+    response = request_broker(socket_path, request, timeout_seconds=timeout_seconds)
+    expected_artifact = {
+        "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+        "tenant_id": tenant_id,
+        "skill_id": skill_id,
+        "skill_version": skill_version,
+        "content_sha256": hashlib.sha256(code_bytes).hexdigest(),
+        "trust_level": "draft",
+    }
+    if not isinstance(response, dict) or set(response) != {
+        "schema_version", "request_id", "workspace_id", "mission_context",
+        "candidate_artifact", "signature",
+    }:
+        raise BrokerTransportError("Broker candidate stage response is malformed or rejected")
+    if (
+        response.get("schema_version") != SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA
+        or response.get("request_id") != request["request_id"]
+        or response.get("workspace_id") != workspace_id
+        or response.get("mission_context") != context
+        or response.get("candidate_artifact") != expected_artifact
+    ):
+        raise BrokerTransportError("Broker candidate stage receipt does not match the requested draft")
+    signature = response.get("signature")
+    if not isinstance(signature, dict) or set(signature) != {"algorithm", "key_id", "value"}:
+        raise BrokerTransportError("Broker candidate stage signature metadata is invalid")
+    if signature.get("algorithm") != "ed25519" or signature.get("key_id") != expected_key_id:
+        raise BrokerTransportError("Broker candidate stage signer is not trusted")
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(
+            base64.b64decode(signature["value"], validate=True),
+            json.dumps({
+                "schema_version": response["schema_version"],
+                "request_id": response["request_id"],
+                "workspace_id": response["workspace_id"],
+                "mission_context": context,
+                "candidate_artifact": expected_artifact,
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+    except (ValueError, TypeError, KeyError, InvalidSignature) as exc:
+        raise BrokerTransportError("Broker candidate stage signature verification failed") from exc
+    return response
+
+
 def execute_via_broker(
     socket_path: str,
     workspace_id: str,
@@ -284,4 +384,5 @@ __all__ = [
     "request_broker",
     "execute_via_broker",
     "execute_via_broker_attested",
+    "stage_skill_candidate_via_broker",
 ]
