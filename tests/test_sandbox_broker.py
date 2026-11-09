@@ -148,11 +148,11 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             service.stage_skill_candidate(invalid)
 
         shadowing_sources = (
-            "def run(context):\\n    return {'ok': True}\\nrun = lambda context: None\\n",
-            "def run(context):\\n    return {'ok': True}\\nimport os as run\\n",
-            "def run(context):\\n    return {'ok': True}\\ndel run\\n",
-            "def run(context):\\n    return {'ok': True}\\nasync def run(context):\\n    return None\\n",
-            "def run(context):\\n    return {'ok': True}\\nif True:\\n    run = None\\n",
+            "def run(context):\n    return {'ok': True}\nrun = lambda context: None\n",
+            "def run(context):\n    return {'ok': True}\nimport os as run\n",
+            "def run(context):\n    return {'ok': True}\ndel run\n",
+            "def run(context):\n    return {'ok': True}\nasync def run(context):\n    return None\n",
+            "def run(context):\n    return {'ok': True}\nif True:\n    run = None\n",
         )
         for index, source in enumerate(shadowing_sources):
             shadowed = dict(
