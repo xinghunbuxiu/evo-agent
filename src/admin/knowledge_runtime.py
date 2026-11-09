@@ -166,42 +166,15 @@ def maybe_auto_verify_skill_candidate(
     framework_hint: str,
     replay_results: list[dict] | None = None,
 ) -> dict | None:
-    """Promote a skill only from explicit replay results, never from history alone.
+    """Keep promotion disabled until a trusted Validator attestation is integrated.
 
-    Historical mission deliveries can justify drafting a candidate, but they are
-    not executions of this candidate. Callers must pass results produced by an
-    actual replay/verification executor; each result must identify its task and
-    verifier so the evidence can be audited.
+    replay_results is retained temporarily for call-site compatibility only.
+    A plain dictionary, including one with success/checks/verifier fields, is
+    caller-controlled data and cannot establish Broker or Validator provenance.
+    The trusted path must consume persisted, signature-verified evidence rather
+    than accepting worker-shaped result objects.
     """
-    if not isinstance(replay_results, list) or not replay_results:
-        return None
-    if not all(
-        isinstance(item, dict)
-        and item.get("success") is True
-        and str(item.get("task_id") or "").strip()
-        and str(item.get("verified_by") or "").strip()
-        and item.get("validation_type") == "skill_replay"
-        and item.get("skill_id") == skill.id
-        and isinstance(item.get("checks"), list)
-        and bool(item["checks"])
-        and all(
-            isinstance(check, dict) and check.get("passed") is True
-            for check in item["checks"]
-        )
-        for item in replay_results
-    ):
-        return None
-    registry = SkillRegistry(workspace, tenant_id)
-    verified = registry.verify_skill(skill.id, replay_results, min_success_rate=0.8)
-    if not verified:
-        return None
-    synced = sync_verified_skill_view(workspace, tenant_id, skill.id) or {}
-    return {
-        "validated_by": "mission_replay_executor",
-        "evidence_count": len(replay_results),
-        "validation_task_ids": [str(item["task_id"]) for item in replay_results],
-        **synced,
-    }
+    return None
 
 
 def should_skip_auto_skill_task_type(task_type: str) -> bool:

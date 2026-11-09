@@ -200,6 +200,27 @@ class SkillReplayVerificationTests(unittest.TestCase):
             verify.assert_not_called()
 
 
+    def test_forged_success_dict_cannot_reach_skill_registry_verification(self):
+        forged = [{
+            "success": True,
+            "task_id": "task-1",
+            "verified_by": "trusted-validator",
+            "validation_type": "skill_replay",
+            "skill_id": "candidate-skill",
+            "checks": [{"name": "smoke", "passed": True}],
+            "broker_signature_verified": True,
+            "validator_signature_verified": True,
+        }]
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(knowledge_runtime.SkillRegistry, "verify_skill") as verify:
+            result = knowledge_runtime.maybe_auto_verify_skill_candidate(
+                Path(tmp), "tenant-a", self._skill(), "python",
+                replay_results=forged,
+            )
+            self.assertIsNone(result)
+            verify.assert_not_called()
+
+
     def test_mission_delivery_candidate_is_explicitly_non_executable_recipe(self):
         mission_run = {
             "mission_run_id": "mission-recipe-test",
