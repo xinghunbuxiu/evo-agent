@@ -6,6 +6,8 @@ policy is enforced by the host. No Docker or subprocess fallback is provided.
 """
 from __future__ import annotations
 
+import ast
+import base64
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ import re
 import sqlite3
 import stat
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Callable, Mapping
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -30,6 +33,10 @@ from .sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
     _normalize_skill_replay_output,
     SKILL_REPLAY_OUTPUT_SCHEMA,
+    BROKER_SIGNATURE_ALGORITHM,
+    SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_SCHEMA,
 )
 from .sandbox_runner import RunnerProcessOutput
 
@@ -245,6 +252,97 @@ class SandboxBrokerService:
         self.runner_version = runner_version
         self.skill_artifact_store = skill_artifact_store
         self.skill_replay_executor = skill_replay_executor
+
+
+    def stage_skill_candidate(self, request: object) -> dict:
+        """Accept one draft Python Skill into Broker-owned storage and sign its receipt."""
+        fields = {
+            "schema_version", "request_id", "workspace_id", "mission_context",
+            "skill_id", "skill_version", "code",
+        }
+        if not isinstance(request, dict) or set(request) != fields:
+            raise BrokerRequestRejected("Skill candidate stage request has unsupported or missing fields")
+        if request.get("schema_version") != SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
+            raise BrokerRequestRejected("unsupported Skill candidate stage request schema")
+        request_id = request.get("request_id")
+        if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
+            raise BrokerRequestRejected("Skill candidate stage request_id is invalid")
+        workspace_id = request.get("workspace_id")
+        if not isinstance(workspace_id, str) or workspace_id not in self.workspace_roots:
+            raise BrokerRequestRejected("workspace_id is not registered with this broker")
+        try:
+            context = _normalize_mission_context(request.get("mission_context"))
+        except ValueError as exc:
+            raise BrokerRequestRejected("Skill candidate Mission context is invalid") from exc
+        skill_id = request.get("skill_id")
+        version = request.get("skill_version")
+        code = request.get("code")
+        if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
+            raise BrokerRequestRejected("Skill candidate ID is invalid")
+        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
+            raise BrokerRequestRejected("Skill candidate version is invalid")
+        if not isinstance(code, str) or not code.strip():
+            raise BrokerRequestRejected("Skill candidate source is empty")
+        try:
+            code_bytes = code.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise BrokerRequestRejected("Skill candidate source is not valid UTF-8") from exc
+        if len(code_bytes) > 256 * 1024:
+            raise BrokerRequestRejected("Skill candidate source exceeds the 256 KiB limit")
+        try:
+            module = ast.parse(code, filename=f"{skill_id}.py", mode="exec")
+        except SyntaxError as exc:
+            raise BrokerRequestRejected("Skill candidate source is not valid Python") from exc
+        entry = next(
+            (item for item in module.body if isinstance(item, ast.FunctionDef) and item.name == "run"),
+            None,
+        )
+        if (
+            entry is None
+            or len(entry.args.posonlyargs) + len(entry.args.args) != 1
+            or entry.args.vararg is not None
+            or entry.args.kwarg is not None
+            or entry.args.kwonlyargs
+            or entry.args.defaults
+            or entry.args.kw_defaults
+        ):
+            raise BrokerRequestRejected("Skill candidate must define synchronous run(context)")
+        if self.skill_artifact_store is None:
+            raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
+        self.replay_store.claim(request_id, request)
+        candidate = SimpleNamespace(
+            id=skill_id, version=version, code=code, trust_level="draft",
+        )
+        try:
+            identity = self.skill_artifact_store.stage_candidate(
+                tenant_id=context["tenant_id"], skill=candidate,
+            )
+        except Exception as exc:
+            raise BrokerRequestRejected("Broker could not stage Skill candidate") from exc
+        artifact = {
+            "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+            "tenant_id": context["tenant_id"],
+            "skill_id": identity["skill_id"],
+            "skill_version": identity["skill_version"],
+            "content_sha256": identity["content_sha256"],
+            "trust_level": "draft",
+        }
+        signed_payload = {
+            "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+            "request_id": request_id,
+            "workspace_id": workspace_id,
+            "mission_context": context,
+            "candidate_artifact": artifact,
+        }
+        signature = self.signing_key.sign(_canonical_json(signed_payload))
+        return {
+            **signed_payload,
+            "signature": {
+                "algorithm": BROKER_SIGNATURE_ALGORITHM,
+                "key_id": self.key_id,
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
 
     def handle_request(self, request: object) -> dict:
         validated = validate_broker_request(request)
