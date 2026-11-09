@@ -293,12 +293,48 @@ class SandboxBrokerService:
             module = ast.parse(code, filename=f"{skill_id}.py", mode="exec")
         except SyntaxError as exc:
             raise BrokerRequestRejected("Skill candidate source is not valid Python") from exc
-        entry = next(
-            (item for item in module.body if isinstance(item, ast.FunctionDef) and item.name == "run"),
-            None,
-        )
+        class _ModuleRunBindingVisitor(ast.NodeVisitor):
+            """Find module-scope writes to run without entering function/class bodies."""
+
+            def __init__(self):
+                self.entries = []
+                self.other_bindings = []
+
+            def visit_FunctionDef(self, node):
+                if node.name == "run":
+                    self.entries.append(node)
+                # A function body executes later in its own local/global scope.
+
+            def visit_AsyncFunctionDef(self, node):
+                if node.name == "run":
+                    self.other_bindings.append(node)
+                # Do not inspect deferred function bodies.
+
+            def visit_ClassDef(self, node):
+                # Class namespace assignments cannot replace the module entrypoint.
+                return
+
+            def visit_Name(self, node):
+                if node.id == "run" and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    self.other_bindings.append(node)
+
+            def visit_Import(self, node):
+                for alias in node.names:
+                    if (alias.asname or alias.name.split(".", 1)[0]) == "run":
+                        self.other_bindings.append(node)
+
+            def visit_ImportFrom(self, node):
+                for alias in node.names:
+                    if (alias.asname or alias.name) == "run":
+                        self.other_bindings.append(node)
+
+        bindings = _ModuleRunBindingVisitor()
+        for statement in module.body:
+            bindings.visit(statement)
+        entry = bindings.entries[0] if len(bindings.entries) == 1 else None
         if (
             entry is None
+            or bindings.other_bindings
             or len(entry.args.posonlyargs) + len(entry.args.args) != 1
             or entry.args.vararg is not None
             or entry.args.kwarg is not None
@@ -306,7 +342,9 @@ class SandboxBrokerService:
             or entry.args.defaults
             or entry.args.kw_defaults
         ):
-            raise BrokerRequestRejected("Skill candidate must define synchronous run(context)")
+            raise BrokerRequestRejected(
+                "Skill candidate must define exactly one synchronous module-level run(context)"
+            )
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
         self.replay_store.claim(request_id, request)

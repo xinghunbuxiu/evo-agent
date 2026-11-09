@@ -147,6 +147,23 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(BrokerRequestRejected, "valid Python"):
             service.stage_skill_candidate(invalid)
 
+        shadowing_sources = (
+            "def run(context):\\n    return {'ok': True}\\nrun = lambda context: None\\n",
+            "def run(context):\\n    return {'ok': True}\\nimport os as run\\n",
+            "def run(context):\\n    return {'ok': True}\\ndel run\\n",
+            "def run(context):\\n    return {'ok': True}\\nasync def run(context):\\n    return None\\n",
+            "def run(context):\\n    return {'ok': True}\\nif True:\\n    run = None\\n",
+        )
+        for index, source in enumerate(shadowing_sources):
+            shadowed = dict(
+                request, request_id=str(uuid.uuid4()),
+                skill_id=f"skill-shadow-{index}", code=source,
+            )
+            with self.subTest(source=source), self.assertRaisesRegex(
+                BrokerRequestRejected, "exactly one synchronous module-level run"
+            ):
+                service.stage_skill_candidate(shadowed)
+
     def test_service_executes_allowlisted_workspace_and_returns_verifiable_signature(self):
         response = self.service.handle_request(self.request)
         public_key = self.key.public_key().public_bytes_raw()
