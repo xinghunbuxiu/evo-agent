@@ -162,8 +162,8 @@ def build_broker_request(
         elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9]*(?:\.[A-Za-z_][A-Za-z0-9]*)*", target):
             raise ValueError("unittest broker target must be a dotted module name")
     else:
-        if spec.profile_id not in {"python.unittest", "python.pytest", SKILL_REPLAY_PROFILE_ID}:
-            raise ValueError("Skill Replay cannot be combined with an unsupported profile")
+        if spec.profile_id != SKILL_REPLAY_PROFILE_ID:
+            raise ValueError("Skill bindings are only permitted with the dedicated Skill Replay profile")
         expected_skill_target = f"{skill_binding['skill_id']}@{skill_binding['skill_version']}"
         if spec.profile_id == SKILL_REPLAY_PROFILE_ID and target != expected_skill_target:
             raise ValueError("Skill Replay profile target must match its immutable binding")
