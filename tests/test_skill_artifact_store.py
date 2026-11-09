@@ -124,8 +124,16 @@ class SkillArtifactStoreTests(unittest.TestCase):
                 tenant_id="tenant-one", skill=candidate,
                 validation_attestation=self._attestation(candidate),
             )
-        with self.assertRaisesRegex(SkillArtifactStoreError, "already exists"):
-            self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+        repeated = self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+        self.assertEqual(repeated, identity)
+        changed_candidate = SimpleNamespace(
+            id=candidate.id,
+            version=candidate.version,
+            code="def run(context):\\n    return False\\n",
+            trust_level="draft",
+        )
+        with self.assertRaisesRegex(SkillArtifactStoreError, "different content"):
+            self.store.stage_candidate(tenant_id="tenant-one", skill=changed_candidate)
 
     def test_draft_candidate_is_tenant_scoped_and_digest_pinned(self):
         candidate = SimpleNamespace(
