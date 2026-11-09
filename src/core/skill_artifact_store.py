@@ -262,20 +262,54 @@ class SkillArtifactStore:
         except FileExistsError:
             # A lost socket response may cause the caller to retry with a new
             # request ID. Re-accept only the exact immutable candidate bytes.
-            existing = self.load_for_binding({
-                "schema_version": "mission.skill-replay-binding.v1",
-                "skill_id": skill_id,
-                "skill_version": version,
-                "content_sha256": digest,
-                "trust_level": "draft",
-                "mission_context": {
-                    "tenant_id": normalized_tenant,
-                    "mission_run_id": "candidate-stage",
-                    "node_id": "candidate-stage",
-                    "task_id": "candidate-stage",
-                },
-            })
-            if existing.code != code:
+            read_flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                read_flags |= os.O_NOFOLLOW
+            try:
+                existing_fd = os.open(path, read_flags)
+            except OSError as exc:
+                raise SkillArtifactStoreError("existing Skill candidate is unavailable or unsafe") from exc
+            try:
+                info = os.fstat(existing_fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid not in {0, os.geteuid()}
+                    or info.st_mode & 0o222
+                    or info.st_size > 512 * 1024
+                ):
+                    raise SkillArtifactStoreError("existing Skill candidate is unsafe or oversized")
+                with os.fdopen(existing_fd, "rb") as stream:
+                    existing_bytes = stream.read(512 * 1024 + 1)
+                if len(existing_bytes) > 512 * 1024:
+                    raise SkillArtifactStoreError("existing Skill candidate is oversized")
+            except Exception:
+                try:
+                    os.close(existing_fd)
+                except OSError:
+                    pass
+                raise
+            try:
+                existing = json.loads(existing_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SkillArtifactStoreError("existing Skill candidate is malformed") from exc
+            if (
+                not isinstance(existing, dict)
+                or set(existing) != {
+                    "schema_version", "tenant_id", "skill_id", "skill_version",
+                    "trust_level", "content_sha256", "code",
+                }
+                or existing.get("schema_version") != CANDIDATE_ARTIFACT_SCHEMA
+                or existing.get("tenant_id") != normalized_tenant
+                or existing.get("skill_id") != skill_id
+                or existing.get("skill_version") != version
+                or existing.get("trust_level") != "draft"
+                or not isinstance(existing.get("code"), str)
+            ):
+                raise SkillArtifactStoreError("existing Skill candidate identity is invalid")
+            existing_digest = hashlib.sha256(existing["code"].encode("utf-8")).hexdigest()
+            if existing.get("content_sha256") != existing_digest:
+                raise SkillArtifactStoreError("existing Skill candidate digest is invalid")
+            if existing["code"] != code:
                 raise SkillArtifactStoreError(
                     "Skill candidate version already exists with different content"
                 )
@@ -283,7 +317,7 @@ class SkillArtifactStore:
                 "tenant_id": normalized_tenant,
                 "skill_id": skill_id,
                 "skill_version": version,
-                "content_sha256": digest,
+                "content_sha256": existing_digest,
                 "trust_level": "draft",
             }
         except OSError as exc:
