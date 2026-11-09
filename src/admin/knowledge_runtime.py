@@ -503,12 +503,30 @@ def create_mission_delivery_skill_candidate(
         success_rate=1.0 if reconstruct_snapshot.get("evaluation_verdict") == "pass" else 0.0,
     )
     skill_info = write_skill_candidate(workspace, tenant_id, skill)
-    verified_info = maybe_auto_verify_skill_candidate(
-        workspace=workspace,
-        tenant_id=tenant_id,
-        skill=skill,
-        framework_hint=framework_hint,
+    execution_contract = skill.parameters.get("execution_contract", {})
+    replay_eligible = (
+        isinstance(execution_contract, dict)
+        and execution_contract.get("kind") == "python_run_context"
+        and execution_contract.get("replay_eligible") is True
     )
+    verified_info = None
+    if replay_eligible:
+        # A future executable candidate must supply independently attested replay
+        # evidence before verification. This path deliberately has no implicit
+        # worker-success or historical-experience fallback.
+        verified_info = maybe_auto_verify_skill_candidate(
+            workspace=workspace,
+            tenant_id=tenant_id,
+            skill=skill,
+            framework_hint=framework_hint,
+        )
+    else:
+        skill_info = {
+            **skill_info,
+            "replay_status": "blocked",
+            "replay_reason": "non_executable_recipe",
+            "trust_level": "draft",
+        }
     if isinstance(verified_info, dict):
         skill_info = {**skill_info, **verified_info, "trust_level": "verified"}
     record_growth_event(
