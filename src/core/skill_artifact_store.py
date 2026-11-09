@@ -259,8 +259,33 @@ class SkillArtifactStore:
             flags |= os.O_NOFOLLOW
         try:
             fd = os.open(path, flags, 0o400)
-        except FileExistsError as exc:
-            raise SkillArtifactStoreError("Skill candidate version already exists; create a new version") from exc
+        except FileExistsError:
+            # A lost socket response may cause the caller to retry with a new
+            # request ID. Re-accept only the exact immutable candidate bytes.
+            existing = self.load_for_binding({
+                "schema_version": "mission.skill-replay-binding.v1",
+                "skill_id": skill_id,
+                "skill_version": version,
+                "content_sha256": digest,
+                "trust_level": "draft",
+                "mission_context": {
+                    "tenant_id": normalized_tenant,
+                    "mission_run_id": "candidate-stage",
+                    "node_id": "candidate-stage",
+                    "task_id": "candidate-stage",
+                },
+            })
+            if existing.code != code:
+                raise SkillArtifactStoreError(
+                    "Skill candidate version already exists with different content"
+                )
+            return {
+                "tenant_id": normalized_tenant,
+                "skill_id": skill_id,
+                "skill_version": version,
+                "content_sha256": digest,
+                "trust_level": "draft",
+            }
         except OSError as exc:
             raise SkillArtifactStoreError("Skill candidate could not be staged safely") from exc
         try:
