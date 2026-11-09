@@ -239,6 +239,9 @@ class SkillReplayVerificationTests(unittest.TestCase):
             return {"skill_id": skill.id, "trust_level": skill.trust_level.value}
 
         with mock.patch.object(
+            knowledge_runtime, "load_local_skill_payload",
+            return_value={"trust_level": "verified", "usage_count": 3},
+        ), mock.patch.object(
             knowledge_runtime, "write_skill_candidate", side_effect=capture_candidate
         ), mock.patch.object(
             knowledge_runtime, "maybe_auto_verify_skill_candidate", return_value=None
@@ -261,6 +264,8 @@ class SkillReplayVerificationTests(unittest.TestCase):
             )
 
         contract = captured["skill"].parameters["execution_contract"]
+        self.assertEqual(captured["skill"].trust_level, SkillTrustLevel.DRAFT)
+        self.assertEqual(captured["skill"].usage_count, 4)
         self.assertEqual(contract["kind"], "non_executable_recipe")
         self.assertFalse(contract["replay_eligible"])
         self.assertIn("not Python run(context)", contract["reason"])
