@@ -221,7 +221,7 @@ class SkillReplayVerificationTests(unittest.TestCase):
             knowledge_runtime, "write_skill_candidate", side_effect=capture_candidate
         ), mock.patch.object(
             knowledge_runtime, "maybe_auto_verify_skill_candidate", return_value=None
-        ):
+        ) as replay_attempt:
             result = knowledge_runtime.create_mission_delivery_skill_candidate(
                 workspace=Path("/tmp/unused-skill-candidate-test"),
                 tenant_id="tenant-a",
@@ -244,6 +244,9 @@ class SkillReplayVerificationTests(unittest.TestCase):
         self.assertFalse(contract["replay_eligible"])
         self.assertIn("not Python run(context)", contract["reason"])
         self.assertEqual(result["trust_level"], "draft")
+        self.assertEqual(result["replay_status"], "blocked")
+        self.assertEqual(result["replay_reason"], "non_executable_recipe")
+        replay_attempt.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
