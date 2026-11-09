@@ -200,5 +200,50 @@ class SkillReplayVerificationTests(unittest.TestCase):
             verify.assert_not_called()
 
 
+    def test_mission_delivery_candidate_is_explicitly_non_executable_recipe(self):
+        mission_run = {
+            "mission_run_id": "mission-recipe-test",
+            "mission_kind": "javascript_reverse",
+            "runtime_route": {},
+            "context": {},
+            "plan": {"nodes": [{
+                "id": "promote_knowledge",
+                "decision_trace": [{"step": "promote", "result": "draft"}],
+            }]},
+        }
+        captured = {}
+
+        def capture_candidate(workspace, tenant_id, skill):
+            captured["skill"] = skill
+            return {"skill_id": skill.id, "trust_level": skill.trust_level.value}
+
+        with mock.patch.object(
+            knowledge_runtime, "write_skill_candidate", side_effect=capture_candidate
+        ), mock.patch.object(
+            knowledge_runtime, "maybe_auto_verify_skill_candidate", return_value=None
+        ):
+            result = knowledge_runtime.create_mission_delivery_skill_candidate(
+                workspace=Path("/tmp/unused-skill-candidate-test"),
+                tenant_id="tenant-a",
+                mission_run=mission_run,
+                analyze_snapshot={"task_id": "analyze-task", "summary": "Vue bundle"},
+                reconstruct_snapshot={
+                    "task_id": "reconstruct-task",
+                    "summary": "Vue reconstruction",
+                    "evaluation_verdict": "pass",
+                    "evaluation_score": 0.95,
+                    "evaluation_metrics": {"components": 12, "has_target_dir": True},
+                },
+                safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                build_snapshot_signature=lambda snapshot: {"task_id": snapshot["task_id"]},
+                record_growth_event=lambda *args, **kwargs: None,
+            )
+
+        contract = captured["skill"].parameters["execution_contract"]
+        self.assertEqual(contract["kind"], "non_executable_recipe")
+        self.assertFalse(contract["replay_eligible"])
+        self.assertIn("not Python run(context)", contract["reason"])
+        self.assertEqual(result["trust_level"], "draft")
+
 if __name__ == "__main__":
     unittest.main()
