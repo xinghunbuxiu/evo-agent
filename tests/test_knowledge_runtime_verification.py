@@ -86,6 +86,7 @@ class SkillReplayVerificationTests(unittest.TestCase):
                 workspace, "tenant-a"
             )
             self.assertEqual(groups, [])
+
     def test_stable_experience_skill_keeps_each_source_experience_mission_worker_and_task_evidence(self):
         import json
         from core import Experience, ExperienceStore
