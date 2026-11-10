@@ -414,7 +414,7 @@ def create_skill_replay_runtime(*, workspace: Path, environ: Mapping[str, str] |
             missing_names = ", ".join(_VALIDATOR_CONFIG_ENV[key] for key in missing_validator)
             raise SkillReplayRuntimeConfigurationError(f"Validator configuration is incomplete: {missing_names}")
         validator_socket_path = validator_configured["validator_socket_path"]
-        if not Path(validator_socket_path).is_absolute() or "\\x00" in validator_socket_path:
+        if not Path(validator_socket_path).is_absolute() or "\x00" in validator_socket_path:
             raise SkillReplayRuntimeConfigurationError("Validator socket path must be absolute")
         validator_key_id = validator_configured["validator_key_id"]
         if not _ID_RE.fullmatch(validator_key_id):
