@@ -7,6 +7,7 @@ the separately managed Sandbox Broker.
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import os
 import re
@@ -21,7 +22,6 @@ from core.sandbox_broker_transport import stage_skill_candidate_via_broker
 from core.skill_replay_contract import build_skill_replay_binding
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_replay_mission import SkillReplayMissionAdapter
-from admin.knowledge_runtime import load_local_skill_payload
 
 LOGGER = logging.getLogger("evo.skill_replay")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -37,6 +37,53 @@ _CONFIG_ENV = {
 
 class SkillReplayRuntimeConfigurationError(ValueError):
     """The optional Mission-to-Broker replay configuration is unsafe or incomplete."""
+
+
+def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) -> dict | None:
+    """Read only a tenant-local draft file without following symlinks."""
+    tenant_root = Path(workspace) / ".tenants" / tenant_id
+    candidates = (
+        tenant_root / "skills" / "draft" / f"{skill_id}.json",
+        tenant_root / ".skill_cache" / "drafts" / f"{skill_id}.json",
+    )
+    for path in candidates:
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ValueError("Skill candidate file is unavailable or unsafe") from exc
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 512 * 1024:
+                raise ValueError("Skill candidate file is not a bounded regular file")
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(tenant_root.resolve(strict=True))
+            chunks = []
+            remaining = 512 * 1024 + 1
+            while remaining:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > 512 * 1024:
+                raise ValueError("Skill candidate file exceeds its size limit")
+        except (OSError, ValueError) as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError("Skill candidate file could not be read safely") from exc
+        finally:
+            os.close(fd)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Skill candidate file is not valid UTF-8 JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Skill candidate file must contain an object")
+        return payload
+    return None
 
 
 class SkillReplayRuntime:
@@ -110,9 +157,9 @@ class SkillReplayRuntime:
         if not any(isinstance(node, dict) and str(node.get("id") or "") == node_id for node in nodes):
             raise ValueError("Mission node does not belong to this Mission run")
 
-        payload = load_local_skill_payload(self.workspace, tenant_id, skill_id)
+        payload = _load_draft_skill_payload(self.workspace, tenant_id, skill_id)
         if not isinstance(payload, dict):
-            raise FileNotFoundError("Skill candidate was not found in this tenant")
+            raise FileNotFoundError("Draft Skill candidate was not found in this tenant")
         skill = Skill.from_dict(payload)
         if skill.id != skill_id:
             raise ValueError("loaded Skill identity does not match the requested candidate")
