@@ -253,6 +253,8 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         stage.assert_called_once()
         self.assertEqual(result["skill_binding"]["mission_context"]["task_id"], "task-1")
         self.assertEqual(result["replay"]["evidence"]["evidence_id"], "evidence-1")
+        self.assertEqual(result["validation"]["status"], "not_configured")
+        self.assertEqual(result["promotion"]["status"], "not_attempted")
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_rejects_recipe_before_broker_staging(self, stage):
