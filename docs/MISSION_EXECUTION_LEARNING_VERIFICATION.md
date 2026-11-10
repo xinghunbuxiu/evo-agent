@@ -152,6 +152,51 @@ Until such a broker is deployed and independently tested, the production
 sandbox adapter remains unconfigured and execution must continue to fail
 closed.
 
+## Independent Skill Validator service
+
+The standalone Validator is a separate process from both Mission and Broker.
+It does not execute candidate code. It accepts only a signed Broker Skill Replay
+envelope, verifies that envelope with its pinned Broker public key, then applies
+a root-controlled policy matched on the exact tenant, Skill ID, version,
+source SHA-256 and requested trust level. Only a complete policy pass produces
+an Ed25519 attestation. The Validator private key is readable only by the
+Validator service account; the Broker receives only the raw public key.
+
+The policy document is deployment-controlled and does not arrive in the
+validation request. Supported output checks are deliberately small and
+deterministic: json_key_exists, json_value_equals, and json_value_type.
+A policy must contain at least one check. Broker execution success alone is
+never enough to issue an attestation.
+
+Example service configuration: deploy/skill-validator.config.example.json.
+Example acceptance policy: deploy/skill-validator.policies.example.json.
+Example systemd unit: deploy/evo-skill-validator.service.example.
+
+Run from the repository root after installing runtime dependencies:
+
+\`\`\`bash
+PYTHONPATH=src python -m core.skill_validator_daemon \\
+  --config /etc/evo-skill-validator/config.json
+\`\`\`
+
+The Broker/Mission caller sends mission.skill-validation-request.v1 to the
+Validator Unix socket. The request contains the exact Mission context, a draft
+Skill binding, desired trust level, and the complete Broker-signed Replay
+envelope. The Validator checks the Broker signature and execution status
+before looking up the policy. The resulting attestation uses the existing
+mission.skill-validation-attestation.v1 contract and can be passed to the
+Broker's existing candidate-promotion operation.
+
+This is the first independent Validator service boundary, not an automatic
+promotion workflow. Deployment must provision a policy for each exact
+artifact digest, create separate Broker/Validator OS accounts and keys, set
+the socket's shared group/UID allowlist, and configure the Broker with only
+the Validator public key. No production Skill should be promoted until its
+acceptance policy reflects real business requirements and the service is
+deployed with protected keys. The current implementation validates the
+structured Skill output; it does not claim to prove arbitrary real-world
+outcomes beyond the checks declared in that policy.
+
 ## Broker Artifact Store promotion boundary
 
 The Broker now exposes a separate candidate-promotion operation. The caller

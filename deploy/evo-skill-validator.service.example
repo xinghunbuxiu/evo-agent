@@ -1,0 +1,28 @@
+[Unit]
+Description=Evo Independent Skill Validator
+After=network.target
+Before=evo-sandbox-broker.service
+
+[Service]
+Type=simple
+User=evo-validator
+Group=evo-validator
+SupplementaryGroups=evo-broker
+UMask=0077
+ExecStart=/usr/bin/python3 -m core.skill_validator_daemon --config /etc/evo-skill-validator/config.json
+WorkingDirectory=/opt/evo-agent
+Environment=PYTHONPATH=/opt/evo-agent/src
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/evo-skill-validator
+ReadWritePaths=/run/evo-skill-validator
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
