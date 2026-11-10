@@ -30,6 +30,10 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         key = Ed25519PrivateKey.generate()
         self.key_path.write_bytes(key.public_key().public_bytes_raw())
         self.key_path.chmod(0o400)
+        self.validator_key_path = self.root / "validator.pub"
+        validator_key = Ed25519PrivateKey.generate()
+        self.validator_key_path.write_bytes(validator_key.public_key().public_bytes_raw())
+        self.validator_key_path.chmod(0o400)
         self.environ = {
             "EVO_SKILL_REPLAY_BROKER_SOCKET": "/run/evo-sandbox-broker.sock",
             "EVO_SKILL_REPLAY_WORKSPACE_ID": "workspace-a",
@@ -76,6 +80,100 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertIsInstance(runtime, SkillReplayRuntime)
         self.assertEqual(runtime.workspace_id, "workspace-a")
         self.assertEqual(runtime.broker_key_id, "broker-test-key")
+
+    def test_validator_configuration_is_optional_but_must_be_complete(self):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        self.assertIsNone(runtime.validator_socket_path)
+        partial = dict(self.environ, EVO_SKILL_REPLAY_VALIDATOR_SOCKET="/run/evo-skill-validator/validator.sock")
+        with self.assertRaisesRegex(SkillReplayRuntimeConfigurationError, "Validator configuration is incomplete"):
+            create_skill_replay_runtime(workspace=self.workspace, environ=partial)
+
+    @patch("admin.skill_replay_runtime.promote_skill_candidate_via_broker")
+    @patch("admin.skill_replay_runtime.request_skill_validation")
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_successful_replay_is_independently_validated_then_published(self, stage, validate, promote):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        skill = self._skill()
+        write_skill_candidate(self.workspace, "tenant-a", skill)
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v1"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-1"},
+            "experience": {"id": "experience-1"},
+        }
+        runtime.evidence_store.load_verified = lambda **kwargs: {
+            "broker_attestation": {"schema_version": "mission.sandbox-broker-response.v4"},
+        }
+        validate.return_value = {
+            "schema_version": "mission.skill-validation-attestation.v1",
+            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "policy_id": "policy-1",
+        }
+        promote.return_value = {
+            "artifact": {
+                "schema_version": "mission.skill-artifact.v1", "tenant_id": "tenant-a",
+                "skill_id": "skill-demo", "skill_version": "1.0.0",
+                "content_sha256": "a" * 64, "trust_level": "verified",
+            },
+        }
+        mission_run = {
+            "mission_run_id": "mission-1", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-1"}]},
+        }
+        result = runtime.replay_candidate(
+            tenant_id="tenant-a", mission_run=mission_run, node_id="node-1",
+            task_id="task-1", skill_id="skill-demo",
+        )
+        validate.assert_called_once()
+        request = validate.call_args.kwargs["request"]
+        self.assertEqual(request["skill_binding"], result["skill_binding"])
+        self.assertEqual(request["trust_level"], "verified")
+        self.assertEqual(request["broker_attestation"]["schema_version"], "mission.sandbox-broker-response.v4")
+        promote.assert_called_once()
+        self.assertEqual(promote.call_args.kwargs["content_sha256"], result["skill_binding"]["content_sha256"])
+        self.assertEqual(result["validation"]["status"], "passed")
+        self.assertEqual(result["promotion"]["status"], "published")
+
+    @patch("admin.skill_replay_runtime.promote_skill_candidate_via_broker")
+    @patch("admin.skill_replay_runtime.request_skill_validation")
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_validator_rejection_never_calls_artifact_promotion(self, stage, validate, promote):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill())
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v1"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-1"},
+            "experience": {"id": "experience-1"},
+        }
+        runtime.evidence_store.load_verified = lambda **kwargs: {
+            "broker_attestation": {"schema_version": "mission.sandbox-broker-response.v4"},
+        }
+        validate.side_effect = RuntimeError("policy rejected")
+        result = runtime.replay_candidate(
+            tenant_id="tenant-a",
+            mission_run={"mission_run_id": "mission-1", "tenant_id": "tenant-a", "plan": {"nodes": [{"id": "node-1"}]}},
+            node_id="node-1", task_id="task-1", skill_id="skill-demo",
+        )
+        self.assertEqual(result["validation"]["status"], "rejected")
+        self.assertEqual(result["promotion"]["status"], "blocked")
+        promote.assert_not_called()
 
     def test_rejects_symlinked_broker_public_key(self):
         real_key = self.root / "real-broker.pub"
