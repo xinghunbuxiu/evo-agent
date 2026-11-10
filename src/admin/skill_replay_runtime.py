@@ -78,7 +78,8 @@ class SkillReplayRuntime:
             raise ValueError("executable Skill must define exactly one synchronous run(context) function")
         arguments = run_functions[0].args
         if (
-            len(arguments.posonlyargs) + len(arguments.args) != 1
+            arguments.posonlyargs
+            or len(arguments.args) != 1
             or arguments.vararg is not None
             or arguments.kwarg is not None
             or arguments.kwonlyargs
