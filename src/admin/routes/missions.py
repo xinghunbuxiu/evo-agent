@@ -123,8 +123,8 @@ def register_mission_routes(
             data = await request.json()
         except Exception:
             return error_response("请求 JSON 无效", 400)
-        if not isinstance(data, dict):
-            return error_response("请求内容必须是 JSON 对象", 400)
+        if not isinstance(data, dict) or set(data) != {"node_id"}:
+            return error_response("请求内容必须只包含 node_id", 400)
         node_id = str(data.get("node_id") or "").strip()
         if not node_id:
             return error_response("必须指定 node_id", 400)
@@ -157,6 +157,8 @@ def register_mission_routes(
             tenant_id = str(mission_run.get("tenant_id") or "default")
             if not authorize_tenant(user, tenant_id):
                 return error_response("无权访问该租户", 403)
+            if tenant_role(user, tenant_id) not in {"tenant_admin", "member"}:
+                return error_response("只有租户管理员或成员可以发起 Skill Replay", 403)
             plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
             nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
             if not any(
