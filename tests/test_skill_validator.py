@@ -2,8 +2,11 @@
 import base64
 import hashlib
 import json
+import os
+import socket
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -19,6 +22,7 @@ from core.skill_validator import (
     VALIDATION_REQUEST_SCHEMA, SkillValidatorError, SkillValidatorService,
     verify_validation_response,
 )
+from core.skill_validator_transport import request_skill_validation, serve_validator_listener
 
 
 def _canonical(value):
@@ -141,6 +145,45 @@ class SkillValidatorTests(unittest.TestCase):
             validation_attestation=attestation,
         )
         self.assertEqual(identity["trust_level"], "verified")
+
+    def test_unix_socket_transport_returns_a_client_verified_attestation(self):
+        socket_path = self.root / "validator.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(socket_path))
+        listener.listen(4)
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=serve_validator_listener,
+            kwargs={
+                "listener": listener,
+                "service": self.service,
+                "allowed_uids": [os.getuid()],
+                "stop_event": stop,
+                "max_workers": 1,
+            },
+            daemon=True,
+        )
+        thread.start()
+        try:
+            attestation = request_skill_validation(
+                str(socket_path),
+                request=self.request,
+                validator_public_key=self.validator_key.public_key().public_bytes_raw(),
+                expected_key_id="validator-key-1",
+                expected_identity={
+                    "tenant_id": "tenant-a", "skill_id": "skill-demo",
+                    "skill_version": "1.0.0",
+                    "content_sha256": self.binding["content_sha256"],
+                    "trust_level": "verified",
+                },
+            )
+            self.assertEqual(attestation["validator_id"], "validator-independent")
+            self.assertTrue(attestation["passed"])
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+            listener.close()
+            socket_path.unlink(missing_ok=True)
 
     def test_rejects_forged_broker_signature(self):
         forged = dict(self.request, broker_attestation=dict(self.broker_attestation))
