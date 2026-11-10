@@ -181,6 +181,7 @@ def register_mission_routes(
             mission_run["updated_at"] = datetime.now().astimezone().isoformat()
             save_mission_runs(workspace, state)
 
+        partial_evidence_ref = None
         try:
             operation = await asyncio.to_thread(
                 skill_replay_runtime.replay_candidate,
@@ -197,6 +198,9 @@ def register_mission_routes(
         except ValueError as exc:
             error_status, error_message = 409, f"Skill 候选不符合 Replay 契约: {str(exc)[:180]}"
         except Exception as exc:
+            candidate_evidence_ref = getattr(exc, "evidence_ref", None)
+            if isinstance(candidate_evidence_ref, dict):
+                partial_evidence_ref = dict(candidate_evidence_ref)
             error_status, error_message = 502, f"Broker Skill Replay 未完成: {type(exc).__name__}"
         else:
             replay = operation.get("replay", {}) if isinstance(operation, dict) else {}
@@ -257,6 +261,9 @@ def register_mission_routes(
                             "error_type": "skill_replay_rejected_or_unavailable",
                             "completed_at": datetime.now().astimezone().isoformat(),
                         })
+                        if isinstance(partial_evidence_ref, dict):
+                            recorded["evidence_ref"] = partial_evidence_ref
+                            recorded["evidence_id"] = partial_evidence_ref.get("evidence_id")
                         latest["actions"] = latest_actions
                         latest["updated_at"] = datetime.now().astimezone().isoformat()
                         save_mission_runs(workspace, state)
