@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from admin.mission_runtime import load_mission_runs_strict
+from admin.mission_runtime import load_mission_runs_strict, save_mission_runs
 
 
 class MissionRunsStrictStoreTests(unittest.TestCase):
@@ -24,6 +24,40 @@ class MissionRunsStrictStoreTests(unittest.TestCase):
             )
             state = load_mission_runs_strict(workspace)
             self.assertEqual(state["items"][0]["mission_run_id"], "run-a")
+
+    def test_active_skill_replay_run_is_retained_beyond_history_window(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            items = [
+                {"mission_run_id": f"run-{index}", "actions": []}
+                for index in range(51)
+            ]
+            items[-1]["actions"] = [{
+                "action_type": "skill_replay",
+                "status": "running",
+                "task_id": "replay-task",
+            }]
+            save_mission_runs(workspace, {"items": items})
+            state = load_mission_runs_strict(workspace)
+            self.assertEqual(len(state["items"]), 51)
+            self.assertEqual(state["items"][-1]["mission_run_id"], "run-50")
+
+    def test_completed_skill_replay_does_not_pin_old_mission_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            items = [
+                {"mission_run_id": f"run-{index}", "actions": []}
+                for index in range(51)
+            ]
+            items[-1]["actions"] = [{
+                "action_type": "skill_replay",
+                "status": "completed",
+                "task_id": "replay-task",
+            }]
+            save_mission_runs(workspace, {"items": items})
+            state = load_mission_runs_strict(workspace)
+            self.assertEqual(len(state["items"]), 50)
+            self.assertNotIn("run-50", [item["mission_run_id"] for item in state["items"]])
 
     def test_corrupt_json_is_not_converted_to_empty_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
