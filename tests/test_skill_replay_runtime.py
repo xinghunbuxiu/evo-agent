@@ -105,6 +105,18 @@ class SkillReplayRuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     SkillReplayRuntime._validate_executable_contract(self._skill(code=code))
 
+    def test_replay_candidate_loader_rejects_tenant_directory_symlink(self):
+        from admin.skill_replay_runtime import _load_draft_skill_payload
+
+        tenants = self.workspace / ".tenants"
+        tenants.mkdir()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "skill-demo.json").write_text("{}", encoding="utf-8")
+        (tenants / "tenant-a").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            _load_draft_skill_payload(self.workspace, "tenant-a", "skill-demo")
+
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_stages_exact_candidate_then_calls_adapter(self, stage):
         from admin.knowledge_runtime import write_skill_candidate
