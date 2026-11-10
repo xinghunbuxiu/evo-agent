@@ -12,13 +12,19 @@ import logging
 import os
 import re
 import stat
+import uuid
 from pathlib import Path
 from typing import Mapping
 
 from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
 from core.sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID
-from core.sandbox_broker_transport import stage_skill_candidate_via_broker
+from core.sandbox_broker_transport import (
+    promote_skill_candidate_via_broker,
+    stage_skill_candidate_via_broker,
+)
+from core.skill_validator import VALIDATION_REQUEST_SCHEMA
+from core.skill_validator_transport import request_skill_validation
 from core.skill_replay_contract import build_skill_replay_binding
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_replay_mission import SkillReplayMissionAdapter
@@ -33,6 +39,12 @@ _CONFIG_ENV = {
     "broker_key_id": "EVO_SKILL_REPLAY_BROKER_KEY_ID",
     "evidence_root": "EVO_SKILL_REPLAY_EVIDENCE_ROOT",
 }
+_VALIDATOR_CONFIG_ENV = {
+    "validator_socket_path": "EVO_SKILL_REPLAY_VALIDATOR_SOCKET",
+    "validator_public_key": "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY",
+    "validator_key_id": "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID",
+}
+_VALIDATED_TRUST_LEVEL = "verified"
 
 
 class SkillReplayRuntimeConfigurationError(ValueError):
@@ -100,13 +112,22 @@ def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) ->
 class SkillReplayRuntime:
     def __init__(self, *, workspace: Path, socket_path: str, workspace_id: str,
                  broker_public_key: bytes, broker_key_id: str,
-                 evidence_store: SkillReplayEvidenceStore):
+                 evidence_store: SkillReplayEvidenceStore,
+                 validator_socket_path: str | None = None,
+                 validator_public_key: bytes | None = None,
+                 validator_key_id: str | None = None):
         self.workspace = Path(workspace)
         self.socket_path = socket_path
         self.workspace_id = workspace_id
         self.broker_public_key = bytes(broker_public_key)
         self.broker_key_id = broker_key_id
         self.evidence_store = evidence_store
+        self.validator_socket_path = validator_socket_path
+        self.validator_public_key = bytes(validator_public_key) if validator_public_key is not None else None
+        self.validator_key_id = validator_key_id
+        if any(value is not None for value in (validator_socket_path, validator_public_key, validator_key_id)):
+            if not validator_socket_path or self.validator_public_key is None or not validator_key_id:
+                raise ValueError("independent Validator configuration must be complete")
         self.adapter = SkillReplayMissionAdapter(
             socket_path=socket_path,
             workspace_id=workspace_id,
@@ -222,11 +243,77 @@ class SkillReplayRuntime:
             task_type="skill_replay",
             input_summary=f"Replay {skill.id}@{skill.version} for Mission node {node_id}",
         )
+        validation = {"status": "not_configured"}
+        promotion = {"status": "not_attempted"}
+        if replay.get("result", {}).get("execution_succeeded") is not True:
+            validation = {"status": "blocked", "reason": "broker_execution_failed"}
+            promotion = {"status": "blocked", "reason": "broker_execution_failed"}
+        elif self.validator_socket_path and self.validator_public_key and self.validator_key_id:
+            try:
+                evidence_id = str(replay.get("evidence", {}).get("evidence_id") or "")
+                if not evidence_id:
+                    raise ValueError("verified Broker evidence reference is missing")
+                verified_evidence = self.evidence_store.load_verified(
+                    tenant_id=tenant_id, evidence_id=evidence_id,
+                )
+                validation_request_id = str(uuid.uuid4())
+                validation_request = {
+                    "schema_version": VALIDATION_REQUEST_SCHEMA,
+                    "request_id": validation_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "skill_binding": binding,
+                    "trust_level": _VALIDATED_TRUST_LEVEL,
+                    "broker_attestation": verified_evidence["broker_attestation"],
+                }
+                validation_attestation = request_skill_validation(
+                    self.validator_socket_path,
+                    request=validation_request,
+                    validator_public_key=self.validator_public_key,
+                    expected_key_id=self.validator_key_id,
+                    expected_identity={
+                        "tenant_id": tenant_id,
+                        "skill_id": skill.id,
+                        "skill_version": skill.version,
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": _VALIDATED_TRUST_LEVEL,
+                    },
+                )
+                validation = {
+                    "status": "passed",
+                    "validation_id": validation_attestation["validation_id"],
+                    "validator_id": validation_attestation["validator_id"],
+                    "policy_id": validation_attestation["policy_id"],
+                }
+            except Exception as exc:
+                validation = {"status": "rejected", "error_type": type(exc).__name__}
+                promotion = {"status": "blocked", "reason": "independent_validation_failed"}
+            else:
+                try:
+                    receipt = promote_skill_candidate_via_broker(
+                        self.socket_path,
+                        self.workspace_id,
+                        mission_context=context,
+                        skill_id=skill.id,
+                        skill_version=skill.version,
+                        content_sha256=binding["content_sha256"],
+                        trust_level=_VALIDATED_TRUST_LEVEL,
+                        validation_attestation=validation_attestation,
+                        public_key=self.broker_public_key,
+                        expected_key_id=self.broker_key_id,
+                    )
+                    promotion = {
+                        "status": "published",
+                        "artifact": receipt["artifact"],
+                    }
+                except Exception as exc:
+                    promotion = {"status": "failed", "error_type": type(exc).__name__}
         LOGGER.info(
-            "Mission Skill Replay recorded mission_run_id=%s node_id=%s skill_id=%s execution_succeeded=%s evidence_id=%s",
+            "Mission Skill Replay recorded mission_run_id=%s node_id=%s skill_id=%s execution_succeeded=%s evidence_id=%s validation_status=%s promotion_status=%s",
             mission_run_id, node_id, skill.id,
             bool(replay.get("result", {}).get("execution_succeeded")),
             replay.get("evidence", {}).get("evidence_id"),
+            validation.get("status"), promotion.get("status"),
         )
         return {
             "schema_version": "mission.skill-replay-operation.v1",
@@ -234,18 +321,20 @@ class SkillReplayRuntime:
             "skill_binding": binding,
             "stage_receipt": stage_receipt,
             "replay": replay,
+            "validation": validation,
+            "promotion": promotion,
         }
 
 
-def _read_public_key(path_value: str) -> bytes:
+def _read_public_key(path_value: str, *, label: str = "Broker") -> bytes:
     path = Path(path_value)
     if not path.is_absolute() or path.is_symlink():
-        raise SkillReplayRuntimeConfigurationError("Broker public key path must be absolute and non-symlink")
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key path must be absolute and non-symlink")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
-        raise SkillReplayRuntimeConfigurationError("Broker public key file is unavailable or unsafe") from exc
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key file is unavailable or unsafe") from exc
     try:
         info = os.fstat(fd)
         if (
@@ -254,14 +343,14 @@ def _read_public_key(path_value: str) -> bytes:
             or info.st_mode & 0o022
             or path.resolve(strict=True) != path
         ):
-            raise SkillReplayRuntimeConfigurationError("Broker public key file is not trusted")
+            raise SkillReplayRuntimeConfigurationError(f"{label} public key file is not trusted")
         raw = os.read(fd, 33)
     except OSError as exc:
-        raise SkillReplayRuntimeConfigurationError("Broker public key file could not be read safely") from exc
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key file could not be read safely") from exc
     finally:
         os.close(fd)
     if len(raw) != 32:
-        raise SkillReplayRuntimeConfigurationError("Broker public key must contain 32 raw Ed25519 bytes")
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key must contain 32 raw Ed25519 bytes")
     return raw
 
 
@@ -287,8 +376,15 @@ def create_skill_replay_runtime(*, workspace: Path, environ: Mapping[str, str] |
     values = dict(os.environ if environ is None else environ)
     configured = {key: str(values.get(env_name) or "").strip() for key, env_name in _CONFIG_ENV.items()}
     present = {key for key, value in configured.items() if value}
-    if not present:
+    validator_configured = {
+        key: str(values.get(env_name) or "").strip()
+        for key, env_name in _VALIDATOR_CONFIG_ENV.items()
+    }
+    validator_present = {key for key, value in validator_configured.items() if value}
+    if not present and not validator_present:
         return None
+    if not present and validator_present:
+        raise SkillReplayRuntimeConfigurationError("Validator configuration requires the Broker runtime")
     missing = sorted(set(_CONFIG_ENV) - present)
     if missing:
         missing_names = ", ".join(_CONFIG_ENV[key] for key in missing)
@@ -309,6 +405,21 @@ def create_skill_replay_runtime(*, workspace: Path, environ: Mapping[str, str] |
         broker_public_key=public_key,
         broker_key_id=broker_key_id,
     )
+    validator_socket_path = None
+    validator_public_key = None
+    validator_key_id = None
+    if validator_present:
+        missing_validator = sorted(set(_VALIDATOR_CONFIG_ENV) - validator_present)
+        if missing_validator:
+            missing_names = ", ".join(_VALIDATOR_CONFIG_ENV[key] for key in missing_validator)
+            raise SkillReplayRuntimeConfigurationError(f"Validator configuration is incomplete: {missing_names}")
+        validator_socket_path = validator_configured["validator_socket_path"]
+        if not Path(validator_socket_path).is_absolute() or "\\x00" in validator_socket_path:
+            raise SkillReplayRuntimeConfigurationError("Validator socket path must be absolute")
+        validator_key_id = validator_configured["validator_key_id"]
+        if not _ID_RE.fullmatch(validator_key_id):
+            raise SkillReplayRuntimeConfigurationError("Validator key ID is invalid")
+        validator_public_key = _read_public_key(validator_configured["validator_public_key"], label="Validator")
     return SkillReplayRuntime(
         workspace=workspace,
         socket_path=socket_path,
@@ -316,6 +427,9 @@ def create_skill_replay_runtime(*, workspace: Path, environ: Mapping[str, str] |
         broker_public_key=public_key,
         broker_key_id=broker_key_id,
         evidence_store=evidence_store,
+        validator_socket_path=validator_socket_path,
+        validator_public_key=validator_public_key,
+        validator_key_id=validator_key_id,
     )
 
 
