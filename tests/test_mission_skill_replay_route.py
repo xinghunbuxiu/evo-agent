@@ -44,7 +44,7 @@ def _request(body=None, *, authenticated=True):
     }, receive)
 
 
-def _register(app, workspace, runtime, *, authorized=True):
+def _register(app, workspace, runtime, *, authorized=True, role="tenant_admin"):
     return register_mission_routes(
         app,
         workspace=workspace,
@@ -62,7 +62,7 @@ def _register(app, workspace, runtime, *, authorized=True):
         error_response=lambda message, status: {"error": message, "status": status},
         get_session_user=lambda request: {"id": 7} if request.cookies.get("session") == "valid" else None,
         authorize_tenant=lambda user, tenant_id: authorized and tenant_id == "tenant-a",
-        tenant_role=lambda user, tenant_id: "tenant_admin" if authorized and tenant_id == "tenant-a" else None,
+        tenant_role=lambda user, tenant_id: role if authorized and tenant_id == "tenant-a" else None,
         organization_registry=object(),
         skill_replay_runtime=runtime,
     )
@@ -158,6 +158,20 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(action["status"], "failed")
         self.assertNotIn("evidence_id", action)
         self.assertEqual(action["error_type"], "skill_replay_rejected_or_unavailable")
+
+    def test_viewer_cannot_trigger_code_execution(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime, role="viewer")
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 403)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
     def test_unknown_node_is_rejected_without_action_or_broker_call(self):
         runtime = _ReplayRuntime()
