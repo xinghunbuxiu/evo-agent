@@ -192,7 +192,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "node_id": "node-promote",
             "task_id": "task-promote",
         }
-        code = "def run(context):\\n    return {'ok': True}\\n"
+        code = "def run(context):\n    return {'ok': True}\n"
         staged = artifact_store.stage_candidate(
             tenant_id="tenant-test",
             skill=SimpleNamespace(id="skill-promote", version="1.0.0", code=code, trust_level="draft"),
@@ -276,7 +276,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "node_id": "node-promote",
             "task_id": "task-promote",
         }
-        code = "def run(context):\\n    return {'ok': True}\\n"
+        code = "def run(context):\n    return {'ok': True}\n"
         staged = artifact_store.stage_candidate(
             tenant_id="tenant-test",
             skill=SimpleNamespace(id="skill-promote", version="1.0.0", code=code, trust_level="draft"),

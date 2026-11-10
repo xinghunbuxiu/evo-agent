@@ -438,7 +438,7 @@ class SandboxBrokerService:
             raise BrokerRequestRejected("Skill candidate promotion version is invalid")
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise BrokerRequestRejected("Skill candidate promotion digest is invalid")
-        if trust_level not in {"verified", "cloud"}:
+        if not isinstance(trust_level, str) or trust_level not in {"verified", "cloud"}:
             raise BrokerRequestRejected("Skill candidate promotion trust level is invalid")
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")

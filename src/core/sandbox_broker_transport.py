@@ -352,7 +352,7 @@ def promote_skill_candidate_via_broker(
         raise ValueError("skill_version is invalid")
     if not isinstance(content_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
         raise ValueError("content_sha256 is invalid")
-    if trust_level not in {"verified", "cloud"}:
+    if not isinstance(trust_level, str) or trust_level not in {"verified", "cloud"}:
         raise ValueError("trust_level must be verified or cloud")
     if not isinstance(validation_attestation, dict):
         raise ValueError("validation_attestation must be an object")
