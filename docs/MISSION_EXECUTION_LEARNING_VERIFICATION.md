@@ -152,7 +152,24 @@ Until such a broker is deployed and independently tested, the production
 sandbox adapter remains unconfigured and execution must continue to fail
 closed.
 
-## Boundaries and remaining work
+## Broker Artifact Store promotion boundary
+
+The Broker now exposes a separate candidate-promotion operation. The caller
+submits an Ed25519 Validator attestation; the Broker resolves the candidate
+from its own immutable staging store (promotion requests cannot replace source
+code), checks the exact tenant, Skill ID, version, source SHA-256 and requested
+trust level, and publishes a create-once trusted artifact. The Broker returns
+its own signed publication receipt.
+
+This operation does **not** implement the Validator or decide whether a Skill
+is useful. The Validator must run independently, hold a private signing key
+that is not readable by the Mission worker or Broker, perform the declared
+business acceptance checks, and sign only a passed result. The Broker stores
+only the Validator public key. A successful Broker receipt proves that the
+signed statement matched the staged bytes and publication succeeded; it does
+not independently prove that the Validator's business judgment was correct.
+Automatic promotion remains disabled until that external Validator is deployed.
+
 
 1. The integration worker is deterministic and test-only, not a production LLM/CLI/device process.
 2. Worker-reported verification is treated as an untrusted claim unless independently inspected and runtime-signed evidence is produced.

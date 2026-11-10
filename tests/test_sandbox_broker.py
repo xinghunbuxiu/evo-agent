@@ -24,6 +24,7 @@ from core.sandbox_broker import (
 from core.sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     build_broker_request,
     verify_broker_response,
 )
@@ -165,6 +166,157 @@ class SandboxBrokerServiceTests(unittest.TestCase):
                 BrokerRequestRejected, "exactly one synchronous module-level run"
             ):
                 service.stage_skill_candidate(shadowed)
+
+    def test_broker_promotes_staged_candidate_only_with_exact_validator_attestation(self):
+        artifact_root = Path(self.temp.name) / "promotion-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-promote",
+            "node_id": "node-promote",
+            "task_id": "task-promote",
+        }
+        code = "def run(context):\\n    return {'ok': True}\\n"
+        staged = artifact_store.stage_candidate(
+            tenant_id="tenant-test",
+            skill=SimpleNamespace(id="skill-promote", version="1.0.0", code=code, trust_level="draft"),
+        )
+        statement = {
+            "schema_version": VALIDATION_ATTESTATION_SCHEMA,
+            "validation_id": "validation-promote",
+            "validator_id": "independent-validator",
+            "tenant_id": "tenant-test",
+            "skill_id": "skill-promote",
+            "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"],
+            "trust_level": "verified",
+            "passed": True,
+        }
+        attestation = {
+            **statement,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "validator-test-key",
+                "value": base64.b64encode(validator_key.sign(json.dumps(
+                    statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode("utf-8"))).decode("ascii"),
+            },
+        }
+        request = {
+            "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "project-test",
+            "mission_context": context,
+            "skill_id": "skill-promote",
+            "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"],
+            "trust_level": "verified",
+            "validation_attestation": attestation,
+        }
+        response = service.promote_skill_candidate(request)
+        self.assertEqual(response["artifact"]["trust_level"], "verified")
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps({
+                key: response[key] for key in (
+                    "schema_version", "request_id", "workspace_id", "mission_context", "artifact",
+                )
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-promote",
+            "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"],
+            "trust_level": "verified",
+            "mission_context": context,
+        }
+        published = artifact_store.load_for_binding(binding)
+        self.assertEqual(published.code, code)
+        self.assertEqual(published.trust_level, "verified")
+
+    def test_broker_promotion_rejects_forged_validator_signature(self):
+        artifact_root = Path(self.temp.name) / "promotion-reject-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-promote",
+            "node_id": "node-promote",
+            "task_id": "task-promote",
+        }
+        code = "def run(context):\\n    return {'ok': True}\\n"
+        staged = artifact_store.stage_candidate(
+            tenant_id="tenant-test",
+            skill=SimpleNamespace(id="skill-promote", version="1.0.0", code=code, trust_level="draft"),
+        )
+        statement = {
+            "schema_version": VALIDATION_ATTESTATION_SCHEMA,
+            "validation_id": "validation-promote",
+            "validator_id": "independent-validator",
+            "tenant_id": "tenant-test",
+            "skill_id": "skill-promote",
+            "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"],
+            "trust_level": "verified",
+            "passed": True,
+        }
+        forged_key = Ed25519PrivateKey.generate()
+        attestation = {
+            **statement,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "validator-test-key",
+                "value": base64.b64encode(forged_key.sign(json.dumps(
+                    statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode("utf-8"))).decode("ascii"),
+            },
+        }
+        request = {
+            "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "project-test",
+            "mission_context": context,
+            "skill_id": "skill-promote",
+            "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"],
+            "trust_level": "verified",
+            "validation_attestation": attestation,
+        }
+        with self.assertRaisesRegex(BrokerRequestRejected, "attestation was rejected"):
+            service.promote_skill_candidate(request)
+        self.assertFalse((artifact_root / "tenant-test" / "skill-promote" / "1.0.0.json").exists())
 
     def test_service_executes_allowlisted_workspace_and_returns_verifiable_signature(self):
         response = self.service.handle_request(self.request)

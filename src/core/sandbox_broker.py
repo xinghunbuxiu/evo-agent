@@ -37,6 +37,8 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
     SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
 )
 from .sandbox_runner import RunnerProcessOutput
 
@@ -394,6 +396,95 @@ class SandboxBrokerService:
             "candidate_artifact": artifact,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
+        return {
+            **signed_payload,
+            "signature": {
+                "algorithm": BROKER_SIGNATURE_ALGORITHM,
+                "key_id": self.key_id,
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
+
+    def promote_skill_candidate(self, request: object) -> dict:
+        """Publish one staged draft only when an independent Validator signed its exact identity."""
+        fields = {
+            "schema_version", "request_id", "workspace_id", "mission_context",
+            "skill_id", "skill_version", "content_sha256", "trust_level",
+            "validation_attestation",
+        }
+        if not isinstance(request, dict) or set(request) != fields:
+            raise BrokerRequestRejected("Skill candidate promotion request has unsupported or missing fields")
+        if request.get("schema_version") != SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
+            raise BrokerRequestRejected("unsupported Skill candidate promotion request schema")
+        request_id = request.get("request_id")
+        if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
+            raise BrokerRequestRejected("Skill candidate promotion request_id is invalid")
+        workspace_id = request.get("workspace_id")
+        if not isinstance(workspace_id, str) or workspace_id not in self.workspace_roots:
+            raise BrokerRequestRejected("workspace_id is not registered with this broker")
+        try:
+            context = _normalize_mission_context(request.get("mission_context"))
+        except ValueError as exc:
+            raise BrokerRequestRejected("Skill candidate promotion Mission context is invalid") from exc
+        self._authorize_workspace_tenant(workspace_id, context["tenant_id"])
+
+        skill_id = request.get("skill_id")
+        version = request.get("skill_version")
+        digest = request.get("content_sha256")
+        trust_level = request.get("trust_level")
+        if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
+            raise BrokerRequestRejected("Skill candidate promotion ID is invalid")
+        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
+            raise BrokerRequestRejected("Skill candidate promotion version is invalid")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise BrokerRequestRejected("Skill candidate promotion digest is invalid")
+        if trust_level not in {"verified", "cloud"}:
+            raise BrokerRequestRejected("Skill candidate promotion trust level is invalid")
+        if self.skill_artifact_store is None:
+            raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
+
+        # Resolve source only from Broker-owned staging storage. The promotion
+        # caller cannot replace the staged source with caller-supplied code.
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": skill_id,
+            "skill_version": version,
+            "content_sha256": digest,
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        try:
+            candidate = self.skill_artifact_store.load_for_binding(binding)
+        except Exception as exc:
+            raise BrokerRequestRejected("staged Skill candidate failed identity verification") from exc
+        if getattr(candidate, "trust_level", None) != "draft":
+            raise BrokerRequestRejected("only staged draft Skills can be promoted")
+
+        self.replay_store.claim(request_id, request)
+        promoted = SimpleNamespace(
+            id=candidate.id,
+            version=candidate.version,
+            code=candidate.code,
+            trust_level=trust_level,
+        )
+        try:
+            identity = self.skill_artifact_store.publish(
+                tenant_id=context["tenant_id"],
+                skill=promoted,
+                validation_attestation=request.get("validation_attestation"),
+            )
+        except Exception as exc:
+            raise BrokerRequestRejected("independent Validator attestation was rejected") from exc
+
+        signed_payload = {
+            "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+            "request_id": request_id,
+            "workspace_id": workspace_id,
+            "mission_context": context,
+            "artifact": {"schema_version": "mission.skill-artifact.v1", **identity},
+        }
+        signature = self.signing_key.sign(_canonical_json(signed_payload))
+        import base64
         return {
             **signed_payload,
             "signature": {
