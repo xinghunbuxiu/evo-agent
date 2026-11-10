@@ -41,7 +41,11 @@ class SkillReplayRuntimeConfigurationError(ValueError):
 
 def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) -> dict | None:
     """Read only a tenant-local draft file without following symlinks."""
-    tenant_root = Path(workspace) / ".tenants" / tenant_id
+    workspace_root = Path(workspace).resolve(strict=True)
+    tenants_root = workspace_root / ".tenants"
+    tenant_root = tenants_root / tenant_id
+    if tenants_root.is_symlink() or tenant_root.is_symlink():
+        raise ValueError("tenant Skill storage must not contain symlink directories")
     candidates = (
         tenant_root / "skills" / "draft" / f"{skill_id}.json",
         tenant_root / ".skill_cache" / "drafts" / f"{skill_id}.json",
@@ -55,10 +59,17 @@ def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) ->
             raise ValueError("Skill candidate file is unavailable or unsafe") from exc
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > 512 * 1024:
-                raise ValueError("Skill candidate file is not a bounded regular file")
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+                or info.st_mode & 0o022
+                or info.st_size > 512 * 1024
+            ):
+                raise ValueError("Skill candidate file is not a trusted bounded regular file")
+            resolved_tenant = tenant_root.resolve(strict=True)
+            resolved_tenant.relative_to(workspace_root)
             resolved = path.resolve(strict=True)
-            resolved.relative_to(tenant_root.resolve(strict=True))
+            resolved.relative_to(resolved_tenant)
             chunks = []
             remaining = 512 * 1024 + 1
             while remaining:
