@@ -1,4 +1,5 @@
 """Tests for root-configured broker daemon bootstrap policy."""
+import json
 import os
 import sys
 import tempfile
@@ -50,6 +51,21 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_deployment_example_matches_required_broker_configuration(self):
+        example_path = Path(__file__).resolve().parents[1] / "deploy" / "sandbox-broker.config.example.json"
+        example = json.loads(example_path.read_text(encoding="utf-8"))
+        required_fields = {
+            "workspace_roots", "workspace_tenants", "replay_database",
+            "signing_key", "key_id", "image", "allowed_uids", "max_workers",
+            "artifact_store_root", "validator_public_key", "validator_key_id",
+        }
+        self.assertEqual(set(example), required_fields)
+        self.assertEqual(set(example["workspace_tenants"]), set(example["workspace_roots"]))
+        self.assertTrue(all(
+            isinstance(tenants, list) and tenants
+            for tenants in example["workspace_tenants"].values()
+        ))
 
     def test_builds_service_from_explicit_workspace_and_peer_allowlists(self):
         with patch(
