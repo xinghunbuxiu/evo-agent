@@ -375,3 +375,77 @@ The broker remains undeployed in the VPS environment. These changes do not grant
 the normal runner Docker access or enable a local subprocess fallback. A signed
 broker result is an execution attestation, not by itself a proof that the requested
 behavior is correct; independent artifact/test checks remain necessary.
+
+## Mission → Broker Skill Replay 接线
+
+当前 Mission 已提供一个**显式授权、按租户隔离**的 Skill Replay 入口。它只接受真正的 Python 可执行 Skill 候选，不会把自然语言 Recipe 当成代码执行；Replay 结果只形成签名执行证据与待反思 Experience，不会自动提升 Skill 信任等级。
+
+### 1. 可选运行时配置
+
+普通 Mission 不依赖 Broker。未配置以下环境变量时，普通 Mission 仍可正常启动，Replay API 返回 503。配置不完整或密钥/证据目录权限不安全时，Replay Runtime 会 fail closed 并保持禁用。
+
+| 环境变量 | 含义 |
+|---|---|
+| `EVO_SKILL_REPLAY_BROKER_SOCKET` | Broker Unix Socket 绝对路径 |
+| `EVO_SKILL_REPLAY_WORKSPACE_ID` | Broker 根配置中注册的 opaque Workspace ID |
+| `EVO_SKILL_REPLAY_BROKER_PUBLIC_KEY` | Broker Ed25519 公钥文件，32 字节原始格式 |
+| `EVO_SKILL_REPLAY_BROKER_KEY_ID` | 必须与 Broker 签名 Key ID 完全一致 |
+| `EVO_SKILL_REPLAY_EVIDENCE_ROOT` | 预先创建的证据目录，必须为 canonical、非 symlink、权限 0700 |
+
+示例（路径和 Key ID 必须替换成部署环境的真实值）：
+
+```bash
+EVO_SKILL_REPLAY_BROKER_SOCKET=/run/evo-sandbox-broker.sock
+EVO_SKILL_REPLAY_WORKSPACE_ID=evo-agent
+EVO_SKILL_REPLAY_BROKER_PUBLIC_KEY=/etc/evo-admin/broker-public-key.raw
+EVO_SKILL_REPLAY_BROKER_KEY_ID=evo-broker-production
+EVO_SKILL_REPLAY_EVIDENCE_ROOT=/var/lib/evo-admin/skill-replay-evidence
+```
+
+部署要求：
+
+- Admin 服务账号必须拥有读取公钥和证据目录的权限；证据目录不得允许 group/other 访问。
+- Broker Socket 的 peer UID allowlist 必须包含 Admin 服务账号 UID。
+- Broker 的 `workspace_roots` 与 `workspace_tenants` 必须显式登记同一个 Workspace ID，并授权相应 tenant。
+- Broker 使用独立私钥签名；Admin 只持有公钥。不要把 Broker 私钥放入 Admin 环境变量或项目工作区。
+- 公钥必须是 32 字节 Ed25519 raw public key，不是 PEM，也不是 Base64 文本。
+
+### 2. 候选执行契约
+
+候选必须同时满足：
+
+- `trust_level=draft`；
+- `parameters.execution_contract.kind=python_run_context`；
+- `parameters.execution_contract.replay_eligible=true`；
+- 代码中恰好定义一个同步 `run(context)` 入口；
+- 候选的 `mission_run_id` 与 `mission_node_id` 必须匹配发起 Replay 的 Mission 与节点。
+
+`non_executable_recipe`、普通说明文字、缺少执行契约或入口签名不匹配的候选会在连接 Broker 前被拒绝。Admin 只做格式/身份检查，不在主进程执行候选代码。
+
+### 3. 显式 Replay API
+
+登录且有权访问该 Mission 租户的用户，可以针对指定 Mission 节点发起一次 Replay：
+
+```http
+POST /api/missions/{mission_run_id}/skills/{skill_id}/replay
+Content-Type: application/json
+
+{"node_id":"<mission-node-id>"}
+```
+
+服务端会先在 Mission 运行记录中创建 `skill_replay/running` 操作，再依次执行：
+
+1. 从当前租户的 Draft Skill 目录安全读取候选（拒绝 symlink、越权目录和超限文件）。
+2. 固定 Skill ID、版本、SHA-256、信任级别及 Mission/Node/Task 身份。
+3. 通过 Broker Socket 暂存不可变候选，并验证 Broker 签名回执。
+4. 通过专用 `skill.replay.python.v1` Profile 执行；不接受 Worker 提交的 argv、cwd、容器参数或任意命令。
+5. 验证 Broker 执行签名，将原始 attestation 写入租户隔离的 Evidence Store，并投影为待反思 Experience。
+6. 将 Evidence ID、Experience ID、签名暂存回执和执行结果写回 Mission 操作记录。
+
+重复提交相同 Skill/Node 且已有 Replay 正在执行时返回 409。未登录、跨租户、Mission/Node 不匹配、Broker 不可用或候选不符合契约时均不会被记为成功证据。
+
+### 4. 证据边界
+
+`execution_succeeded=true` 只表示 Broker 隔离执行成功，不表示业务目标已通过验收。Replay 失败但 Broker 签名有效时，也会作为失败观察保存并进入待反思状态；传输失败或签名验证失败则不会创建成功 Experience。
+
+**当前仍未开放自动晋升。** 独立 Validator 必须针对完全相同的 tenant、Skill ID、版本和内容 SHA-256 完成验收，并使用 Artifact Store 信任的 Validator 私钥签名；Broker 在发布时重新验证该签名后，才允许将候选发布为 verified。Recipe 候选仍保留为知识资产，不进入 Python Replay。
