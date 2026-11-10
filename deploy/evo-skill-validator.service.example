@@ -6,8 +6,7 @@ Before=evo-sandbox-broker.service
 [Service]
 Type=simple
 User=evo-validator
-Group=evo-validator
-SupplementaryGroups=evo-broker
+Group=evo-broker
 UMask=0077
 ExecStart=/usr/bin/python3 -m core.skill_validator_daemon --config /etc/evo-skill-validator/config.json
 WorkingDirectory=/opt/evo-agent

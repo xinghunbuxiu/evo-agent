@@ -190,7 +190,7 @@ Broker's existing candidate-promotion operation.
 This is the first independent Validator service boundary, not an automatic
 promotion workflow. Deployment must provision a policy for each exact
 artifact digest, create separate Broker/Validator OS accounts and keys, set
-the socket's shared group/UID allowlist, and configure the Broker with only
+the socket's shared group/UID allowlist (the Validator service group must be shared with the Broker account), and configure the Broker with only
 the Validator public key. No production Skill should be promoted until its
 acceptance policy reflects real business requirements and the service is
 deployed with protected keys. The current implementation validates the

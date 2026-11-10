@@ -35,10 +35,11 @@ class SkillValidatorTests(unittest.TestCase):
             "tenant_id": "tenant-a", "mission_run_id": "mission-a",
             "node_id": "node-a", "task_id": "task-a",
         }
+        self.source_code = "def run(context): return {'ok': True, 'count': 3}"
         self.binding = {
             "schema_version": "mission.skill-replay-binding.v1",
             "skill_id": "skill-demo", "skill_version": "1.0.0",
-            "content_sha256": hashlib.sha256(b"skill-source").hexdigest(),
+            "content_sha256": hashlib.sha256(self.source_code.encode("utf-8")).hexdigest(),
             "trust_level": "draft", "mission_context": self.context,
         }
         self.workspace_id = "workspace-a"
@@ -134,7 +135,7 @@ class SkillValidatorTests(unittest.TestCase):
             tenant_id="tenant-a",
             skill=type("Skill", (), {
                 "id": "skill-demo", "version": "1.0.0",
-                "code": "def run(context): return {'ok': True, 'count': 3}",
+                "code": self.source_code,
                 "trust_level": "verified",
             })(),
             validation_attestation=attestation,
