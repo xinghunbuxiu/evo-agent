@@ -87,6 +87,43 @@ class SkillReplayVerificationTests(unittest.TestCase):
             )
             self.assertEqual(groups, [])
 
+    def test_mission_delivery_clusters_require_explicit_pass_verdict(self):
+        from core import Experience, ExperienceStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            store = ExperienceStore(workspace, "tenant-a")
+            cases = [
+                ("pass-1", {"verdict": "pass"}),
+                ("pass-2", {"verdict": "pass"}),
+                ("failed", {"verdict": "failed"}),
+                ("needs-learning", {"verdict": "needs_learning"}),
+                ("missing", None),
+            ]
+            for experience_id, validation in cases:
+                metadata = {"mission_delivery": {}}
+                if validation is not None:
+                    metadata["mission_delivery"]["validation_evidence"] = validation
+                store.save(Experience(
+                    id=experience_id,
+                    domain="javascript",
+                    task_type="mission_delivery",
+                    input_summary="mission input",
+                    output_summary="mission output",
+                    quality_score=1.0,
+                    capability_type="frontend",
+                    metadata=metadata,
+                ))
+
+            groups = knowledge_runtime.collect_stable_experience_skill_groups(
+                workspace, "tenant-a"
+            )
+            self.assertEqual(len(groups), 1)
+            self.assertEqual(groups[0]["count"], 2)
+            self.assertEqual(
+                {item.id for item in groups[0]["items"]},
+                {"pass-1", "pass-2"},
+            )
     def test_stable_experience_skill_keeps_each_source_experience_mission_worker_and_task_evidence(self):
         import json
         from core import Experience, ExperienceStore

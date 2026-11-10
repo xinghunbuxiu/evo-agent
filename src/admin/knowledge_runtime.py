@@ -195,11 +195,15 @@ def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> l
             # A signed Broker replay proves isolated execution only. Until an
             # independent reflection/validator accepts it, it is observation
             # evidence and must not seed reusable Skill drafts by quality score.
-            if (
-                should_skip_auto_skill_task_type(exp.task_type)
-                or isinstance(metadata.get("skill_replay"), dict)
-            ):
+            if should_skip_auto_skill_task_type(exp.task_type) or isinstance(metadata.get("skill_replay"), dict):
                 continue
+            if str(exp.task_type or "").strip().lower() == "mission_delivery":
+                delivery = metadata.get("mission_delivery")
+                validation = delivery.get("validation_evidence") if isinstance(delivery, dict) else None
+                # Mission Delivery quality scores are not acceptance evidence.
+                # Require the explicit evaluator verdict emitted by the real Mission path.
+                if not isinstance(validation, dict) or validation.get("verdict") != "pass":
+                    continue
             if float(exp.quality_score or 0.0) < 0.75:
                 continue
             capability_type = str(exp.capability_type or "").strip() or domain
