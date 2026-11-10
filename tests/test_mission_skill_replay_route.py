@@ -173,6 +173,28 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(runtime.calls, [])
         self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
+    def test_partial_signed_evidence_reference_survives_experience_projection_failure(self):
+        error = RuntimeError("Experience projection failed after evidence persistence")
+        error.evidence_ref = {
+            "schema_version": "mission.skill-replay-evidence-ref.v1",
+            "evidence_id": "evidence-partial",
+            "sha256": "a" * 64,
+        }
+        runtime = _ReplayRuntime(error=error)
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 502)
+        action = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["evidence_id"], "evidence-partial")
+        self.assertEqual(action["evidence_ref"]["sha256"], "a" * 64)
+
     def test_unknown_node_is_rejected_without_action_or_broker_call(self):
         runtime = _ReplayRuntime()
         app = RouteApp()
