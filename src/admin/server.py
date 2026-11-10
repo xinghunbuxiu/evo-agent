@@ -1114,8 +1114,9 @@ def create_app() -> FastAPI:
     organization_registry = OrganizationRegistry(workspace)
     try:
         _skill_replay_runtime = create_skill_replay_runtime(workspace=workspace)
-    except (SkillReplayRuntimeConfigurationError, OSError, ValueError) as exc:
-        # Broker replay is optional and fail-closed; ordinary Mission execution remains available.
+    except Exception as exc:
+        # Broker replay is optional and fail-closed; even malformed optional config
+        # must not prevent ordinary Mission execution from starting.
         _skill_replay_runtime = None
         print(f"[skill-replay] disabled during configuration: {type(exc).__name__}")
     if _skill_replay_runtime is None:
