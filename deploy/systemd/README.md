@@ -90,6 +90,12 @@ configured, Admin verifies the Validator signature and exact artifact identity,
 then submits that attestation to the Broker. The Broker independently verifies
 the Validator signature before create-once publication to its Artifact Store.
 
+The Validator configuration's `allowed_uids` must include only the Mission
+Admin service UID that is authorized to request validation. The Broker
+configuration's `allowed_uids` must likewise include the Admin service UID.
+Do not authorize worker, runner or general-purpose user accounts on either
+socket.
+
 The Admin process never receives the Validator private key or Broker private
 key. The Broker process receives only the Validator public key; the Validator
 receives only the Broker public key.
