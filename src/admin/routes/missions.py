@@ -207,6 +207,23 @@ def register_mission_routes(
             result = replay.get("result", {}) if isinstance(replay, dict) else {}
             evidence = replay.get("evidence", {}) if isinstance(replay, dict) else {}
             experience = replay.get("experience", {}) if isinstance(replay, dict) else {}
+            validation = operation.get("validation", {}) if isinstance(operation, dict) else {}
+            promotion = operation.get("promotion", {}) if isinstance(operation, dict) else {}
+            if promotion.get("status") == "published":
+                completion_detail = "Broker 执行证明有效；独立 Validator 验收通过；Artifact Store 已发布不可变 Skill"
+                completion_message = "Skill Replay、独立验收与 Artifact Store 发布均已完成"
+            elif validation.get("status") == "rejected":
+                completion_detail = "Broker Replay 已记录；独立 Validator 未通过或不可用，Skill 未晋升"
+                completion_message = "Replay 已记录，但独立验收未通过，未发布 Skill Artifact"
+            elif validation.get("status") == "passed":
+                completion_detail = "Broker Replay 与独立 Validator 验收已通过；Artifact Store 发布未完成"
+                completion_message = "独立验收已通过，但 Artifact Store 发布未完成"
+            elif validation.get("status") == "not_configured":
+                completion_detail = "Broker Replay 已记录；Validator 尚未配置，Skill 保持 Draft，未发布 Artifact"
+                completion_message = "Replay 已记录；Validator 未配置，Skill 保持 Draft"
+            else:
+                completion_detail = "Broker Replay 已记录；执行失败，未进行独立验收或 Skill 晋升"
+                completion_message = "Replay 已记录，但执行未成功，未进行 Skill 晋升"
             with exclusive_mission_claim_lock(workspace):
                 state = load_mission_runs_strict(workspace)
                 latest = next((
@@ -225,8 +242,11 @@ def register_mission_routes(
                     return error_response("Replay 已执行并保存证据，但操作记录未找到", 503)
                 recorded.update({
                     "status": "completed",
-                    "detail": "Broker 已返回签名执行证明；业务验收与 Skill 晋升仍需独立 Validator",
+                    "detail": completion_detail,
                     "execution_succeeded": result.get("execution_succeeded") is True,
+                    "validation_status": validation.get("status"),
+                    "promotion_status": promotion.get("status"),
+                    "published_artifact": promotion.get("artifact") if promotion.get("status") == "published" else None,
                     "evidence_id": evidence.get("evidence_id"),
                     "experience_id": experience.get("id"),
                     "replay_result": result,
@@ -237,7 +257,7 @@ def register_mission_routes(
                 latest["actions"] = latest_actions
                 latest["updated_at"] = datetime.now().astimezone().isoformat()
                 save_mission_runs(workspace, state)
-            return success_response(operation, "Skill Replay 已执行并记录；执行成功不等于独立验收通过")
+            return success_response(operation, completion_message)
 
         # Keep a durable failed operation record; a transport failure is not evidence of Skill success.
         try:
