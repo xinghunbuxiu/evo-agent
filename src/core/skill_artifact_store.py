@@ -2,7 +2,8 @@
 
 The store is deliberately separate from tenant workspaces and SkillRegistry
 caches. Its directory must be provisioned with broker-only write permissions.
-Artifacts are create-once; publishing a changed Skill requires a new version.
+Artifacts are create-once. Publication uses a same-directory temporary file
+and an atomic no-replace hard link, so readers never observe partial contents.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import re
 import stat
 import base64
 import binascii
+import uuid
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pathlib import Path
@@ -51,6 +53,73 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode("utf-8")
+
+
+def _write_create_once(path: Path, payload: bytes, *, collision_message: str) -> None:
+    """Publish complete bytes atomically without replacing an existing path.
+
+    The temporary file lives beside the destination, is fsynced and made
+    read-only before publication. os.link is an atomic create-if-absent
+    operation on the same filesystem; the final name is never opened for
+    writing. Filesystems without hard-link support fail closed.
+    """
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = None
+    try:
+        fd = os.open(temporary, flags, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            fd = None
+            stream.write(payload)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o400)
+            os.fsync(stream.fileno())
+
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise SkillArtifactStoreError(collision_message) from exc
+        except OSError as exc:
+            raise SkillArtifactStoreError(
+                "Skill artifact could not be atomically published on this filesystem"
+            ) from exc
+
+        # The final name now references a complete, read-only inode. If this
+        # fsync fails, retain the complete final file and report uncertain
+        # directory durability rather than deleting an already-visible artifact.
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            directory_fd = os.open(path.parent, directory_flags)
+            try:
+                os.fsync(directory_fd)
+                os.unlink(temporary)
+                temporary = None
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise SkillArtifactStoreError(
+                "Skill artifact is complete but directory durability could not be confirmed"
+            ) from exc
+    except SkillArtifactStoreError:
+        raise
+    except OSError as exc:
+        raise SkillArtifactStoreError("Skill artifact could not be written safely") from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
 
 def _secure_directory(path: Path, *, create: bool) -> Path:
@@ -138,18 +207,21 @@ class SkillArtifactStore:
         revision = _identity(version, "skill_version", _VERSION_RE)
         tenant_dir = self.root / tenant
         skill_dir = tenant_dir / skill
-        # Never follow a pre-created symlink in any path component.
+        # Re-check after mkdir races; never follow a pre-created symlink.
         for directory in (tenant_dir, skill_dir):
-            if directory.exists() or directory.is_symlink():
+            if create:
+                try:
+                    directory.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+            try:
                 info = directory.lstat()
-                if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                    raise SkillArtifactStoreError("artifact path contains a non-directory or symlink")
-                if info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077:
-                    raise SkillArtifactStoreError("artifact path directory permissions are unsafe")
-            elif create:
-                directory.mkdir(mode=0o700)
-            else:
-                raise SkillArtifactStoreError("trusted Skill artifact directory is unavailable")
+            except OSError as exc:
+                raise SkillArtifactStoreError("trusted Skill artifact directory is unavailable") from exc
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise SkillArtifactStoreError("artifact path contains a non-directory or symlink")
+            if info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077:
+                raise SkillArtifactStoreError("artifact path directory permissions are unsafe")
         suffix = ".candidate.json" if candidate else ".json"
         return skill_dir / f"{revision}{suffix}"
 
@@ -182,40 +254,16 @@ class SkillArtifactStore:
             "trust_level": trust,
             "content_sha256": digest,
             "code": code,
-            # Persist the signed validator statement so the Broker can re-verify
-            # provenance using only its pinned public key at every load.
             "validation_attestation": dict(validation_attestation),
         }
         payload = _canonical_json(artifact)
         path = self._artifact_path(tenant_id, skill_id, version, create=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        try:
-            fd = os.open(path, flags, 0o400)
-        except FileExistsError as exc:
-            raise SkillArtifactStoreError("Skill artifact version already exists; publish a new version") from exc
-        except OSError as exc:
-            raise SkillArtifactStoreError("Skill artifact could not be created safely") from exc
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(path, 0o400)
-            dir_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except Exception:
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            raise
+        _write_create_once(
+            path, payload,
+            collision_message="Skill artifact version already exists; publish a new version",
+        )
         return {
-            "tenant_id": tenant_id,
+            "tenant_id": normalized_tenant,
             "skill_id": skill_id,
             "skill_version": version,
             "content_sha256": digest,
@@ -256,21 +304,23 @@ class SkillArtifactStore:
         path = self._artifact_path(
             normalized_tenant, skill_id, version, create=True, candidate=True,
         )
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
         try:
-            fd = os.open(path, flags, 0o400)
-        except FileExistsError:
-            # A lost socket response may cause the caller to retry with a new
-            # request ID. Re-accept only the exact immutable candidate bytes.
+            _write_create_once(
+                path, payload,
+                collision_message="Skill candidate version already exists",
+            )
+        except SkillArtifactStoreError as exc:
+            if "version already exists" not in str(exc):
+                raise
+            # A lost socket response may be retried with a new request ID. Only
+            # the exact immutable candidate bytes may be accepted idempotently.
             read_flags = os.O_RDONLY
             if hasattr(os, "O_NOFOLLOW"):
                 read_flags |= os.O_NOFOLLOW
             try:
                 existing_fd = os.open(path, read_flags)
-            except OSError as exc:
-                raise SkillArtifactStoreError("existing Skill candidate is unavailable or unsafe") from exc
+            except OSError as read_exc:
+                raise SkillArtifactStoreError("existing Skill candidate is unavailable or unsafe") from read_exc
             try:
                 info = os.fstat(existing_fd)
                 if (
@@ -282,18 +332,18 @@ class SkillArtifactStore:
                     raise SkillArtifactStoreError("existing Skill candidate is unsafe or oversized")
                 with os.fdopen(existing_fd, "rb") as stream:
                     existing_bytes = stream.read(512 * 1024 + 1)
-                if len(existing_bytes) > 512 * 1024:
-                    raise SkillArtifactStoreError("existing Skill candidate is oversized")
             except Exception:
                 try:
                     os.close(existing_fd)
                 except OSError:
                     pass
                 raise
+            if len(existing_bytes) > 512 * 1024:
+                raise SkillArtifactStoreError("existing Skill candidate is oversized")
             try:
                 existing = json.loads(existing_bytes.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise SkillArtifactStoreError("existing Skill candidate is malformed") from exc
+            except (UnicodeDecodeError, json.JSONDecodeError) as read_exc:
+                raise SkillArtifactStoreError("existing Skill candidate is malformed") from read_exc
             if (
                 not isinstance(existing, dict)
                 or set(existing) != {
@@ -308,13 +358,14 @@ class SkillArtifactStore:
                 or not isinstance(existing.get("code"), str)
             ):
                 raise SkillArtifactStoreError("existing Skill candidate identity is invalid")
-            existing_digest = hashlib.sha256(existing["code"].encode("utf-8")).hexdigest()
+            try:
+                existing_digest = hashlib.sha256(existing["code"].encode("utf-8", errors="strict")).hexdigest()
+            except UnicodeError as read_exc:
+                raise SkillArtifactStoreError("existing Skill candidate code is invalid UTF-8") from read_exc
             if existing.get("content_sha256") != existing_digest:
                 raise SkillArtifactStoreError("existing Skill candidate digest is invalid")
             if existing["code"] != code:
-                raise SkillArtifactStoreError(
-                    "Skill candidate version already exists with different content"
-                )
+                raise SkillArtifactStoreError("Skill candidate version already exists with different content")
             return {
                 "tenant_id": normalized_tenant,
                 "skill_id": skill_id,
@@ -322,25 +373,6 @@ class SkillArtifactStore:
                 "content_sha256": existing_digest,
                 "trust_level": "draft",
             }
-        except OSError as exc:
-            raise SkillArtifactStoreError("Skill candidate could not be staged safely") from exc
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(path, 0o400)
-            dir_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except Exception:
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            raise
         return {
             "tenant_id": normalized_tenant,
             "skill_id": skill_id,
@@ -417,8 +449,6 @@ class SkillArtifactStore:
         if actual_digest != expected_digest or artifact.get("content_sha256") != actual_digest:
             raise SkillArtifactStoreError("stored Skill artifact content digest mismatch")
         if not is_candidate:
-            # Re-check the independent validator signature on every trusted
-            # artifact load. Draft candidates deliberately carry no trust claim.
             self._verify_validation_attestation(
                 artifact.get("validation_attestation"),
                 tenant_id=tenant_id,

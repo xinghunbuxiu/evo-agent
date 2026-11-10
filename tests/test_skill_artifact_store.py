@@ -5,6 +5,9 @@ import os
 import sys
 import tempfile
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -169,6 +172,91 @@ class SkillArtifactStoreTests(unittest.TestCase):
                     tenant_id="tenant-one", skill=candidate,
                     validation_attestation=self._attestation(candidate),
                 )
+
+
+    def test_final_path_is_invisible_until_complete_file_is_ready(self):
+        import os
+
+        binding_digest = __import__("hashlib").sha256(self.skill.code.encode("utf-8")).hexdigest()
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": self.skill.id,
+            "skill_version": self.skill.version,
+            "content_sha256": binding_digest,
+            "trust_level": self.skill.trust_level,
+            "mission_context": self.context,
+        }
+        artifact_path = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
+        entered_link = threading.Event()
+        allow_link = threading.Event()
+        real_link = os.link
+        outcome = []
+
+        def pause_before_atomic_link(source, destination, **kwargs):
+            entered_link.set()
+            if not allow_link.wait(5):
+                raise TimeoutError("test did not release atomic publication")
+            return real_link(source, destination, **kwargs)
+
+        def publish():
+            try:
+                outcome.append(self.store.publish(
+                    tenant_id="tenant-one",
+                    skill=self.skill,
+                    validation_attestation=self._attestation(),
+                ))
+            except Exception as exc:
+                outcome.append(exc)
+
+        with patch("core.skill_artifact_store.os.link", side_effect=pause_before_atomic_link):
+            thread = threading.Thread(target=publish)
+            thread.start()
+            self.assertTrue(entered_link.wait(5), "publisher never reached atomic publication")
+            self.assertFalse(artifact_path.exists(), "final artifact became visible before atomic publication")
+            allow_link.set()
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive(), "publisher did not finish")
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], dict)
+        loaded = self.store.load_for_binding(binding)
+        self.assertEqual(loaded.code, self.skill.code)
+        self.assertEqual(json.loads(artifact_path.read_text(encoding="utf-8"))["code"], self.skill.code)
+
+    def test_concurrent_publishers_have_exactly_one_create_once_winner(self):
+        barrier = threading.Barrier(8)
+
+        def publish_same_version(_index):
+            barrier.wait(timeout=5)
+            try:
+                return self.store.publish(
+                    tenant_id="tenant-one",
+                    skill=self.skill,
+                    validation_attestation=self._attestation(),
+                )
+            except SkillArtifactStoreError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(publish_same_version, range(8)))
+
+        successes = [result for result in results if isinstance(result, dict)]
+        collisions = [
+            result for result in results
+            if isinstance(result, SkillArtifactStoreError)
+            and "already exists" in str(result)
+        ]
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(collisions), 7)
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": self.skill.id,
+            "skill_version": self.skill.version,
+            "content_sha256": successes[0]["content_sha256"],
+            "trust_level": self.skill.trust_level,
+            "mission_context": self.context,
+        }
+        self.assertEqual(self.store.load_for_binding(binding).code, self.skill.code)
 
     def test_rejects_duplicate_version_instead_of_overwriting(self):
         self._publish_binding()
