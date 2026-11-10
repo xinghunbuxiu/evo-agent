@@ -224,6 +224,9 @@ class SkillValidatorTests(unittest.TestCase):
         failed = self._broker_attestation({"ok": True, "count": 3})
         failed["result"]["execution_succeeded"] = False
         failed["result"]["exit_code"] = 1
+        failed["skill_replay_output"]["success"] = False
+        failed["skill_replay_output"]["value"] = None
+        failed["skill_replay_output"]["error"] = {"type": "RuntimeError", "message": "replay failed"}
         signed = {key: value for key, value in failed.items() if key != "signature"}
         failed["signature"]["value"] = base64.b64encode(self.broker_key.sign(_canonical(signed))).decode("ascii")
         request = dict(self.request, broker_attestation=failed)
