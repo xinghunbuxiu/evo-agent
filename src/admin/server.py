@@ -66,6 +66,10 @@ from admin.intelligence_bootstrap_runtime import (
 from admin.mission_execution_runtime import (
     create_mission_execution_bindings,
 )
+from admin.skill_replay_runtime import (
+    SkillReplayRuntimeConfigurationError,
+    create_skill_replay_runtime,
+)
 from admin.growth_policy_runtime import (
     effective_platform_promotion_status as _effective_platform_promotion_status,
     growth_policy_decision_label as _growth_policy_decision_label,
@@ -1108,6 +1112,14 @@ def create_app() -> FastAPI:
             workspace = env_path
     workspace.mkdir(parents=True, exist_ok=True)
     organization_registry = OrganizationRegistry(workspace)
+    try:
+        _skill_replay_runtime = create_skill_replay_runtime(workspace=workspace)
+    except (SkillReplayRuntimeConfigurationError, OSError, ValueError) as exc:
+        # Broker replay is optional and fail-closed; ordinary Mission execution remains available.
+        _skill_replay_runtime = None
+        print(f"[skill-replay] disabled during configuration: {type(exc).__name__}")
+    if _skill_replay_runtime is None:
+        print("[skill-replay] Broker runtime is not configured; replay endpoint will remain unavailable")
     worker_manifests = builtin_worker_manifests(workspace)
     worker_config = load_worker_registry_config(workspace)
     worker_states = worker_config.get("workers", {}) if isinstance(worker_config.get("workers"), dict) else {}
@@ -1756,6 +1768,7 @@ def create_app() -> FastAPI:
                 "mysql": bool(MYSQL_AVAILABLE),
                 "spa_static": _spa_dist_index.is_file(),
                 "secure_cookies": _secure_cookies,
+                "skill_replay_broker_configured": _skill_replay_runtime is not None,
             },
             "warnings": warnings,
         }
@@ -2451,6 +2464,7 @@ def create_app() -> FastAPI:
         authorize_tenant=_user_can_access_tenant,
         tenant_role=_tenant_role_for_user,
         organization_registry=organization_registry,
+        skill_replay_runtime=_skill_replay_runtime,
     )
 
     register_self_media_routes(
