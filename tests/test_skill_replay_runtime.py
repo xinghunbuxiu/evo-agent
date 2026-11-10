@@ -77,6 +77,15 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.workspace_id, "workspace-a")
         self.assertEqual(runtime.broker_key_id, "broker-test-key")
 
+    def test_rejects_symlinked_broker_public_key(self):
+        real_key = self.root / "real-broker.pub"
+        real_key.write_bytes(self.key_path.read_bytes())
+        real_key.chmod(0o400)
+        self.key_path.unlink()
+        self.key_path.symlink_to(real_key)
+        with self.assertRaisesRegex(SkillReplayRuntimeConfigurationError, "non-symlink"):
+            create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+
     def test_rejects_group_or_world_accessible_evidence_root(self):
         self.evidence_root.chmod(0o750)
         with self.assertRaisesRegex(SkillReplayRuntimeConfigurationError, "private"):
