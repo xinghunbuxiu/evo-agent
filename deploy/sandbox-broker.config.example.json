@@ -2,10 +2,16 @@
   "workspace_roots": {
     "evo-agent": "/srv/evo/workspaces/evo-agent"
   },
+  "workspace_tenants": {
+    "evo-agent": ["default"]
+  },
   "replay_database": "/var/lib/evo-sandbox-broker/replay.sqlite3",
   "signing_key": "/etc/evo-sandbox-broker/signing-key.pem",
   "key_id": "evo-broker-2026-01",
   "image": "registry.example/evo/python-runner@sha256:REPLACE_WITH_64_HEX_DIGEST",
   "allowed_uids": [1001],
-  "max_workers": 2
+  "max_workers": 2,
+  "artifact_store_root": "/var/lib/evo-sandbox-broker/skill-artifacts",
+  "validator_public_key": "/etc/evo-sandbox-broker/validator-public-key.raw",
+  "validator_key_id": "evo-validator-2026-01"
 }
