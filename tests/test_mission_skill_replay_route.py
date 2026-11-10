@@ -81,6 +81,8 @@ class _ReplayRuntime:
                 "evidence": {"evidence_id": "evidence-a"},
                 "experience": {"id": "experience-a"},
             },
+            "validation": {"status": "not_configured"},
+            "promotion": {"status": "not_attempted"},
         }
         self.error = error
 
@@ -125,6 +127,8 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action_type"], "skill_replay")
         self.assertEqual(actions[0]["status"], "completed")
+        self.assertEqual(actions[0]["validation_status"], "not_configured")
+        self.assertEqual(actions[0]["promotion_status"], "not_attempted")
         self.assertEqual(actions[0]["evidence_id"], "evidence-a")
         self.assertEqual(actions[0]["experience_id"], "experience-a")
         self.assertTrue(actions[0]["execution_succeeded"])
