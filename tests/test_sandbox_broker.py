@@ -328,14 +328,30 @@ class SandboxBrokerServiceTests(unittest.TestCase):
 
     def test_skill_replay_is_tenant_isolated_and_rejects_missing_artifact(self):
         service, binding = self._trusted_skill_service()
+
+        # Tenant authorization is an earlier security boundary than artifact lookup.
         other_context = {**binding["mission_context"], "tenant_id": "tenant-other"}
         other_binding = {**binding, "mission_context": other_context}
-        request = build_broker_request(
+        foreign_request = build_broker_request(
             "project-test", self._skill_replay_spec(other_binding), mission_context=other_context,
             request_id=str(uuid.uuid4()), skill_binding=other_binding,
         )
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+            service.handle_request(foreign_request)
+
+        # An authorized tenant with a well-formed but absent artifact must reach
+        # the independent artifact-verification boundary, not the tenant gate.
+        missing_binding = {
+            **binding,
+            "skill_id": "skill-artifact-does-not-exist",
+        }
+        missing_request = build_broker_request(
+            "project-test", self._skill_replay_spec(missing_binding),
+            mission_context=binding["mission_context"],
+            request_id=str(uuid.uuid4()), skill_binding=missing_binding,
+        )
         with self.assertRaisesRegex(BrokerRequestRejected, "independent verification"):
-            service.handle_request(request)
+            service.handle_request(missing_request)
         self.assertEqual(self.skill_calls, [])
 
     def test_skill_replay_rejects_malformed_or_truncated_executor_output(self):
