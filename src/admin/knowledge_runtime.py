@@ -191,7 +191,14 @@ def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> l
     for domain_dir in sorted(item for item in experiences_root.iterdir() if item.is_dir()):
         domain = domain_dir.name
         for exp in store.load_by_domain(domain, limit=80):
-            if should_skip_auto_skill_task_type(exp.task_type):
+            metadata = exp.metadata if isinstance(exp.metadata, dict) else {}
+            # A signed Broker replay proves isolated execution only. Until an
+            # independent reflection/validator accepts it, it is observation
+            # evidence and must not seed reusable Skill drafts by quality score.
+            if (
+                should_skip_auto_skill_task_type(exp.task_type)
+                or isinstance(metadata.get("skill_replay"), dict)
+            ):
                 continue
             if float(exp.quality_score or 0.0) < 0.75:
                 continue

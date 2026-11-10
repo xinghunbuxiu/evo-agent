@@ -56,6 +56,36 @@ class SkillReplayVerificationTests(unittest.TestCase):
             self.assertIsNone(result)
             verify.assert_not_called()
 
+    def test_pending_skill_replay_observations_never_seed_stable_skill_drafts(self):
+        from core import Experience, ExperienceStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            store = ExperienceStore(workspace, "tenant-a")
+            for index in range(2):
+                store.save(Experience(
+                    id=f"replay-observation-{index}",
+                    domain="javascript",
+                    task_type="mission_delivery",
+                    input_summary="Broker ran candidate in isolation",
+                    output_summary="Execution completed",
+                    quality_score=1.0,
+                    capability_type="frontend",
+                    metadata={"skill_replay": {
+                        "schema_version": "mission.skill-replay-experience.v1",
+                        "execution_success": True,
+                        "execution_status": "succeeded",
+                        "reflection": {
+                            "status": "pending",
+                            "reusable_experience": None,
+                        },
+                    }},
+                ))
+
+            groups = knowledge_runtime.collect_stable_experience_skill_groups(
+                workspace, "tenant-a"
+            )
+            self.assertEqual(groups, [])
     def test_stable_experience_skill_keeps_each_source_experience_mission_worker_and_task_evidence(self):
         import json
         from core import Experience, ExperienceStore
