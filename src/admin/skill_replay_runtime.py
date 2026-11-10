@@ -241,13 +241,25 @@ def _read_public_key(path_value: str) -> bytes:
     path = Path(path_value)
     if not path.is_absolute() or path.is_symlink():
         raise SkillReplayRuntimeConfigurationError("Broker public key path must be absolute and non-symlink")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        info = path.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022:
-            raise SkillReplayRuntimeConfigurationError("Broker public key file is not trusted")
-        raw = path.read_bytes()
+        fd = os.open(path, flags)
     except OSError as exc:
-        raise SkillReplayRuntimeConfigurationError("Broker public key file is unavailable") from exc
+        raise SkillReplayRuntimeConfigurationError("Broker public key file is unavailable or unsafe") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()}
+            or info.st_mode & 0o022
+            or path.resolve(strict=True) != path
+        ):
+            raise SkillReplayRuntimeConfigurationError("Broker public key file is not trusted")
+        raw = os.read(fd, 33)
+    except OSError as exc:
+        raise SkillReplayRuntimeConfigurationError("Broker public key file could not be read safely") from exc
+    finally:
+        os.close(fd)
     if len(raw) != 32:
         raise SkillReplayRuntimeConfigurationError("Broker public key must contain 32 raw Ed25519 bytes")
     return raw
