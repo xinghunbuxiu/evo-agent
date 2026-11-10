@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import re
 import uuid
@@ -29,7 +30,7 @@ _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CONTEXT_FIELDS = {"tenant_id", "mission_run_id", "node_id", "task_id"}
 _BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 _ATTESTATION_FIELDS = {
-    "schema_version", "validation_id", "validator_id", "tenant_id",
+    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256", "tenant_id",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
 _ALLOWED_TRUST_LEVELS = {"verified", "cloud"}
@@ -287,10 +288,13 @@ class SkillValidatorService:
         if not results or not all(item["passed"] for item in results):
             raise SkillValidatorError("Skill output failed the independent acceptance policy")
 
+        policy_sha256 = hashlib.sha256(_canonical_json(policy)).hexdigest()
         statement = {
             "schema_version": VALIDATION_ATTESTATION_SCHEMA,
             "validation_id": str(uuid.uuid4()),
             "validator_id": self.validator_id,
+            "policy_id": policy["policy_id"],
+            "policy_sha256": policy_sha256,
             "tenant_id": context["tenant_id"],
             "skill_id": skill_id,
             "skill_version": version,
@@ -334,6 +338,17 @@ def verify_validation_response(
         raise SkillValidatorError("Validator did not attest a passed validation")
     for field in ("validation_id", "validator_id"):
         _identity(attestation.get(field), field)
+    _identity(attestation.get("policy_id"), "policy_id")
+    if not isinstance(attestation.get("policy_sha256"), str) or not _DIGEST_RE.fullmatch(attestation["policy_sha256"]):
+        raise SkillValidatorError("Validator policy digest is invalid")
+    if response.get("policy_id") != attestation.get("policy_id"):
+        raise SkillValidatorError("Validator response policy ID does not match its signed attestation")
+    checks = response.get("checks")
+    if not isinstance(checks, list) or not checks or any(
+        not isinstance(item, dict) or set(item) != {"check_index", "type", "passed"}
+        or item.get("passed") is not True for item in checks
+    ):
+        raise SkillValidatorError("Validator response contains failed or malformed policy checks")
     for field in ("tenant_id", "skill_id", "skill_version", "content_sha256", "trust_level"):
         if attestation.get(field) != expected_identity.get(field):
             raise SkillValidatorError("Validator attestation does not bind the expected artifact")

@@ -22,10 +22,10 @@ from typing import Any, Mapping
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v1"
 CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
-VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v1"
+VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v2"
 VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
 _ATTESTATION_FIELDS = {
-    "schema_version", "validation_id", "validator_id", "tenant_id",
+    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256", "tenant_id",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -104,6 +104,8 @@ class SkillArtifactStore:
             raise SkillArtifactStoreError("Skill validation attestation did not pass")
         for field in ("validation_id", "validator_id"):
             _identity(attestation.get(field), field, _ID_RE)
+        _identity(attestation.get("policy_id"), "policy_id", _ID_RE)
+        _identity(attestation.get("policy_sha256"), "policy_sha256", re.compile(r"^[0-9a-f]{64}$"))
         expected = {
             "tenant_id": tenant_id,
             "skill_id": skill_id,

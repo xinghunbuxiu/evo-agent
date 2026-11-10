@@ -51,6 +51,8 @@ class SkillArtifactStoreTests(unittest.TestCase):
             "schema_version": VALIDATION_ATTESTATION_SCHEMA,
             "validation_id": "validation-001",
             "validator_id": "independent-validator",
+            "policy_id": "test-policy-v1",
+            "policy_sha256": "a" * 64,
             "tenant_id": tenant_id,
             "skill_id": candidate.id,
             "skill_version": candidate.version,

@@ -183,8 +183,8 @@ The Broker/Mission caller sends mission.skill-validation-request.v1 to the
 Validator Unix socket. The request contains the exact Mission context, a draft
 Skill binding, desired trust level, and the complete Broker-signed Replay
 envelope. The Validator checks the Broker signature and execution status
-before looking up the policy. The resulting attestation uses the existing
-mission.skill-validation-attestation.v1 contract and can be passed to the
+before looking up the policy. The resulting attestation uses the mission.skill-validation-attestation.v2 contract
+and signs the exact policy ID plus a SHA-256 digest of its normalized contents and can be passed to the
 Broker's existing candidate-promotion operation.
 
 This is the first independent Validator service boundary, not an automatic
