@@ -124,6 +124,7 @@ class SkillReplayVerificationTests(unittest.TestCase):
                 {item.id for item in groups[0]["items"]},
                 {"pass-1", "pass-2"},
             )
+
     def test_stable_experience_skill_keeps_each_source_experience_mission_worker_and_task_evidence(self):
         import json
         from core import Experience, ExperienceStore
