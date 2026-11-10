@@ -424,7 +424,7 @@ EVO_SKILL_REPLAY_EVIDENCE_ROOT=/var/lib/evo-admin/skill-replay-evidence
 
 ### 3. 显式 Replay API
 
-登录且有权访问该 Mission 租户的用户，可以针对指定 Mission 节点发起一次 Replay：
+登录且具备该 Mission 租户 `tenant_admin` 或 `member` 角色的用户，可以针对指定 Mission 节点发起一次 Replay；`viewer` 只读角色不能触发代码执行。未配置 Broker 时，`GET /health` 的 `checks.skill_replay_broker_configured` 为 `false`，但不会降低普通 Mission 的健康状态。
 
 ```http
 POST /api/missions/{mission_run_id}/skills/{skill_id}/replay
@@ -446,6 +446,6 @@ Content-Type: application/json
 
 ### 4. 证据边界
 
-`execution_succeeded=true` 只表示 Broker 隔离执行成功，不表示业务目标已通过验收。Replay 失败但 Broker 签名有效时，也会作为失败观察保存并进入待反思状态；传输失败或签名验证失败则不会创建成功 Experience。
+`execution_succeeded=true` 只表示 Broker 隔离执行成功，不表示业务目标已通过验收。Replay 失败但 Broker 签名有效时，也会作为失败观察保存并进入待反思状态；传输失败或签名验证失败则不会创建成功 Experience。如果 Broker 证据已持久化、但 Experience 投影失败，Mission 操作记录会保留异常携带的 Evidence 引用，避免丢失已落盘证据的追踪入口。
 
 **当前仍未开放自动晋升。** 独立 Validator 必须针对完全相同的 tenant、Skill ID、版本和内容 SHA-256 完成验收，并使用 Artifact Store 信任的 Validator 私钥签名；Broker 在发布时重新验证该签名后，才允许将候选发布为 verified。Recipe 候选仍保留为知识资产，不进入 Python Replay。
