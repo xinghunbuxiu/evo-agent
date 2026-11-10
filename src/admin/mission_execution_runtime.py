@@ -862,7 +862,9 @@ def create_mission_execution_bindings(
         for item in refreshed_actions:
             if not isinstance(item, dict):
                 continue
-            if item.get("action_type") == "failure_learning_ticket" or item.get("status") == "superseded":
+            # Skill Replay is an auxiliary verification operation, not a new
+            # Mission node execution; it must never rewrite dependency state.
+            if item.get("action_type") in {"failure_learning_ticket", "skill_replay"} or item.get("status") == "superseded":
                 continue
             item_node_id = str(item.get("node_id") or "").strip()
             if item_node_id:
