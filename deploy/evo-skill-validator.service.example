@@ -6,7 +6,7 @@ Before=evo-sandbox-broker.service
 [Service]
 Type=simple
 User=evo-validator
-Group=evo-broker
+Group=evo-validator-client
 RuntimeDirectory=evo-skill-validator
 RuntimeDirectoryMode=0750
 UMask=0077

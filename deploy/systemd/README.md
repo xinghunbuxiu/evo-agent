@@ -6,12 +6,15 @@ application component that receives Docker socket access.
 
 ## 1. Dedicated identities
 
-Create a dedicated `evo-broker` service account and a narrowly scoped
-`evo-app` group. Add only the Mission application service account to
-`evo-app`. Add `evo-broker` to the host's `docker` group only after the
-broker code, image and configuration have been reviewed: Docker socket access
-is effectively host-administrator privilege. Never add `evo-runner`,
-Mission workers, or general-purpose worker accounts to `docker`.
+Create a dedicated `evo-broker` service account, a narrowly scoped `evo-app`
+group, and a separate `evo-validator-client` group. Add only the Mission
+application service account as a supplementary member of `evo-app` and
+`evo-validator-client`. The Validator service uses `evo-validator-client` as
+its primary group so its socket is reachable by Admin without granting the
+Validator access to the Broker socket. Add `evo-broker` to the host's `docker`
+group only after the broker code, image and configuration have been reviewed:
+Docker socket access is effectively host-administrator privilege. Never add
+`evo-runner`, Mission workers, or general-purpose worker accounts to `docker`.
 
 Record the numeric UID of the Mission application account. Put only that UID
 in `allowed_uids` in the root-owned broker configuration.
@@ -53,7 +56,8 @@ The private key stays readable only by the dedicated broker service account.
 
 Copy the two unit files from `deploy/systemd/` into
 `/etc/systemd/system/`. Confirm that the host has the expected `docker`
-service, `docker` group, `evo-broker` user and `evo-app` group. Then, during
+service, `docker` group, `evo-broker` user, `evo-app` group and
+`evo-validator-client` group. Then, during
 a maintenance window:
 
 ```sh
@@ -70,8 +74,15 @@ the parent directory is not writable by application users.
 ## 5. Connect the independent Validator and Admin runtime
 
 The Validator must run as a separate service identity with its own Ed25519
-private key. Follow the corresponding `skill-validator` service unit and
-configuration examples. Its policy file must bind the exact tenant, Skill ID,
+private key. Install `deploy/evo-skill-validator.service.example` as
+`/etc/systemd/system/evo-skill-validator.service`; it must run as
+`evo-validator:evo-validator-client` with `RuntimeDirectoryMode=0750`. The
+runtime directory and socket therefore have group `evo-validator-client`,
+mode `0750` and `0660` respectively. Add the Mission Admin account to
+`evo-validator-client`; do not add it to `evo-broker` merely to reach the
+Validator socket. The Validator config and policy must be root-controlled,
+and its private signing key must be readable only by `evo-validator` (mode
+`0600` or stricter). Its policy file must bind the exact tenant, Skill ID,
 version and source SHA-256; a generic policy is not accepted.
 
 Install the Validator public key on the Mission application host as a raw
@@ -91,10 +102,12 @@ then submits that attestation to the Broker. The Broker independently verifies
 the Validator signature before create-once publication to its Artifact Store.
 
 The Validator configuration's `allowed_uids` must include only the Mission
-Admin service UID that is authorized to request validation. The Broker
-configuration's `allowed_uids` must likewise include the Admin service UID.
-Do not authorize worker, runner or general-purpose user accounts on either
-socket.
+Admin service UID that is authorized to request validation. This peer-UID check
+is still required even though the socket group grants filesystem access. The
+Broker configuration's `allowed_uids` must likewise include the Admin service
+UID. Do not authorize worker, runner or general-purpose user accounts on either
+socket. Keep `evo-validator-client` separate from `evo-app`: the Validator
+should not be able to open the Broker socket.
 
 The Admin process never receives the Validator private key or Broker private
 key. The Broker process receives only the Validator public key; the Validator
