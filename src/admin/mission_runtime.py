@@ -122,12 +122,20 @@ def load_mission_runs(workspace: Path) -> dict:
 
 
 def _mission_run_has_active_worker_claim(mission_run: dict) -> bool:
-    """Keep runs that are the only durable evidence for a live worker reservation."""
+    """Keep runs that own a live worker reservation or an in-flight Broker replay."""
     actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
     return any(
         isinstance(action, dict)
-        and isinstance(action.get("worker_claim"), dict)
-        and action["worker_claim"].get("state") == "claimed"
+        and (
+            (
+                isinstance(action.get("worker_claim"), dict)
+                and action["worker_claim"].get("state") == "claimed"
+            )
+            or (
+                action.get("action_type") == "skill_replay"
+                and action.get("status") == "running"
+            )
+        )
         for action in actions
     )
 
