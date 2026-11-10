@@ -67,7 +67,36 @@ without the socket unit. Verify that `/run/evo-sandbox-broker/broker.sock`
 is a Unix stream socket owned by `evo-broker:evo-app`, mode `0660`, and that
 the parent directory is not writable by application users.
 
-## 5. Verify before connecting Mission
+## 5. Connect the independent Validator and Admin runtime
+
+The Validator must run as a separate service identity with its own Ed25519
+private key. Follow the corresponding `skill-validator` service unit and
+configuration examples. Its policy file must bind the exact tenant, Skill ID,
+version and source SHA-256; a generic policy is not accepted.
+
+Install the Validator public key on the Mission application host as a raw
+32-byte Ed25519 key, readable by the Admin service but not writable by it.
+Configure the Admin service with all three optional variables:
+
+- `EVO_SKILL_REPLAY_VALIDATOR_SOCKET`: absolute Validator Unix socket path
+- `EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY`: absolute path to the pinned public key
+- `EVO_SKILL_REPLAY_VALIDATOR_KEY_ID`: the configured Validator key ID
+
+The existing Broker variables remain required to enable Replay. Validator
+configuration is optional as a group: without it, Mission can record a signed
+Broker Replay but will keep the Skill in Draft and will not publish an Artifact.
+A partial Validator configuration prevents Replay runtime startup. When fully
+configured, Admin verifies the Validator signature and exact artifact identity,
+then submits that attestation to the Broker. The Broker independently verifies
+the Validator signature before create-once publication to its Artifact Store.
+
+The Admin process never receives the Validator private key or Broker private
+key. The Broker process receives only the Validator public key; the Validator
+receives only the Broker public key.
+
+## 6. Verify before connecting production Mission
+
+
 
 Review the service logs, inspect the running process identity and confirm that
 only the dedicated broker account has Docker socket access. Confirm the
