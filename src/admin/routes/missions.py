@@ -4,12 +4,21 @@ Mission 规划、执行与续跑接口。
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from fastapi import Request
 
-from admin.mission_runtime import load_mission_runs, load_mission_runs_strict, release_worker_claim_for_review
+from admin.mission_runtime import (
+    exclusive_mission_claim_lock,
+    load_mission_runs,
+    load_mission_runs_strict,
+    release_worker_claim_for_review,
+    save_mission_runs,
+)
 
 
 def register_mission_routes(
@@ -32,6 +41,7 @@ def register_mission_routes(
     authorize_tenant: Callable[[dict, str], bool],
     tenant_role: Callable[[dict, str], str | None],
     organization_registry,
+    skill_replay_runtime=None,
 ) -> None:
     @app.post("/api/missions/plan")
     async def plan_mission(request: Request):
@@ -101,6 +111,156 @@ def register_mission_routes(
             "updated_at": state.get("updated_at"),
             "items": filtered,
         })
+
+    @app.post("/api/missions/{mission_run_id}/skills/{skill_id}/replay")
+    async def replay_mission_skill(request: Request, mission_run_id: str, skill_id: str):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if skill_replay_runtime is None:
+            return error_response("Skill Replay Broker 尚未配置；普通 Mission 执行不受影响", 503)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict):
+            return error_response("请求内容必须是 JSON 对象", 400)
+        node_id = str(data.get("node_id") or "").strip()
+        if not node_id:
+            return error_response("必须指定 node_id", 400)
+
+        task_id = uuid.uuid4().hex
+        action = {
+            "action_type": "skill_replay",
+            "status": "running",
+            "task_id": task_id,
+            "node_id": node_id,
+            "title": f"Skill Replay: {skill_id}",
+            "skill_id": skill_id,
+            "created_at": datetime.now().astimezone().isoformat(),
+            "detail": "已通过 Mission API 授权，正在向 Broker 提交不可变 Skill 候选",
+        }
+
+        # Serialize the durable Mission action creation with other Mission writes.
+        with exclusive_mission_claim_lock(workspace):
+            try:
+                state = load_mission_runs_strict(workspace)
+            except (OSError, UnicodeError, ValueError):
+                return error_response("Mission 运行记录不可读取，拒绝执行 Skill Replay", 500)
+            mission_run = next((
+                item for item in state["items"]
+                if isinstance(item, dict)
+                and str(item.get("mission_run_id") or "") == mission_run_id
+            ), None)
+            if not isinstance(mission_run, dict):
+                return error_response("未找到对应的 mission run", 404)
+            tenant_id = str(mission_run.get("tenant_id") or "default")
+            if not authorize_tenant(user, tenant_id):
+                return error_response("无权访问该租户", 403)
+            plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+            nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+            if not any(
+                isinstance(node, dict) and str(node.get("id") or "") == node_id
+                for node in nodes
+            ):
+                return error_response("node_id 不属于该 Mission", 400)
+            actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
+            if any(
+                isinstance(item, dict)
+                and item.get("action_type") == "skill_replay"
+                and item.get("status") == "running"
+                and item.get("skill_id") == skill_id
+                and item.get("node_id") == node_id
+                for item in actions
+            ):
+                return error_response("该 Skill 在此 Mission 节点已有 Replay 正在执行", 409)
+            actions.append(action)
+            mission_run["actions"] = actions
+            mission_run["updated_at"] = datetime.now().astimezone().isoformat()
+            save_mission_runs(workspace, state)
+
+        try:
+            operation = await asyncio.to_thread(
+                skill_replay_runtime.replay_candidate,
+                tenant_id=tenant_id,
+                mission_run=mission_run,
+                node_id=node_id,
+                task_id=task_id,
+                skill_id=skill_id,
+            )
+        except FileNotFoundError:
+            error_status, error_message = 404, "未找到该租户的 Skill 候选"
+        except PermissionError:
+            error_status, error_message = 403, "Skill 候选的租户或 Mission 来源不匹配"
+        except ValueError as exc:
+            error_status, error_message = 409, f"Skill 候选不符合 Replay 契约: {str(exc)[:180]}"
+        except Exception as exc:
+            error_status, error_message = 502, f"Broker Skill Replay 未完成: {type(exc).__name__}"
+        else:
+            replay = operation.get("replay", {}) if isinstance(operation, dict) else {}
+            result = replay.get("result", {}) if isinstance(replay, dict) else {}
+            evidence = replay.get("evidence", {}) if isinstance(replay, dict) else {}
+            experience = replay.get("experience", {}) if isinstance(replay, dict) else {}
+            with exclusive_mission_claim_lock(workspace):
+                state = load_mission_runs_strict(workspace)
+                latest = next((
+                    item for item in state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                ), None)
+                if not isinstance(latest, dict):
+                    return error_response("Replay 已执行并保存证据，但 Mission 记录暂时不可更新", 503)
+                latest_actions = latest.get("actions") if isinstance(latest.get("actions"), list) else []
+                recorded = next((
+                    item for item in latest_actions
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if not isinstance(recorded, dict):
+                    return error_response("Replay 已执行并保存证据，但操作记录未找到", 503)
+                recorded.update({
+                    "status": "completed",
+                    "detail": "Broker 已返回签名执行证明；业务验收与 Skill 晋升仍需独立 Validator",
+                    "execution_succeeded": result.get("execution_succeeded") is True,
+                    "evidence_id": evidence.get("evidence_id"),
+                    "experience_id": experience.get("id"),
+                    "replay_result": result,
+                    "skill_replay_output": replay.get("skill_replay_output"),
+                    "stage_receipt": operation.get("stage_receipt"),
+                    "completed_at": datetime.now().astimezone().isoformat(),
+                })
+                latest["actions"] = latest_actions
+                latest["updated_at"] = datetime.now().astimezone().isoformat()
+                save_mission_runs(workspace, state)
+            return success_response(operation, "Skill Replay 已执行并记录；执行成功不等于独立验收通过")
+
+        # Keep a durable failed operation record; a transport failure is not evidence of Skill success.
+        try:
+            with exclusive_mission_claim_lock(workspace):
+                state = load_mission_runs_strict(workspace)
+                latest = next((
+                    item for item in state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                ), None)
+                if isinstance(latest, dict):
+                    latest_actions = latest.get("actions") if isinstance(latest.get("actions"), list) else []
+                    recorded = next((
+                        item for item in latest_actions
+                        if isinstance(item, dict) and item.get("task_id") == task_id
+                    ), None)
+                    if isinstance(recorded, dict):
+                        recorded.update({
+                            "status": "failed",
+                            "detail": error_message,
+                            "error_type": "skill_replay_rejected_or_unavailable",
+                            "completed_at": datetime.now().astimezone().isoformat(),
+                        })
+                        latest["actions"] = latest_actions
+                        latest["updated_at"] = datetime.now().astimezone().isoformat()
+                        save_mission_runs(workspace, state)
+        except Exception:
+            pass
+        return error_response(error_message, error_status)
 
     @app.get("/api/missions/worker-claims/recovery-review")
     async def list_worker_claims_for_recovery_review(request: Request, tenant_id: str | None = None, limit: int = 100):
