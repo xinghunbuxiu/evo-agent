@@ -32,6 +32,7 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
         self.key_path.chmod(0o400)
         self.config = {
             "workspace_roots": {"workspace-one": str(self.root)},
+            "workspace_tenants": {"workspace-one": ["tenant-one"]},
             "replay_database": str(Path(self.temp.name) / "state" / "replay.sqlite3"),
             "signing_key": str(self.key_path),
             "key_id": "broker-test",
@@ -59,7 +60,21 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
         self.assertEqual(allowed_uids, (os.getuid(),))
         self.assertEqual(workers, 2)
         self.assertIn("workspace-one", service.workspace_roots)
+        self.assertEqual(service.workspace_tenants["workspace-one"], frozenset({"tenant-one"}))
         self.assertIsNotNone(service.skill_artifact_store)
+
+    def test_rejects_missing_or_ambiguous_workspace_tenant_allowlist(self):
+        invalid_configs = (
+            {key: value for key, value in self.config.items() if key != "workspace_tenants"},
+            {**self.config, "workspace_tenants": {}},
+            {**self.config, "workspace_tenants": {"workspace-one": []}},
+            {**self.config, "workspace_tenants": {"workspace-one": ["tenant-one", "tenant-one"]}},
+            {**self.config, "workspace_tenants": {"workspace-one": ["../tenant"]}},
+        )
+        for config in invalid_configs:
+            with self.subTest(config=config), self.assertRaises(BrokerDaemonConfigurationError):
+                with patch("core.sandbox_broker_daemon.DockerSandboxExecutor.connect_docker_socket", return_value=object()):
+                    build_service(config)
 
     def test_rejects_symlink_workspace_root(self):
         link = Path(self.temp.name) / "workspace-link"

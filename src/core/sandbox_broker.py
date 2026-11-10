@@ -46,6 +46,7 @@ _REQUEST_FIELDS = {
     "profile_id", "target", "timeout_seconds",
 }
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -234,6 +235,7 @@ class SandboxBrokerService:
         runner_version: str = "1",
         skill_artifact_store: object | None = None,
         skill_replay_executor: Callable[..., RunnerProcessOutput] | None = None,
+        workspace_tenants: Mapping[str, object] | None = None,
     ):
         if not key_id or len(key_id) > 128:
             raise ValueError("broker key_id must be a non-empty bounded value")
@@ -252,6 +254,24 @@ class SandboxBrokerService:
         self.runner_version = runner_version
         self.skill_artifact_store = skill_artifact_store
         self.skill_replay_executor = skill_replay_executor
+        self.workspace_tenants = {}
+        if workspace_tenants is not None:
+            if not isinstance(workspace_tenants, Mapping) or set(workspace_tenants) != set(normalized_roots):
+                raise ValueError("workspace_tenants must explicitly cover every registered workspace")
+            for workspace_id, raw_tenants in workspace_tenants.items():
+                if not isinstance(raw_tenants, (list, tuple, set, frozenset)) or not raw_tenants:
+                    raise ValueError("each workspace must have a non-empty tenant allowlist")
+                tenants = tuple(raw_tenants)
+                if any(not isinstance(tenant, str) or not _TENANT_ID_RE.fullmatch(tenant) for tenant in tenants):
+                    raise ValueError("workspace tenant allowlist contains invalid identities")
+                if len(set(tenants)) != len(tenants):
+                    raise ValueError("workspace tenant allowlist contains duplicate identities")
+                self.workspace_tenants[workspace_id] = frozenset(tenants)
+
+    def _authorize_workspace_tenant(self, workspace_id: str, tenant_id: str) -> None:
+        allowed = self.workspace_tenants.get(workspace_id, frozenset())
+        if tenant_id not in allowed:
+            raise BrokerRequestRejected("Mission tenant is not authorized for this workspace")
 
 
     def stage_skill_candidate(self, request: object) -> dict:
@@ -274,6 +294,7 @@ class SandboxBrokerService:
             context = _normalize_mission_context(request.get("mission_context"))
         except ValueError as exc:
             raise BrokerRequestRejected("Skill candidate Mission context is invalid") from exc
+        self._authorize_workspace_tenant(workspace_id, context["tenant_id"])
         skill_id = request.get("skill_id")
         version = request.get("skill_version")
         code = request.get("code")
@@ -390,11 +411,13 @@ class SandboxBrokerService:
         if root is None:
             raise BrokerRequestRejected("workspace_id is not registered with this broker")
         binding = validated["skill_binding"]
-        if binding is not None and (
-            self.skill_artifact_store is None or not callable(self.skill_replay_executor)
-        ):
-            raise BrokerRequestRejected(
-                "trusted Skill Artifact Store or isolated Skill Replay executor is not configured"
+        if binding is not None:
+            if self.skill_artifact_store is None or not callable(self.skill_replay_executor):
+                raise BrokerRequestRejected(
+                    "trusted Skill Artifact Store or isolated Skill Replay executor is not configured"
+                )
+            self._authorize_workspace_tenant(
+                workspace_id, validated["mission_context"]["tenant_id"],
             )
         self.replay_store.claim(request_id, validated)
         skill_artifact = None

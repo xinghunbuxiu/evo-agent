@@ -206,6 +206,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         )
         service = SandboxBrokerService(
             workspace_roots={"test-workspace": root},
+            workspace_tenants={"test-workspace": ["tenant-transport"]},
             replay_store=self.service.replay_store,
             executor=lambda _spec: RunnerProcessOutput(0, b"ok", b""),
             signing_key=self.key,

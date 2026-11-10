@@ -46,6 +46,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.skill_calls = []
         self.service = SandboxBrokerService(
             workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
             replay_store=self.store,
             executor=self._execute,
             signing_key=self.key,
@@ -89,6 +90,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         )
         service = SandboxBrokerService(
             workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
             replay_store=self.store,
             executor=self._execute,
             signing_key=self.key,
@@ -237,6 +239,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         }
         service = SandboxBrokerService(
             workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
             replay_store=self.store,
             executor=self._execute,
             signing_key=self.key,
@@ -346,6 +349,56 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(BrokerRequestRejected, "invalid structured output"):
             service.handle_request(request)
+
+    def test_skill_replay_rejects_tenant_not_authorized_for_workspace_before_claim(self):
+        service, binding = self._trusted_skill_service()
+        context = {**binding["mission_context"], "tenant_id": "tenant-other"}
+        foreign_binding = {**binding, "mission_context": context}
+        request = build_broker_request(
+            "project-test", self._skill_replay_spec(foreign_binding),
+            mission_context=context, request_id=str(uuid.uuid4()),
+            skill_binding=foreign_binding,
+        )
+        for _ in range(2):
+            with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+                service.handle_request(request)
+        self.assertEqual(self.skill_calls, [])
+
+    def test_skill_replay_fails_closed_without_workspace_tenant_allowlist(self):
+        trusted_service, binding = self._trusted_skill_service()
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=trusted_service.skill_artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        request = build_broker_request(
+            "project-test", self._skill_replay_spec(binding),
+            mission_context=binding["mission_context"],
+            request_id=str(uuid.uuid4()), skill_binding=binding,
+        )
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+            service.handle_request(request)
+        self.assertEqual(self.skill_calls, [])
+
+    def test_candidate_staging_rejects_tenant_not_authorized_for_workspace(self):
+        service, _binding = self._trusted_skill_service()
+        context = {
+            "tenant_id": "tenant-other", "mission_run_id": "mission-stage",
+            "node_id": "node-stage", "task_id": "task-stage",
+        }
+        request = {
+            "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+            "request_id": str(uuid.uuid4()), "workspace_id": "project-test",
+            "mission_context": context, "skill_id": "skill-foreign",
+            "skill_version": "1.0.0", "code": "def run(context): return {}",
+        }
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+            service.stage_skill_candidate(request)
+        self.assertFalse((Path(self.temp.name) / "trusted-artifacts" / "tenant-other").exists())
 
     def test_skill_replay_request_id_cannot_be_reused(self):
         service, binding = self._trusted_skill_service()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import stat
@@ -25,7 +26,7 @@ DEFAULT_CONFIG = Path("/etc/evo-sandbox-broker/config.json")
 _CONFIG_FIELDS = {
     "workspace_roots", "replay_database", "signing_key", "key_id",
     "image", "allowed_uids", "max_workers", "artifact_store_root",
-    "validator_public_key", "validator_key_id",
+    "validator_public_key", "validator_key_id", "workspace_tenants",
 }
 
 
@@ -116,6 +117,26 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
             raise BrokerDaemonConfigurationError("workspace root must be canonical directory path")
         resolved_roots[workspace_id] = resolved
 
+    raw_workspace_tenants = config["workspace_tenants"]
+    if (not isinstance(raw_workspace_tenants, dict)
+            or set(raw_workspace_tenants) != set(resolved_roots)):
+        raise BrokerDaemonConfigurationError(
+            "workspace_tenants must explicitly cover every registered workspace"
+        )
+    resolved_tenants = {}
+    for workspace_id, tenants in raw_workspace_tenants.items():
+        if not isinstance(tenants, list) or not tenants:
+            raise BrokerDaemonConfigurationError(
+                "each workspace must have a non-empty tenant allowlist"
+            )
+        if any(not isinstance(tenant, str)
+               or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", tenant)
+               for tenant in tenants):
+            raise BrokerDaemonConfigurationError("workspace tenant allowlist contains invalid identities")
+        if len(set(tenants)) != len(tenants):
+            raise BrokerDaemonConfigurationError("workspace tenant allowlist contains duplicate identities")
+        resolved_tenants[workspace_id] = tuple(tenants)
+
     replay_path = config["replay_database"]
     if not isinstance(replay_path, str) or not Path(replay_path).is_absolute():
         raise BrokerDaemonConfigurationError("replay_database must be an absolute path")
@@ -151,6 +172,7 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
     )
     service = SandboxBrokerService(
         workspace_roots=resolved_roots,
+        workspace_tenants=resolved_tenants,
         replay_store=BrokerReplayStore(Path(replay_path)),
         executor=executor,
         signing_key=signing_key,
