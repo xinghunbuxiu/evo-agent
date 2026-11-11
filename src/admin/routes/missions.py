@@ -128,8 +128,19 @@ def register_mission_routes(
         node_id = str(data.get("node_id") or "").strip()
         if not node_id:
             return error_response("必须指定 node_id", 400)
+        idempotency_key = str(request.headers.get("idempotency-key") or "").strip().lower()
+        try:
+            parsed_idempotency_key = uuid.UUID(idempotency_key)
+        except (ValueError, AttributeError):
+            return error_response("必须通过 Idempotency-Key 请求头提供 UUID 幂等键", 400)
+        if str(parsed_idempotency_key) != idempotency_key:
+            return error_response("Idempotency-Key 必须是规范 UUID 格式", 400)
 
-        task_id = uuid.uuid4().hex
+        task_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "evo-agent:mission-skill-replay:"
+            + ":".join((mission_run_id, skill_id, node_id, idempotency_key)),
+        ).hex
         action = {
             "action_type": "skill_replay",
             "status": "running",
@@ -137,6 +148,7 @@ def register_mission_routes(
             "node_id": node_id,
             "title": f"Skill Replay: {skill_id}",
             "skill_id": skill_id,
+            "idempotency_key": idempotency_key,
             "created_at": datetime.now().astimezone().isoformat(),
             "detail": "已通过 Mission API 授权，正在向 Broker 提交不可变 Skill 候选",
         }
@@ -167,6 +179,33 @@ def register_mission_routes(
             ):
                 return error_response("node_id 不属于该 Mission", 400)
             actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
+            prior_request = next((
+                item for item in actions
+                if isinstance(item, dict)
+                and item.get("action_type") == "skill_replay"
+                and item.get("idempotency_key") == idempotency_key
+            ), None)
+            if isinstance(prior_request, dict):
+                if (
+                    prior_request.get("skill_id") != skill_id
+                    or prior_request.get("node_id") != node_id
+                    or prior_request.get("task_id") != task_id
+                ):
+                    return error_response("该 Idempotency-Key 已用于不同的 Skill Replay 请求", 409)
+                if prior_request.get("status") == "completed":
+                    cached_operation = prior_request.get("operation_result")
+                    if not isinstance(cached_operation, dict):
+                        return error_response("该 Replay 已完成但响应快照缺失；拒绝再次执行", 409)
+                    return success_response(
+                        cached_operation,
+                        str(prior_request.get("completion_message") or "已返回同一幂等请求的 Replay 结果"),
+                    )
+                if prior_request.get("status") == "failed":
+                    return error_response(
+                        str(prior_request.get("error_message") or "该幂等请求此前已失败；请使用新的 Idempotency-Key 发起新尝试"),
+                        int(prior_request.get("error_status") or 409),
+                    )
+                return error_response("该幂等请求仍在执行或等待人工复核；拒绝重复执行", 409)
             if any(
                 isinstance(item, dict)
                 and item.get("action_type") == "skill_replay"
@@ -266,6 +305,8 @@ def register_mission_routes(
                     "replay_result": result,
                     "skill_replay_output": replay.get("skill_replay_output"),
                     "stage_receipt": operation.get("stage_receipt"),
+                    "operation_result": operation,
+                    "completion_message": completion_message,
                     "completed_at": datetime.now().astimezone().isoformat(),
                 })
                 latest["actions"] = latest_actions
@@ -293,6 +334,8 @@ def register_mission_routes(
                             "status": "failed",
                             "detail": error_message,
                             "error_type": "skill_replay_rejected_or_unavailable",
+                            "error_status": error_status,
+                            "error_message": error_message,
                             "completed_at": datetime.now().astimezone().isoformat(),
                         })
                         if isinstance(partial_evidence_ref, dict):

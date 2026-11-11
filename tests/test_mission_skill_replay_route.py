@@ -35,6 +35,7 @@ def _request(body=None, *, authenticated=True):
         return {"type": "http.request", "body": payload, "more_body": False}
 
     headers = [(b"cookie", b"session=valid")] if authenticated else []
+    headers.append((b"idempotency-key", b"11111111-1111-4111-8111-111111111111"))
     return Request({
         "type": "http",
         "method": "POST",
@@ -132,6 +133,29 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(actions[0]["evidence_id"], "evidence-a")
         self.assertEqual(actions[0]["experience_id"], "experience-a")
         self.assertTrue(actions[0]["execution_succeeded"])
+        self.assertEqual(actions[0]["idempotency_key"], "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(actions[0]["operation_result"], response["data"])
+
+    def test_same_idempotency_key_returns_cached_operation_without_second_broker_call(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
+        first = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        second = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        self.assertEqual(first, second)
+        self.assertEqual(len(runtime.calls), 1)
+        actions = load_mission_runs(self.workspace)["items"][0]["actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["status"], "completed")
 
     def test_cross_tenant_user_is_rejected_before_broker_call(self):
         runtime = _ReplayRuntime()
