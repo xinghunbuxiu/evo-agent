@@ -406,6 +406,30 @@ class SkillArtifactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillArtifactStoreError, "unavailable"):
             self.store.load_for_binding(other_skill)
 
+    def test_created_directory_entries_are_fsynced_parent_first(self):
+        tenant_dir = self.root / "tenant-one"
+        skill_dir = tenant_dir / self.skill.id
+        with patch("core.skill_artifact_store._fsync_directory") as fsync_directory:
+            path = self.store._artifact_path(
+                "tenant-one", self.skill.id, self.skill.version, create=True,
+            )
+        self.assertEqual(path.parent, skill_dir)
+        self.assertEqual(
+            [entry.args[0] for entry in fsync_directory.call_args_list],
+            [self.root, tenant_dir],
+        )
+
+    def test_directory_fsync_failure_fails_closed_before_artifact_publication(self):
+        with patch(
+            "core.skill_artifact_store._fsync_directory",
+            side_effect=SkillArtifactStoreError("artifact directory durability could not be confirmed"),
+        ):
+            with self.assertRaisesRegex(SkillArtifactStoreError, "directory durability"):
+                self._publish()
+        self.assertFalse(
+            (self.root / "tenant-one" / self.skill.id / "1.2.0.json").exists()
+        )
+
     def test_read_does_not_create_missing_artifact_directories(self):
         missing = {
             "schema_version": "mission.skill-replay-binding.v1",

@@ -60,6 +60,21 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist a directory entry after creating a tenant/Skill directory."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise SkillArtifactStoreError(
+            "artifact directory durability could not be confirmed"
+        ) from exc
+
+
 def _write_create_once(path: Path, payload: bytes, *, collision_message: str) -> None:
     """Publish complete bytes atomically without replacing an existing path.
 
@@ -257,6 +272,10 @@ class SkillArtifactStore:
                 raise SkillArtifactStoreError("artifact path contains a non-directory or symlink")
             if info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077:
                 raise SkillArtifactStoreError("artifact path directory permissions are unsafe")
+            # Persist the child entry in its parent before creating the next
+            # level (tenant first, then Skill directory). Re-fsync existing
+            # entries too, so a retry after an earlier fsync failure can recover.
+            _fsync_directory(directory.parent)
         suffix = ".candidate.json" if candidate else ".json"
         return skill_dir / f"{revision}{suffix}"
 
