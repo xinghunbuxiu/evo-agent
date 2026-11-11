@@ -147,6 +147,39 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(runtime.calls, [])
         self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
+    def test_interrupted_replay_requires_review_and_is_not_reexecuted(self):
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a",
+            "tenant_id": "tenant-a",
+            "goal": "test replay",
+            "plan": {"nodes": [{"id": "node-a"}]},
+            "actions": [{
+                "action_type": "skill_replay",
+                "status": "interrupted",
+                "recovery_status": "needs_review",
+                "recovery_reason": "admin_process_restarted_during_replay",
+                "task_id": "task-original",
+                "skill_id": "skill-a",
+                "node_id": "node-a",
+            }],
+        }]})
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 409)
+        self.assertIn("不得直接重跑", response["error"])
+        self.assertEqual(runtime.calls, [])
+        actions = load_mission_runs(self.workspace)["items"][0]["actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["task_id"], "task-original")
+        self.assertEqual(actions[0]["recovery_status"], "needs_review")
+
     def test_recipe_rejection_is_durably_recorded_without_success_evidence(self):
         runtime = _ReplayRuntime(error=ValueError("Recipe candidates cannot be replayed"))
         app = RouteApp()
