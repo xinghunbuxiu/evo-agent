@@ -22,16 +22,21 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 
-ARTIFACT_SCHEMA = "mission.skill-artifact.v1"
+ARTIFACT_SCHEMA = "mission.skill-artifact.v2"
 CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
-VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v2"
+VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v3"
 VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
 _ATTESTATION_FIELDS = {
-    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256", "tenant_id",
+    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256",
+    "workspace_id", "tenant_id", "mission_run_id", "node_id", "task_id",
+    "broker_request_id", "broker_attestation_sha256", "checks_sha256",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _TRUST_LEVELS = {"verified", "cloud"}
 _BINDING_FIELDS = {
     "schema_version", "skill_id", "skill_version", "content_sha256",
@@ -164,6 +169,10 @@ class SkillArtifactStore:
     def _verify_validation_attestation(
         self, attestation: Any, *, tenant_id: str, skill_id: str,
         version: str, digest: str, trust_level: str,
+        expected_workspace_id: str | None = None,
+        expected_mission_context: Mapping[str, Any] | None = None,
+        expected_broker_request_id: str | None = None,
+        expected_broker_attestation_sha256: str | None = None,
     ) -> None:
         if not isinstance(attestation, Mapping) or set(attestation) != _ATTESTATION_FIELDS:
             raise SkillArtifactStoreError("validation attestation has unsupported or missing fields")
@@ -174,16 +183,42 @@ class SkillArtifactStore:
         for field in ("validation_id", "validator_id"):
             _identity(attestation.get(field), field, _ID_RE)
         _identity(attestation.get("policy_id"), "policy_id", _ID_RE)
-        _identity(attestation.get("policy_sha256"), "policy_sha256", re.compile(r"^[0-9a-f]{64}$"))
+        _identity(attestation.get("policy_sha256"), "policy_sha256", _DIGEST_RE)
+        workspace_id = _identity(attestation.get("workspace_id"), "workspace_id", _WORKSPACE_ID_RE)
+        mission_context = {
+            "tenant_id": _identity(attestation.get("tenant_id"), "tenant_id", _ID_RE),
+            "mission_run_id": _identity(attestation.get("mission_run_id"), "mission_run_id", _ID_RE),
+            "node_id": _identity(attestation.get("node_id"), "node_id", _ID_RE),
+            "task_id": _identity(attestation.get("task_id"), "task_id", _ID_RE),
+        }
+        broker_request_id = _identity(attestation.get("broker_request_id"), "broker_request_id", _UUID_RE)
+        broker_attestation_sha256 = _identity(
+            attestation.get("broker_attestation_sha256"), "broker_attestation_sha256", _DIGEST_RE,
+        )
+        _identity(attestation.get("checks_sha256"), "checks_sha256", _DIGEST_RE)
         expected = {
-            "tenant_id": tenant_id,
-            "skill_id": skill_id,
-            "skill_version": version,
-            "content_sha256": digest,
-            "trust_level": trust_level,
+            "tenant_id": tenant_id, "skill_id": skill_id, "skill_version": version,
+            "content_sha256": digest, "trust_level": trust_level,
         }
         if any(attestation.get(field) != value for field, value in expected.items()):
             raise SkillArtifactStoreError("validation attestation does not bind this exact Skill artifact")
+        if expected_workspace_id is not None and workspace_id != expected_workspace_id:
+            raise SkillArtifactStoreError("validation attestation does not bind this workspace")
+        if expected_mission_context is not None:
+            if not isinstance(expected_mission_context, Mapping) or set(expected_mission_context) != {
+                "tenant_id", "mission_run_id", "node_id", "task_id",
+            }:
+                raise SkillArtifactStoreError("expected Mission context is invalid")
+            normalized_context = {
+                key: _identity(expected_mission_context[key], f"mission_context.{key}", _ID_RE)
+                for key in ("tenant_id", "mission_run_id", "node_id", "task_id")
+            }
+            if mission_context != normalized_context:
+                raise SkillArtifactStoreError("validation attestation does not bind this Mission execution")
+        if expected_broker_request_id is not None and broker_request_id != expected_broker_request_id:
+            raise SkillArtifactStoreError("validation attestation does not bind this Broker request")
+        if expected_broker_attestation_sha256 is not None and broker_attestation_sha256 != expected_broker_attestation_sha256:
+            raise SkillArtifactStoreError("validation attestation does not bind this signed Broker response")
         signature = attestation.get("signature")
         if not isinstance(signature, Mapping) or set(signature) != {"algorithm", "key_id", "value"}:
             raise SkillArtifactStoreError("validation attestation signature metadata is invalid")
@@ -225,8 +260,12 @@ class SkillArtifactStore:
         suffix = ".candidate.json" if candidate else ".json"
         return skill_dir / f"{revision}{suffix}"
 
-    def publish(self, *, tenant_id: str, skill: Any, validation_attestation: Mapping[str, Any]) -> dict[str, str]:
-        """Atomically publish a verified Skill once; existing versions never mutate."""
+    def publish(
+        self, *, tenant_id: str, skill: Any, validation_attestation: Mapping[str, Any],
+        workspace_id: str, mission_context: Mapping[str, Any],
+        broker_request_id: str, broker_attestation_sha256: str,
+    ) -> dict[str, str]:
+        """Atomically publish a verified Skill once, bound to its exact replay evidence."""
         skill_id = _identity(getattr(skill, "id", None), "skill_id", _ID_RE)
         version = _identity(getattr(skill, "version", None), "skill_version", _VERSION_RE)
         code = getattr(skill, "code", None)
@@ -239,12 +278,28 @@ class SkillArtifactStore:
         trust = getattr(getattr(skill, "trust_level", None), "value", getattr(skill, "trust_level", None))
         if trust not in _TRUST_LEVELS:
             raise SkillArtifactStoreError("only verified or cloud Skills may be published")
-
-        digest = hashlib.sha256(code_bytes).hexdigest()
         normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        normalized_workspace = _identity(workspace_id, "workspace_id", _WORKSPACE_ID_RE)
+        if not isinstance(mission_context, Mapping) or set(mission_context) != {
+            "tenant_id", "mission_run_id", "node_id", "task_id",
+        }:
+            raise SkillArtifactStoreError("Mission context has unsupported or missing fields")
+        normalized_context = {
+            key: _identity(mission_context[key], f"mission_context.{key}", _ID_RE)
+            for key in ("tenant_id", "mission_run_id", "node_id", "task_id")
+        }
+        if normalized_context["tenant_id"] != normalized_tenant:
+            raise SkillArtifactStoreError("Mission context tenant does not match Skill artifact tenant")
+        normalized_request_id = _identity(broker_request_id, "broker_request_id", _UUID_RE)
+        normalized_broker_digest = _identity(broker_attestation_sha256, "broker_attestation_sha256", _DIGEST_RE)
+        digest = hashlib.sha256(code_bytes).hexdigest()
         self._verify_validation_attestation(
             validation_attestation, tenant_id=normalized_tenant,
             skill_id=skill_id, version=version, digest=digest, trust_level=trust,
+            expected_workspace_id=normalized_workspace,
+            expected_mission_context=normalized_context,
+            expected_broker_request_id=normalized_request_id,
+            expected_broker_attestation_sha256=normalized_broker_digest,
         )
         artifact = {
             "schema_version": ARTIFACT_SCHEMA,
@@ -257,7 +312,7 @@ class SkillArtifactStore:
             "validation_attestation": dict(validation_attestation),
         }
         payload = _canonical_json(artifact)
-        path = self._artifact_path(tenant_id, skill_id, version, create=True)
+        path = self._artifact_path(normalized_tenant, skill_id, version, create=True)
         _write_create_once(
             path, payload,
             collision_message="Skill artifact version already exists; publish a new version",

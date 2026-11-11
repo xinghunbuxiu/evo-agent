@@ -18,7 +18,7 @@ from typing import Mapping
 
 from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
-from core.sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID
+from core.sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID, broker_response_sha256
 from core.sandbox_broker_transport import (
     promote_skill_candidate_via_broker,
     stage_skill_candidate_via_broker,
@@ -256,6 +256,13 @@ class SkillReplayRuntime:
                 verified_evidence = self.evidence_store.load_verified(
                     tenant_id=tenant_id, evidence_id=evidence_id,
                 )
+                broker_attestation = verified_evidence.get("broker_attestation")
+                if not isinstance(broker_attestation, dict):
+                    raise ValueError("verified Broker response envelope is missing")
+                broker_request_id = broker_attestation.get("request_id", evidence_id)
+                if broker_request_id != evidence_id:
+                    raise ValueError("Broker request identity does not match persisted evidence ID")
+                broker_attestation_sha256 = broker_response_sha256(broker_attestation)
                 validation_request_id = str(uuid.uuid4())
                 validation_request = {
                     "schema_version": VALIDATION_REQUEST_SCHEMA,
@@ -264,7 +271,7 @@ class SkillReplayRuntime:
                     "mission_context": context,
                     "skill_binding": binding,
                     "trust_level": _VALIDATED_TRUST_LEVEL,
-                    "broker_attestation": verified_evidence["broker_attestation"],
+                    "broker_attestation": broker_attestation,
                 }
                 validation_attestation = request_skill_validation(
                     self.validator_socket_path,
@@ -272,7 +279,13 @@ class SkillReplayRuntime:
                     validator_public_key=self.validator_public_key,
                     expected_key_id=self.validator_key_id,
                     expected_identity={
+                        "workspace_id": self.workspace_id,
                         "tenant_id": tenant_id,
+                        "mission_run_id": mission_run_id,
+                        "node_id": node_id,
+                        "task_id": task_id,
+                        "broker_request_id": broker_request_id,
+                        "broker_attestation_sha256": broker_attestation_sha256,
                         "skill_id": skill.id,
                         "skill_version": skill.version,
                         "content_sha256": binding["content_sha256"],
@@ -284,6 +297,9 @@ class SkillReplayRuntime:
                     "validation_id": validation_attestation["validation_id"],
                     "validator_id": validation_attestation["validator_id"],
                     "policy_id": validation_attestation["policy_id"],
+                    "broker_request_id": validation_attestation.get("broker_request_id", broker_request_id),
+                    "broker_attestation_sha256": validation_attestation.get("broker_attestation_sha256", broker_attestation_sha256),
+                    "checks_sha256": validation_attestation.get("checks_sha256"),
                 }
             except Exception as exc:
                 validation = {"status": "rejected", "error_type": type(exc).__name__}
@@ -305,6 +321,7 @@ class SkillReplayRuntime:
                     promotion = {
                         "status": "published",
                         "artifact": receipt["artifact"],
+                        "validation_provenance": receipt.get("validation_provenance"),
                     }
                 except Exception as exc:
                     promotion = {"status": "failed", "error_type": type(exc).__name__}

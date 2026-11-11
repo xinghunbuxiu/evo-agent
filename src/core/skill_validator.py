@@ -17,7 +17,9 @@ from typing import Any, Mapping, Sequence
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from .sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID, verify_broker_response
+from .sandbox_broker_protocol import (
+    SKILL_REPLAY_PROFILE_ID, broker_response_sha256, verify_broker_response,
+)
 from .skill_artifact_store import VALIDATION_ATTESTATION_SCHEMA, VALIDATION_SIGNATURE_ALGORITHM
 
 VALIDATION_REQUEST_SCHEMA = "mission.skill-validation-request.v1"
@@ -27,10 +29,13 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
 _WORKSPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _CONTEXT_FIELDS = {"tenant_id", "mission_run_id", "node_id", "task_id"}
 _BINDING_FIELDS = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
 _ATTESTATION_FIELDS = {
-    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256", "tenant_id",
+    "schema_version", "validation_id", "validator_id", "policy_id", "policy_sha256",
+    "workspace_id", "tenant_id", "mission_run_id", "node_id", "task_id",
+    "broker_request_id", "broker_attestation_sha256", "checks_sha256",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
 _ALLOWED_TRUST_LEVELS = {"verified", "cloud"}
@@ -264,7 +269,7 @@ class SkillValidatorService:
         broker_attestation = request.get("broker_attestation")
         if not isinstance(broker_attestation, dict):
             raise SkillValidatorError("signed Broker replay attestation is required")
-        broker_request_id = broker_attestation.get("request_id")
+        broker_request_id = _identity(broker_attestation.get("request_id"), "broker_request_id", _UUID_RE)
         try:
             verified_result = verify_broker_response(
                 broker_attestation,
@@ -289,13 +294,22 @@ class SkillValidatorService:
             raise SkillValidatorError("Skill output failed the independent acceptance policy")
 
         policy_sha256 = hashlib.sha256(_canonical_json(policy)).hexdigest()
+        broker_digest = broker_response_sha256(broker_attestation)
+        checks_sha256 = hashlib.sha256(_canonical_json({"checks": results})).hexdigest()
         statement = {
             "schema_version": VALIDATION_ATTESTATION_SCHEMA,
             "validation_id": str(uuid.uuid4()),
             "validator_id": self.validator_id,
             "policy_id": policy["policy_id"],
             "policy_sha256": policy_sha256,
+            "workspace_id": workspace_id,
             "tenant_id": context["tenant_id"],
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": broker_request_id,
+            "broker_attestation_sha256": broker_digest,
+            "checks_sha256": checks_sha256,
             "skill_id": skill_id,
             "skill_version": version,
             "content_sha256": digest,
@@ -324,7 +338,7 @@ def verify_validation_response(
     response: Any, *, public_key: bytes, expected_key_id: str,
     expected_request_id: str, expected_identity: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Verify the Validator's signed statement and exact artifact identity."""
+    """Verify the Validator statement, exact replay lineage and signed check digest."""
     if not isinstance(response, dict) or set(response) != {
         "schema_version", "request_id", "attestation", "policy_id", "checks",
     }:
@@ -339,19 +353,35 @@ def verify_validation_response(
     for field in ("validation_id", "validator_id"):
         _identity(attestation.get(field), field)
     _identity(attestation.get("policy_id"), "policy_id")
-    if not isinstance(attestation.get("policy_sha256"), str) or not _DIGEST_RE.fullmatch(attestation["policy_sha256"]):
-        raise SkillValidatorError("Validator policy digest is invalid")
+    _identity(attestation.get("workspace_id"), "workspace_id", _WORKSPACE_RE)
+    _identity(attestation.get("policy_sha256"), "policy_sha256", _DIGEST_RE)
+    _identity(attestation.get("broker_request_id"), "broker_request_id", _UUID_RE)
+    _identity(attestation.get("broker_attestation_sha256"), "broker_attestation_sha256", _DIGEST_RE)
+    _identity(attestation.get("checks_sha256"), "checks_sha256", _DIGEST_RE)
+    for field in ("tenant_id", "mission_run_id", "node_id", "task_id"):
+        _identity(attestation.get(field), field)
     if response.get("policy_id") != attestation.get("policy_id"):
         raise SkillValidatorError("Validator response policy ID does not match its signed attestation")
     checks = response.get("checks")
-    if not isinstance(checks, list) or not checks or any(
+    if not isinstance(checks, list) or not checks or len(checks) > 64 or any(
         not isinstance(item, dict) or set(item) != {"check_index", "type", "passed"}
-        or item.get("passed") is not True for item in checks
+        or item.get("check_index") != index
+        or item.get("type") not in _ALLOWED_CHECKS
+        or item.get("passed") is not True
+        for index, item in enumerate(checks)
     ):
         raise SkillValidatorError("Validator response contains failed or malformed policy checks")
-    for field in ("tenant_id", "skill_id", "skill_version", "content_sha256", "trust_level"):
+    checks_sha256 = hashlib.sha256(_canonical_json({"checks": checks})).hexdigest()
+    if checks_sha256 != attestation["checks_sha256"]:
+        raise SkillValidatorError("Validator check results do not match the signed attestation")
+    expected_fields = (
+        "workspace_id", "tenant_id", "mission_run_id", "node_id", "task_id",
+        "broker_request_id", "broker_attestation_sha256",
+        "skill_id", "skill_version", "content_sha256", "trust_level",
+    )
+    for field in expected_fields:
         if attestation.get(field) != expected_identity.get(field):
-            raise SkillValidatorError("Validator attestation does not bind the expected artifact")
+            raise SkillValidatorError("Validator attestation does not bind the expected replay and artifact")
     signature = attestation.get("signature")
     if not isinstance(signature, dict) or set(signature) != {"algorithm", "key_id", "value"}:
         raise SkillValidatorError("Validator signature metadata is invalid")

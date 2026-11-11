@@ -40,6 +40,7 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
 )
+from .skill_artifact_store import ARTIFACT_SCHEMA
 from .sandbox_runner import RunnerProcessOutput
 
 
@@ -440,6 +441,15 @@ class SandboxBrokerService:
             raise BrokerRequestRejected("Skill candidate promotion digest is invalid")
         if not isinstance(trust_level, str) or trust_level not in {"verified", "cloud"}:
             raise BrokerRequestRejected("Skill candidate promotion trust level is invalid")
+        validation_attestation = request.get("validation_attestation")
+        if not isinstance(validation_attestation, Mapping):
+            raise BrokerRequestRejected("independent Validator attestation is missing")
+        broker_request_id = validation_attestation.get("broker_request_id")
+        broker_attestation_sha256 = validation_attestation.get("broker_attestation_sha256")
+        if not isinstance(broker_request_id, str) or not _UUID_RE.fullmatch(broker_request_id):
+            raise BrokerRequestRejected("Validator attestation Broker request ID is invalid")
+        if not isinstance(broker_attestation_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", broker_attestation_sha256):
+            raise BrokerRequestRejected("Validator attestation Broker response digest is invalid")
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
 
@@ -471,17 +481,32 @@ class SandboxBrokerService:
             identity = self.skill_artifact_store.publish(
                 tenant_id=context["tenant_id"],
                 skill=promoted,
-                validation_attestation=request.get("validation_attestation"),
+                validation_attestation=validation_attestation,
+                workspace_id=workspace_id,
+                mission_context=context,
+                broker_request_id=broker_request_id,
+                broker_attestation_sha256=broker_attestation_sha256,
             )
         except Exception as exc:
             raise BrokerRequestRejected("independent Validator attestation was rejected") from exc
 
+        validation_provenance = {
+            "schema_version": "mission.skill-validation-provenance.v1",
+            "validation_id": validation_attestation["validation_id"],
+            "validator_id": validation_attestation["validator_id"],
+            "policy_id": validation_attestation["policy_id"],
+            "policy_sha256": validation_attestation["policy_sha256"],
+            "checks_sha256": validation_attestation["checks_sha256"],
+            "broker_request_id": broker_request_id,
+            "broker_attestation_sha256": broker_attestation_sha256,
+        }
         signed_payload = {
             "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
             "request_id": request_id,
             "workspace_id": workspace_id,
             "mission_context": context,
-            "artifact": {"schema_version": "mission.skill-artifact.v1", **identity},
+            "artifact": {"schema_version": ARTIFACT_SCHEMA, **identity},
+            "validation_provenance": validation_provenance,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
         import base64

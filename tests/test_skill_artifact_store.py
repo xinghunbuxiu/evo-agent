@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from pathlib import Path
@@ -47,16 +48,27 @@ class SkillArtifactStoreTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _attestation(self, skill=None, *, tenant_id="tenant-one"):
+    def _attestation(
+        self, skill=None, *, tenant_id="tenant-one", mission_context=None,
+        workspace_id="workspace-one", broker_request_id="00000000-0000-4000-8000-000000000001",
+    ):
         candidate = skill or self.skill
         import hashlib
+        context = dict(mission_context or self.context)
         payload = {
             "schema_version": VALIDATION_ATTESTATION_SCHEMA,
             "validation_id": "validation-001",
             "validator_id": "independent-validator",
             "policy_id": "test-policy-v1",
             "policy_sha256": "a" * 64,
+            "workspace_id": workspace_id,
             "tenant_id": tenant_id,
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": broker_request_id,
+            "broker_attestation_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
             "skill_id": candidate.id,
             "skill_version": candidate.version,
             "content_sha256": hashlib.sha256(candidate.code.encode("utf-8")).hexdigest(),
@@ -75,8 +87,32 @@ class SkillArtifactStoreTests(unittest.TestCase):
             },
         }
 
+    def _publish(
+        self, *, tenant_id="tenant-one", skill=None, validation_attestation=None,
+        workspace_id="workspace-one", mission_context=None,
+        broker_request_id=None, broker_attestation_sha256=None,
+    ):
+        candidate = skill or self.skill
+        attestation = (
+            self._attestation(candidate, tenant_id=tenant_id)
+            if validation_attestation is None else validation_attestation
+        )
+        return self.store.publish(
+            tenant_id=tenant_id,
+            skill=candidate,
+            validation_attestation=attestation,
+            workspace_id=workspace_id,
+            mission_context=dict(mission_context or self.context),
+            broker_request_id=broker_request_id or attestation.get(
+                "broker_request_id", "00000000-0000-4000-8000-000000000001",
+            ),
+            broker_attestation_sha256=broker_attestation_sha256 or attestation.get(
+                "broker_attestation_sha256", "b" * 64,
+            ),
+        )
+
     def _publish_binding(self):
-        identity = self.store.publish(
+        identity = self._publish(
             tenant_id="tenant-one", skill=self.skill,
             validation_attestation=self._attestation(),
         )
@@ -125,7 +161,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         self.assertNotIn("validation_attestation", json.loads(candidate_path.read_text(encoding="utf-8")))
 
         with self.assertRaisesRegex(SkillArtifactStoreError, "only verified or cloud"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=candidate,
                 validation_attestation=self._attestation(candidate),
             )
@@ -161,6 +197,17 @@ class SkillArtifactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillArtifactStoreError, "identity"):
             self.store.load_for_binding(changed)
 
+    def test_validator_attestation_cannot_be_replayed_for_another_mission(self):
+        old_context = {**self.context, "mission_run_id": "mission-old"}
+        old_attestation = self._attestation(mission_context=old_context)
+        with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind this Mission execution"):
+            self._publish(validation_attestation=old_attestation, mission_context=self.context)
+
+    def test_validator_attestation_must_bind_exact_broker_response(self):
+        attestation = self._attestation()
+        with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind this signed Broker response"):
+            self._publish(validation_attestation=attestation, broker_attestation_sha256="d" * 64)
+
     def test_rejects_draft_and_empty_code(self):
         for trust, code in (("draft", self.skill.code), ("verified", "  ")):
             candidate = SimpleNamespace(
@@ -168,7 +215,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
                 code=code, trust_level=trust,
             )
             with self.subTest(trust=trust, code=code), self.assertRaises(SkillArtifactStoreError):
-                self.store.publish(
+                self._publish(
                     tenant_id="tenant-one", skill=candidate,
                     validation_attestation=self._attestation(candidate),
                 )
@@ -200,7 +247,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
 
         def publish():
             try:
-                outcome.append(self.store.publish(
+                outcome.append(self._publish(
                     tenant_id="tenant-one",
                     skill=self.skill,
                     validation_attestation=self._attestation(),
@@ -229,7 +276,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         def publish_same_version(_index):
             barrier.wait(timeout=5)
             try:
-                return self.store.publish(
+                return self._publish(
                     tenant_id="tenant-one",
                     skill=self.skill,
                     validation_attestation=self._attestation(),
@@ -265,7 +312,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
             code="def run():\n    return False\n", trust_level="verified",
         )
         with self.assertRaisesRegex(SkillArtifactStoreError, "already exists"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=changed,
                 validation_attestation=self._attestation(changed),
             )
@@ -274,21 +321,21 @@ class SkillArtifactStoreTests(unittest.TestCase):
         forged = self._attestation()
         forged["signature"] = dict(forged["signature"], value=base64.b64encode(b"invalid").decode("ascii"))
         with self.assertRaisesRegex(SkillArtifactStoreError, "signature verification failed"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=self.skill,
                 validation_attestation=forged,
             )
         wrong_skill = self._attestation()
         wrong_skill["skill_id"] = "skill_other"
         with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=self.skill,
                 validation_attestation=wrong_skill,
             )
         elevated = self._attestation()
         elevated["trust_level"] = "cloud"
         with self.assertRaisesRegex(SkillArtifactStoreError, "does not bind"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=self.skill,
                 validation_attestation=elevated,
             )
@@ -344,7 +391,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
             trust_level="verified",
         )
         with self.assertRaisesRegex(SkillArtifactStoreError, "valid UTF-8"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one",
                 skill=candidate,
                 validation_attestation={},
@@ -380,7 +427,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         outside.mkdir(mode=0o700)
         (self.root / "tenant-one").symlink_to(outside, target_is_directory=True)
         with self.assertRaisesRegex(SkillArtifactStoreError, "symlink"):
-            self.store.publish(
+            self._publish(
                 tenant_id="tenant-one", skill=self.skill,
                 validation_attestation=self._attestation(),
             )

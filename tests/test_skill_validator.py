@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from core.execution_results import EXECUTION_RESULT_SCHEMA
-from core.sandbox_broker_protocol import BROKER_RESPONSE_SCHEMA, SKILL_REPLAY_OUTPUT_SCHEMA, SKILL_REPLAY_PROFILE_ID
+from core.sandbox_broker_protocol import (
+    BROKER_RESPONSE_SCHEMA, SKILL_REPLAY_OUTPUT_SCHEMA, SKILL_REPLAY_PROFILE_ID,
+    broker_response_sha256,
+)
 from core.skill_artifact_store import SkillArtifactStore, VALIDATION_ATTESTATION_SCHEMA
 from core.skill_validator import (
     VALIDATION_REQUEST_SCHEMA, SkillValidatorError, SkillValidatorService,
@@ -112,6 +115,21 @@ class SkillValidatorTests(unittest.TestCase):
             },
         }
 
+    def _expected_identity(self):
+        return {
+            "workspace_id": self.workspace_id,
+            "tenant_id": self.context["tenant_id"],
+            "mission_run_id": self.context["mission_run_id"],
+            "node_id": self.context["node_id"],
+            "task_id": self.context["task_id"],
+            "broker_request_id": self.broker_attestation["request_id"],
+            "broker_attestation_sha256": broker_response_sha256(self.broker_attestation),
+            "skill_id": self.binding["skill_id"],
+            "skill_version": self.binding["skill_version"],
+            "content_sha256": self.binding["content_sha256"],
+            "trust_level": "verified",
+        }
+
     def test_issues_attestation_only_after_broker_signature_and_policy_pass(self):
         response = self.service.validate(self.request)
         self.assertEqual(response["schema_version"], "mission.skill-validation-response.v1")
@@ -120,11 +138,7 @@ class SkillValidatorTests(unittest.TestCase):
         attestation = verify_validation_response(
             response, public_key=self.validator_key.public_key().public_bytes_raw(),
             expected_key_id="validator-key-1", expected_request_id=self.request["request_id"],
-            expected_identity={
-                "tenant_id": "tenant-a", "skill_id": "skill-demo",
-                "skill_version": "1.0.0", "content_sha256": self.binding["content_sha256"],
-                "trust_level": "verified",
-            },
+            expected_identity=self._expected_identity(),
         )
         self.assertEqual(attestation["schema_version"], VALIDATION_ATTESTATION_SCHEMA)
         self.assertTrue(attestation["passed"])
@@ -143,8 +157,27 @@ class SkillValidatorTests(unittest.TestCase):
                 "trust_level": "verified",
             })(),
             validation_attestation=attestation,
+            workspace_id=self.workspace_id,
+            mission_context=self.context,
+            broker_request_id=self.broker_attestation["request_id"],
+            broker_attestation_sha256=broker_response_sha256(self.broker_attestation),
         )
         self.assertEqual(identity["trust_level"], "verified")
+
+    def test_validator_attestation_binds_exact_broker_envelope_and_check_results(self):
+        response = self.service.validate(self.request)
+        attestation = response["attestation"]
+        self.assertEqual(attestation["broker_request_id"], self.broker_attestation["request_id"])
+        self.assertEqual(attestation["broker_attestation_sha256"], broker_response_sha256(self.broker_attestation))
+        tampered = dict(response)
+        tampered["checks"] = [dict(item) for item in response["checks"]]
+        tampered["checks"][0]["type"] = "json_value_type"
+        with self.assertRaisesRegex(SkillValidatorError, "check results"):
+            verify_validation_response(
+                tampered, public_key=self.validator_key.public_key().public_bytes_raw(),
+                expected_key_id="validator-key-1", expected_request_id=self.request["request_id"],
+                expected_identity=self._expected_identity(),
+            )
 
     def test_unix_socket_transport_returns_a_client_verified_attestation(self):
         socket_path = self.root / "validator.sock"
@@ -170,12 +203,7 @@ class SkillValidatorTests(unittest.TestCase):
                 request=self.request,
                 validator_public_key=self.validator_key.public_key().public_bytes_raw(),
                 expected_key_id="validator-key-1",
-                expected_identity={
-                    "tenant_id": "tenant-a", "skill_id": "skill-demo",
-                    "skill_version": "1.0.0",
-                    "content_sha256": self.binding["content_sha256"],
-                    "trust_level": "verified",
-                },
+                expected_identity=self._expected_identity(),
             )
             self.assertEqual(attestation["validator_id"], "validator-independent")
             self.assertTrue(attestation["passed"])

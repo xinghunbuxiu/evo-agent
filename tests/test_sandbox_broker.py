@@ -203,7 +203,14 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "validator_id": "independent-validator",
             "policy_id": "test-policy-v1",
             "policy_sha256": "a" * 64,
+            "workspace_id": "project-test",
             "tenant_id": "tenant-test",
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": "00000000-0000-4000-8000-000000000001",
+            "broker_attestation_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
             "skill_id": "skill-promote",
             "skill_version": "1.0.0",
             "content_sha256": staged["content_sha256"],
@@ -233,11 +240,14 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         }
         response = service.promote_skill_candidate(request)
         self.assertEqual(response["artifact"]["trust_level"], "verified")
+        self.assertEqual(response["validation_provenance"]["broker_request_id"], "00000000-0000-4000-8000-000000000001")
+        self.assertEqual(response["validation_provenance"]["checks_sha256"], "c" * 64)
         self.key.public_key().verify(
             base64.b64decode(response["signature"]["value"]),
             json.dumps({
                 key: response[key] for key in (
-                    "schema_version", "request_id", "workspace_id", "mission_context", "artifact",
+                    "schema_version", "request_id", "workspace_id", "mission_context",
+                    "artifact", "validation_provenance",
                 )
             }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
         )
@@ -289,7 +299,14 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "validator_id": "independent-validator",
             "policy_id": "test-policy-v1",
             "policy_sha256": "a" * 64,
+            "workspace_id": "project-test",
             "tenant_id": "tenant-test",
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": "00000000-0000-4000-8000-000000000001",
+            "broker_attestation_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
             "skill_id": "skill-promote",
             "skill_version": "1.0.0",
             "content_sha256": staged["content_sha256"],
@@ -354,13 +371,25 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             trust_level=trust_level,
         )
         digest = hashlib.sha256(skill.code.encode("utf-8")).hexdigest()
+        context = {
+            "tenant_id": "tenant-test", "mission_run_id": "mission-test",
+            "node_id": "node-test", "task_id": "task-test",
+        }
+        broker_request_id = "00000000-0000-4000-8000-000000000001"
         statement = {
             "schema_version": VALIDATION_ATTESTATION_SCHEMA,
             "validation_id": "validation-skill-demo",
             "validator_id": "independent-validator",
             "policy_id": "test-policy-v1",
             "policy_sha256": "a" * 64,
+            "workspace_id": "project-test",
             "tenant_id": "tenant-test",
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": "00000000-0000-4000-8000-000000000001",
+            "broker_attestation_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": digest,
@@ -381,19 +410,18 @@ class SandboxBrokerServiceTests(unittest.TestCase):
                     "value": base64.b64encode(signature).decode("ascii"),
                 },
             }
-            store.publish(tenant_id="tenant-test", skill=skill, validation_attestation=attestation)
+            store.publish(
+                tenant_id="tenant-test", skill=skill, validation_attestation=attestation,
+                workspace_id="project-test", mission_context=context,
+                broker_request_id=broker_request_id, broker_attestation_sha256="b" * 64,
+            )
         binding = {
             "schema_version": "mission.skill-replay-binding.v1",
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": digest,
             "trust_level": trust_level,
-            "mission_context": {
-                "tenant_id": "tenant-test",
-                "mission_run_id": "mission-test",
-                "node_id": "node-test",
-                "task_id": "task-test",
-            },
+            "mission_context": context,
         }
         service = SandboxBrokerService(
             workspace_roots={"project-test": self.root},

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import re
 import uuid
@@ -34,7 +35,8 @@ SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA = "mission.skill-candidate-stage-request.v1
 SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA = "mission.skill-candidate-stage-response.v1"
 SKILL_CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
 SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA = "mission.skill-candidate-promotion-request.v1"
-SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA = "mission.skill-candidate-promotion-response.v1"
+SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA = "mission.skill-candidate-promotion-response.v2"
+SKILL_VALIDATION_PROVENANCE_SCHEMA = "mission.skill-validation-provenance.v1"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -58,8 +60,15 @@ def _normalize_mission_context(value: Any) -> dict[str, str]:
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
     ).encode("utf-8")
+
+
+def broker_response_sha256(response: Any) -> str:
+    """Digest the exact canonical signed Broker envelope, including its signature."""
+    if not isinstance(response, dict):
+        raise ValueError("Broker response must be an object")
+    return hashlib.sha256(_canonical_json(response)).hexdigest()
 
 
 def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | None = None) -> dict[str, Any] | None:
@@ -332,6 +341,8 @@ __all__ = [
     "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
     "SKILL_REPLAY_OUTPUT_SCHEMA",
     "SKILL_REPLAY_PROFILE_ID",
+    "SKILL_VALIDATION_PROVENANCE_SCHEMA",
+    "broker_response_sha256",
     "BROKER_SIGNATURE_ALGORITHM",
     "build_broker_request",
     "verify_broker_response",

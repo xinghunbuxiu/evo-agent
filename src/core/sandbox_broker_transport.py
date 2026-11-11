@@ -31,6 +31,7 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA,
 )
 from .execution_profiles import ExecutionProfileSpec
 
@@ -371,16 +372,26 @@ def promote_skill_candidate_via_broker(
     response = request_broker(socket_path, request, timeout_seconds=timeout_seconds)
     if not isinstance(response, dict) or set(response) != {
         "schema_version", "request_id", "workspace_id", "mission_context",
-        "artifact", "signature",
+        "artifact", "validation_provenance", "signature",
     }:
         raise BrokerTransportError("Broker Skill promotion response is malformed or rejected")
     expected_artifact = {
-        "schema_version": "mission.skill-artifact.v1",
+        "schema_version": "mission.skill-artifact.v2",
         "tenant_id": context["tenant_id"],
         "skill_id": skill_id,
         "skill_version": skill_version,
         "content_sha256": content_sha256,
         "trust_level": trust_level,
+    }
+    validation_provenance = {
+        "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
+        "validation_id": validation_attestation.get("validation_id"),
+        "validator_id": validation_attestation.get("validator_id"),
+        "policy_id": validation_attestation.get("policy_id"),
+        "policy_sha256": validation_attestation.get("policy_sha256"),
+        "checks_sha256": validation_attestation.get("checks_sha256"),
+        "broker_request_id": validation_attestation.get("broker_request_id"),
+        "broker_attestation_sha256": validation_attestation.get("broker_attestation_sha256"),
     }
     if (
         response.get("schema_version") != SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA
@@ -388,6 +399,7 @@ def promote_skill_candidate_via_broker(
         or response.get("workspace_id") != workspace_id
         or response.get("mission_context") != context
         or response.get("artifact") != expected_artifact
+        or response.get("validation_provenance") != validation_provenance
     ):
         raise BrokerTransportError("Broker Skill promotion receipt does not match the requested artifact")
     signature = response.get("signature")
@@ -401,6 +413,7 @@ def promote_skill_candidate_via_broker(
         "workspace_id": response["workspace_id"],
         "mission_context": context,
         "artifact": expected_artifact,
+        "validation_provenance": validation_provenance,
     }
     try:
         Ed25519PublicKey.from_public_bytes(public_key).verify(
