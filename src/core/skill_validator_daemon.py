@@ -15,7 +15,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from .skill_validator import SkillValidatorError, SkillValidatorService
+from .skill_validator import SkillValidatorError, SkillValidatorRequestStore, SkillValidatorService
 from .skill_validator_transport import serve_validator_listener
 
 LOGGER = logging.getLogger("evo.skill_validator")
@@ -23,7 +23,7 @@ DEFAULT_CONFIG = Path("/etc/evo-skill-validator/config.json")
 _CONFIG_FIELDS = {
     "socket_path", "policy_file", "signing_key", "key_id", "validator_id",
     "broker_public_key", "broker_key_id", "allowed_uids", "workspace_ids",
-    "max_workers",
+    "replay_store_path", "max_workers",
 }
 
 
@@ -96,6 +96,7 @@ def build_service(config: dict) -> tuple[SkillValidatorService, tuple[int, ...],
             signing_key=private_key, broker_public_key=broker_public_key,
             broker_key_id=config["broker_key_id"], workspace_ids=workspace_ids,
             policies=policies.get("policies"),
+            request_store=SkillValidatorRequestStore(config["replay_store_path"]),
         )
     except (SkillValidatorError, TypeError) as exc:
         raise SkillValidatorDaemonConfigurationError("Validator identity or policy configuration is invalid") from exc

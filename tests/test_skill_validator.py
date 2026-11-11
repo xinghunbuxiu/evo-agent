@@ -22,8 +22,8 @@ from core.sandbox_broker_protocol import (
 )
 from core.skill_artifact_store import SkillArtifactStore, VALIDATION_ATTESTATION_SCHEMA
 from core.skill_validator import (
-    VALIDATION_REQUEST_SCHEMA, SkillValidatorError, SkillValidatorService,
-    verify_validation_response,
+    VALIDATION_REQUEST_SCHEMA, SkillValidatorError, SkillValidatorRequestStore,
+    SkillValidatorService, verify_validation_response,
 )
 from core.skill_validator_transport import request_skill_validation, serve_validator_listener
 
@@ -60,12 +60,15 @@ class SkillValidatorTests(unittest.TestCase):
                 {"type": "json_value_type", "key_path": ["count"], "expected_type": "number"},
             ],
         }
+        self.request_store_path = self.root / "validator-state" / "requests.sqlite3"
+        self.request_store_path.parent.mkdir(mode=0o700)
+        self.request_store = SkillValidatorRequestStore(self.request_store_path)
         self.service = SkillValidatorService(
             validator_id="validator-independent", key_id="validator-key-1",
             signing_key=self.validator_key,
             broker_public_key=self.broker_key.public_key().public_bytes_raw(),
             broker_key_id="broker-key-1", workspace_ids=[self.workspace_id],
-            policies=[self.policy],
+            policies=[self.policy], request_store=self.request_store,
         )
         self.broker_attestation = self._broker_attestation({"ok": True, "count": 3})
         self.request = {
@@ -212,6 +215,39 @@ class SkillValidatorTests(unittest.TestCase):
             thread.join(timeout=2)
             listener.close()
             socket_path.unlink(missing_ok=True)
+
+
+    def test_same_validation_request_returns_exact_signed_attestation(self):
+        first = self.service.validate(self.request)
+        second = self.service.validate(self.request)
+        self.assertEqual(second, first)
+        self.assertEqual(second["attestation"]["validation_id"], first["attestation"]["validation_id"])
+        self.assertEqual(second["attestation"]["signature"], first["attestation"]["signature"])
+
+    def test_completed_validation_response_survives_validator_restart(self):
+        first = self.service.validate(self.request)
+        restarted_store = SkillValidatorRequestStore(self.request_store_path)
+        restarted = SkillValidatorService(
+            validator_id="validator-independent", key_id="validator-key-1",
+            signing_key=self.validator_key,
+            broker_public_key=self.broker_key.public_key().public_bytes_raw(),
+            broker_key_id="broker-key-1", workspace_ids=[self.workspace_id],
+            policies=[self.policy], request_store=restarted_store,
+        )
+        self.assertEqual(restarted.validate(self.request), first)
+
+    def test_incomplete_validation_claim_is_indeterminate_and_not_reexecuted(self):
+        request_id = str(uuid.uuid4())
+        request = dict(self.request, request_id=request_id)
+        self.request_store.claim(request_id, request)
+        with self.assertRaisesRegex(SkillValidatorError, "indeterminate"):
+            self.service.validate(request)
+
+    def test_validation_request_id_cannot_be_reused_for_different_digest(self):
+        self.request_store.claim(self.request["request_id"], self.request)
+        changed = dict(self.request, trust_level="cloud")
+        with self.assertRaisesRegex(SkillValidatorError, "different digest"):
+            self.request_store.claim(self.request["request_id"], changed)
 
     def test_rejects_forged_broker_signature(self):
         forged = dict(self.request, broker_attestation=dict(self.broker_attestation))

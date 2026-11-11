@@ -270,7 +270,15 @@ class SkillReplayRuntime:
                 if broker_request_id != evidence_id:
                     raise ValueError("Broker request identity does not match persisted evidence ID")
                 broker_attestation_sha256 = broker_response_sha256(broker_attestation)
-                validation_request_id = str(uuid.uuid4())
+                validation_request_id = str(uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "evo-agent:skill-validation:"
+                    + ":".join((
+                        tenant_id, mission_run_id, node_id, task_id,
+                        broker_request_id, broker_attestation_sha256,
+                        skill.id, skill.version, binding["content_sha256"],
+                    )),
+                ))
                 validation_request = {
                     "schema_version": VALIDATION_REQUEST_SCHEMA,
                     "request_id": validation_request_id,

@@ -78,7 +78,11 @@ private key. Install `deploy/evo-skill-validator.service.example` as
 `/etc/systemd/system/evo-skill-validator.service`; it must run as
 `evo-validator:evo-validator-client` with `RuntimeDirectoryMode=0750`. The
 runtime directory and socket therefore have group `evo-validator-client`,
-mode `0750` and `0660` respectively. Add the Mission Admin account to
+mode `0750` and `0660` respectively. The systemd unit also provisions a
+private `/var/lib/evo-skill-validator` state directory (mode `0700`) for the
+durable request ledger; set `replay_store_path` in the Validator config to
+`/var/lib/evo-skill-validator/requests.sqlite3`. Do not place this database
+under the ephemeral `/run` directory. Add the Mission Admin account to
 `evo-validator-client`; do not add it to `evo-broker` merely to reach the
 Validator socket. The Validator config and policy must be root-controlled,
 and its private signing key must be readable only by `evo-validator` (mode

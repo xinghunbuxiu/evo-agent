@@ -10,8 +10,12 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
+import sqlite3
+import stat
 import uuid
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from cryptography.exceptions import InvalidSignature
@@ -200,6 +204,151 @@ def _check_output(value: Any, checks: Sequence[Mapping[str, Any]]) -> list[dict[
     return results
 
 
+class SkillValidatorRequestStore:
+    """Durable idempotency ledger for signed Validator responses.
+
+    A request is claimed before validation. A crash before the signed response
+    is committed leaves an indeterminate claim that cannot be executed again.
+    Completed retries return the original response, including its signature.
+    """
+
+    MAX_RESPONSE_BYTES = 128 * 1024
+
+    def __init__(self, database_path: Path | str):
+        self.database_path = Path(database_path)
+        if not self.database_path.is_absolute() or self.database_path.is_symlink():
+            raise SkillValidatorError("Validator replay database path must be absolute and non-symlink")
+        parent = self.database_path.parent
+        try:
+            parent_info = parent.lstat()
+        except OSError as exc:
+            raise SkillValidatorError("Validator replay database directory must be provisioned") from exc
+        if (
+            not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
+            or parent_info.st_uid not in {0, os.geteuid()}
+            or parent_info.st_mode & 0o077
+            or parent.resolve(strict=True) != parent
+        ):
+            raise SkillValidatorError("Validator replay database directory is not private and trusted")
+        self._initialize()
+
+    def _connect(self):
+        if self.database_path.is_symlink():
+            raise SkillValidatorError("Validator replay database must not be a symlink")
+        connection = sqlite3.connect(
+            str(self.database_path), timeout=30, isolation_level=None,
+        )
+        connection.execute("PRAGMA synchronous=FULL")
+        return connection
+
+    def _secure_database_files(self):
+        for path in (
+            self.database_path,
+            Path(str(self.database_path) + "-wal"),
+            Path(str(self.database_path) + "-shm"),
+        ):
+            if not path.exists():
+                continue
+            info = path.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+            ):
+                raise SkillValidatorError("Validator replay database file is not trusted")
+            os.chmod(path, 0o600)
+
+    def _initialize(self):
+        connection = self._connect()
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS validator_requests (
+                    request_id TEXT PRIMARY KEY,
+                    request_digest TEXT NOT NULL,
+                    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    response_json TEXT
+                )
+                """
+            )
+            self._secure_database_files()
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _digest(request: dict) -> str:
+        return hashlib.sha256(_canonical_json(request)).hexdigest()
+
+    def claim(self, request_id: str, request: dict) -> dict | None:
+        digest = self._digest(request)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT request_digest, response_json FROM validator_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is not None:
+                connection.execute("COMMIT")
+                if row[0] != digest:
+                    raise SkillValidatorError("validation request_id was reused with a different digest")
+                if row[1] is None:
+                    raise SkillValidatorError(
+                        "validation request is indeterminate; operator review is required"
+                    )
+                try:
+                    response = json.loads(row[1])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise SkillValidatorError(
+                        "cached Validator response is corrupt; operator review is required"
+                    ) from exc
+                if not isinstance(response, dict):
+                    raise SkillValidatorError("cached Validator response is invalid")
+                return response
+            connection.execute(
+                "INSERT INTO validator_requests(request_id, request_digest) VALUES (?, ?)",
+                (request_id, digest),
+            )
+            connection.execute("COMMIT")
+            self._secure_database_files()
+            return None
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def complete(self, request_id: str, request: dict, response: dict) -> None:
+        encoded = _canonical_json(response).decode("utf-8")
+        if len(encoded.encode("utf-8")) > self.MAX_RESPONSE_BYTES:
+            raise SkillValidatorError("Validator response exceeds the durable cache limit")
+        digest = self._digest(request)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT request_digest, response_json FROM validator_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is None or row[0] != digest:
+                raise SkillValidatorError("Validator request claim is missing or mismatched")
+            if row[1] is not None and row[1] != encoded:
+                raise SkillValidatorError("Validator completed response is immutable")
+            connection.execute(
+                "UPDATE validator_requests SET response_json = ? WHERE request_id = ? AND response_json IS NULL",
+                (encoded, request_id),
+            )
+            connection.execute("COMMIT")
+            self._secure_database_files()
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+
 class SkillValidatorService:
     """Independent attestor; owns the signing key and trusts only pinned Broker keys."""
 
@@ -207,6 +356,7 @@ class SkillValidatorService:
         self, *, validator_id: str, key_id: str, signing_key: Ed25519PrivateKey,
         broker_public_key: bytes, broker_key_id: str,
         workspace_ids: Sequence[str], policies: Sequence[Mapping[str, Any]],
+        request_store: SkillValidatorRequestStore | None = None,
     ):
         self.validator_id = _identity(validator_id, "validator_id")
         self.key_id = _identity(key_id, "key_id")
@@ -218,6 +368,7 @@ class SkillValidatorService:
         except (ValueError, TypeError) as exc:
             raise SkillValidatorError("Broker public key is invalid") from exc
         self.signing_key = signing_key
+        self.request_store = request_store
         self.broker_key_id = _identity(broker_key_id, "broker_key_id")
         if not isinstance(workspace_ids, Sequence) or isinstance(workspace_ids, (str, bytes)) or not workspace_ids:
             raise SkillValidatorError("workspace_ids must be a non-empty sequence")
@@ -229,6 +380,18 @@ class SkillValidatorService:
         }
 
     def validate(self, request: Any) -> dict[str, Any]:
+        if self.request_store is None:
+            return self._validate_uncached(request)
+        if not isinstance(request, dict) or not isinstance(request.get("request_id"), str):
+            raise SkillValidatorError("validation request_id is invalid")
+        cached = self.request_store.claim(request["request_id"], request)
+        if cached is not None:
+            return cached
+        response = self._validate_uncached(request)
+        self.request_store.complete(request["request_id"], request, response)
+        return response
+
+    def _validate_uncached(self, request: Any) -> dict[str, Any]:
         fields = {
             "schema_version", "request_id", "workspace_id", "mission_context",
             "skill_binding", "trust_level", "broker_attestation",
