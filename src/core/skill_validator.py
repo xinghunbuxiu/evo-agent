@@ -225,7 +225,7 @@ class SkillValidatorRequestStore:
             raise SkillValidatorError("Validator replay database directory must be provisioned") from exc
         if (
             not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode)
-            or parent_info.st_uid not in {0, os.geteuid()}
+            or parent_info.st_uid != os.geteuid()
             or parent_info.st_mode & 0o077
             or parent.resolve(strict=True) != parent
         ):
@@ -252,10 +252,11 @@ class SkillValidatorRequestStore:
             info = path.lstat()
             if (
                 not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid not in {0, os.geteuid()}
+                or info.st_uid != os.geteuid()
             ):
                 raise SkillValidatorError("Validator replay database file is not trusted")
-            os.chmod(path, 0o600)
+            if info.st_mode & 0o077:
+                raise SkillValidatorError("Validator replay database file permissions must be 0600 or stricter")
 
     def _initialize(self):
         connection = self._connect()
@@ -382,8 +383,16 @@ class SkillValidatorService:
     def validate(self, request: Any) -> dict[str, Any]:
         if self.request_store is None:
             return self._validate_uncached(request)
-        if not isinstance(request, dict) or not isinstance(request.get("request_id"), str):
-            raise SkillValidatorError("validation request_id is invalid")
+        expected_fields = {
+            "schema_version", "request_id", "workspace_id", "mission_context",
+            "skill_binding", "trust_level", "broker_attestation",
+        }
+        if (
+            not isinstance(request, dict) or set(request) != expected_fields
+            or request.get("schema_version") != VALIDATION_REQUEST_SCHEMA
+            or not isinstance(request.get("request_id"), str)
+        ):
+            raise SkillValidatorError("validation request has unsupported or missing fields")
         try:
             uuid.UUID(request["request_id"])
         except (ValueError, TypeError, AttributeError) as exc:
