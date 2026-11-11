@@ -230,7 +230,40 @@ class SkillValidatorRequestStore:
             or parent.resolve(strict=True) != parent
         ):
             raise SkillValidatorError("Validator replay database directory is not private and trusted")
+        self._prepare_database_file()
         self._initialize()
+
+    def _prepare_database_file(self):
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(self.database_path, flags, 0o600)
+        except FileExistsError:
+            try:
+                fd = os.open(
+                    self.database_path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise SkillValidatorError("Validator replay database is unavailable or unsafe") from exc
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077
+            ):
+                os.close(fd)
+                raise SkillValidatorError("Validator replay database must be service-owned and mode 0600")
+        except OSError as exc:
+            raise SkillValidatorError("Validator replay database could not be created safely") from exc
+        try:
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        directory_fd = os.open(self.database_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def _connect(self):
         if self.database_path.is_symlink():
@@ -252,11 +285,9 @@ class SkillValidatorRequestStore:
             info = path.lstat()
             if (
                 not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid != os.geteuid()
+                or info.st_uid != os.geteuid() or info.st_mode & 0o077
             ):
-                raise SkillValidatorError("Validator replay database file is not trusted")
-            if info.st_mode & 0o077:
-                raise SkillValidatorError("Validator replay database file permissions must be 0600 or stricter")
+                raise SkillValidatorError("Validator replay database files must be service-owned and private")
 
     def _initialize(self):
         connection = self._connect()

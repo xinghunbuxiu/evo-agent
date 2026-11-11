@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -216,6 +217,20 @@ class SkillValidatorTests(unittest.TestCase):
             listener.close()
             socket_path.unlink(missing_ok=True)
 
+
+
+    def test_validator_replay_database_and_wal_files_are_private(self):
+        self.assertEqual(self.request_store_path.stat().st_mode & 0o777, 0o600)
+        connection = sqlite3.connect(self.request_store_path)
+        try:
+            connection.execute("INSERT INTO validator_requests(request_id, request_digest) VALUES (?, ?)",
+                               (str(uuid.uuid4()), "a" * 64))
+        finally:
+            connection.close()
+        for suffix in ("", "-wal", "-shm"):
+            path = Path(str(self.request_store_path) + suffix)
+            if path.exists():
+                self.assertEqual(path.stat().st_mode & 0o077, 0)
 
     def test_same_validation_request_returns_exact_signed_attestation(self):
         first = self.service.validate(self.request)
