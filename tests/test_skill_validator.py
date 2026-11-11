@@ -284,18 +284,31 @@ class SkillValidatorTests(unittest.TestCase):
             self.service.validate(request)
 
     def test_rejects_mismatched_tenant_or_skill_binding(self):
-        request = dict(self.request, mission_context={**self.context, "tenant_id": "tenant-b"})
+        # A changed validation payload is a new immutable request and needs a new ID.
+        request = dict(
+            self.request, request_id=str(uuid.uuid4()),
+            mission_context={**self.context, "tenant_id": "tenant-b"},
+        )
         with self.assertRaisesRegex(SkillValidatorError, "Mission context"):
             self.service.validate(request)
-        request = dict(self.request, skill_binding={**self.binding, "skill_id": "other-skill"})
+        request = dict(
+            self.request, request_id=str(uuid.uuid4()),
+            skill_binding={**self.binding, "skill_id": "other-skill"},
+        )
         with self.assertRaisesRegex(SkillValidatorError, "policy"):
             self.service.validate(request)
 
     def test_rejects_unconfigured_workspace_and_missing_policy(self):
-        request = dict(self.request, workspace_id="other-workspace")
+        # Keep distinct negative cases separate in the durable idempotency ledger.
+        request = dict(
+            self.request, request_id=str(uuid.uuid4()),
+            workspace_id="other-workspace",
+        )
         with self.assertRaisesRegex(SkillValidatorError, "workspace_id"):
             self.service.validate(request)
-        request = dict(self.request, trust_level="cloud")
+        request = dict(
+            self.request, request_id=str(uuid.uuid4()), trust_level="cloud",
+        )
         with self.assertRaisesRegex(SkillValidatorError, "policy"):
             self.service.validate(request)
 
