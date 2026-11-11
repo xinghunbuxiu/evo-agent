@@ -362,3 +362,28 @@ export function continueMission(missionRunId: string) {
     {}
   )
 }
+
+/**
+ * Replay a verified Skill for one Mission node.
+ *
+ * The caller must create one UUID per intentional Replay attempt and retain it
+ * while retrying that same HTTP request. A new UUID means a new attempt.
+ */
+export function replayMissionSkill(
+  missionRunId: string,
+  skillId: string,
+  nodeId: string,
+  idempotencyKey: string
+) {
+  if (!idempotencyKey.trim()) {
+    throw new Error('Replay requires a stable Idempotency-Key')
+  }
+  return request<Record<string, unknown>>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/skills/${encodeURIComponent(skillId)}/replay`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ node_id: nodeId }),
+    }
+  )
+}
