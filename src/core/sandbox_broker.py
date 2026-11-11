@@ -60,7 +60,14 @@ class BrokerRequestRejected(ValueError):
 
 
 class BrokerReplayStore:
-    """Persistent request-ID ledger; IDs are never silently reused after restart."""
+    """Durable request ledger with exact signed-response replay.
+
+    A claimed request without a stored response is indeterminate and can never
+    be executed again automatically. Completed requests return their original
+    response bytes (decoded as JSON), preserving the original signature.
+    """
+
+    MAX_RESPONSE_BYTES = 1024 * 1024
 
     def __init__(self, database_path: Path):
         self.database_path = Path(database_path)
@@ -88,32 +95,109 @@ class BrokerReplayStore:
                 CREATE TABLE IF NOT EXISTS broker_requests (
                     request_id TEXT PRIMARY KEY,
                     request_digest TEXT NOT NULL,
-                    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    response_json TEXT
                 )
                 """
             )
+            columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(broker_requests)"
+                ).fetchall()
+            }
+            if "response_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE broker_requests ADD COLUMN response_json TEXT"
+                )
         finally:
             connection.close()
         if self.database_path.exists():
             os.chmod(self.database_path, 0o600)
 
-    def claim(self, request_id: str, request: dict) -> None:
-        digest = hashlib.sha256(_canonical_json(request)).hexdigest()
+    @staticmethod
+    def _digest(request: dict) -> str:
+        return hashlib.sha256(_canonical_json(request)).hexdigest()
+
+    def claim(self, request_id: str, request: dict) -> dict | None:
+        """Claim a new request, or return its exact cached response.
+
+        Same ID + different payload is rejected. Same ID + no completed
+        response is indeterminate and must not be retried as a new execution.
+        """
+        digest = self._digest(request)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            try:
-                connection.execute(
-                    "INSERT INTO broker_requests(request_id, request_digest) VALUES (?, ?)",
-                    (request_id, digest),
-                )
-            except sqlite3.IntegrityError as exc:
-                connection.execute("ROLLBACK")
-                raise BrokerRequestRejected("request_id has already been used") from exc
+            existing = connection.execute(
+                "SELECT request_digest, response_json FROM broker_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if existing is not None:
+                connection.execute("COMMIT")
+                if existing[0] != digest:
+                    raise BrokerRequestRejected(
+                        "request_id was reused with a different request digest"
+                    )
+                if existing[1] is None:
+                    raise BrokerRequestRejected(
+                        "request_id is indeterminate; operator review is required"
+                    )
+                try:
+                    response = json.loads(existing[1])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise BrokerRequestRejected(
+                        "cached Broker response is corrupt; operator review is required"
+                    ) from exc
+                if not isinstance(response, dict):
+                    raise BrokerRequestRejected(
+                        "cached Broker response is invalid; operator review is required"
+                    )
+                return response
+            connection.execute(
+                "INSERT INTO broker_requests(request_id, request_digest) VALUES (?, ?)",
+                (request_id, digest),
+            )
             connection.execute("COMMIT")
+            return None
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
         finally:
             connection.close()
 
+    def complete(self, request_id: str, request: dict, response: dict) -> None:
+        """Durably cache the signed response before it is sent over the socket."""
+        if not isinstance(response, dict):
+            raise BrokerRequestRejected("Broker response must be an object")
+        encoded = _canonical_json(response).decode("utf-8")
+        if len(encoded.encode("utf-8")) > self.MAX_RESPONSE_BYTES:
+            raise BrokerRequestRejected("Broker response exceeds the durable cache limit")
+        digest = self._digest(request)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT request_digest, response_json FROM broker_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if row is None or row[0] != digest:
+                raise BrokerRequestRejected("Broker request claim is missing or mismatched")
+            if row[1] is not None:
+                if row[1] != encoded:
+                    raise BrokerRequestRejected("Broker completed response is immutable")
+            else:
+                connection.execute(
+                    "UPDATE broker_requests SET response_json = ? WHERE request_id = ? AND response_json IS NULL",
+                    (encoded, request_id),
+                )
+            connection.execute("COMMIT")
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
 
 def validate_broker_request(request: object) -> dict:
     """Validate the exact wire shape before workspace lookup or execution."""
@@ -371,7 +455,9 @@ class SandboxBrokerService:
             )
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
-        self.replay_store.claim(request_id, request)
+        cached_response = self.replay_store.claim(request_id, request)
+        if cached_response is not None:
+            return cached_response
         candidate = SimpleNamespace(
             id=skill_id, version=version, code=code, trust_level="draft",
         )
@@ -397,7 +483,7 @@ class SandboxBrokerService:
             "candidate_artifact": artifact,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
-        return {
+        response = {
             **signed_payload,
             "signature": {
                 "algorithm": BROKER_SIGNATURE_ALGORITHM,
@@ -405,6 +491,8 @@ class SandboxBrokerService:
                 "value": base64.b64encode(signature).decode("ascii"),
             },
         }
+        self.replay_store.complete(request_id, request, response)
+        return response
 
     def promote_skill_candidate(self, request: object) -> dict:
         """Publish one staged draft only when an independent Validator signed its exact identity."""
@@ -470,7 +558,9 @@ class SandboxBrokerService:
         if getattr(candidate, "trust_level", None) != "draft":
             raise BrokerRequestRejected("only staged draft Skills can be promoted")
 
-        self.replay_store.claim(request_id, request)
+        cached_response = self.replay_store.claim(request_id, request)
+        if cached_response is not None:
+            return cached_response
         promoted = SimpleNamespace(
             id=candidate.id,
             version=candidate.version,
@@ -510,7 +600,7 @@ class SandboxBrokerService:
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
         import base64
-        return {
+        response = {
             **signed_payload,
             "signature": {
                 "algorithm": BROKER_SIGNATURE_ALGORITHM,
@@ -518,6 +608,8 @@ class SandboxBrokerService:
                 "value": base64.b64encode(signature).decode("ascii"),
             },
         }
+        self.replay_store.complete(request_id, request, response)
+        return response
 
     def handle_request(self, request: object) -> dict:
         validated = validate_broker_request(request)
@@ -535,7 +627,9 @@ class SandboxBrokerService:
             self._authorize_workspace_tenant(
                 workspace_id, validated["mission_context"]["tenant_id"],
             )
-        self.replay_store.claim(request_id, validated)
+        cached_response = self.replay_store.claim(request_id, validated)
+        if cached_response is not None:
+            return cached_response
         skill_artifact = None
 
         if binding is not None:
@@ -602,7 +696,7 @@ class SandboxBrokerService:
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
         import base64
-        return {
+        response = {
             **signed_payload,
             "signature": {
                 "algorithm": BROKER_SIGNATURE_ALGORITHM,
@@ -610,6 +704,8 @@ class SandboxBrokerService:
                 "value": base64.b64encode(signature).decode("ascii"),
             },
         }
+        self.replay_store.complete(request_id, validated, response)
+        return response
 
 
 __all__ = [

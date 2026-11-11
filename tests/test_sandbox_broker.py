@@ -608,9 +608,9 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "project-test", self._skill_replay_spec(binding), mission_context=binding["mission_context"],
             request_id=str(uuid.uuid4()), skill_binding=binding,
         )
-        service.handle_request(request)
-        with self.assertRaisesRegex(BrokerRequestRejected, "already been used"):
-            service.handle_request(request)
+        first = service.handle_request(request)
+        second = service.handle_request(request)
+        self.assertEqual(second, first)
         self.assertEqual(len(self.skill_calls), 1)
 
     def test_response_skill_binding_is_bound_to_broker_signature_and_caller_expectation(self):
@@ -680,9 +680,9 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_replay_is_rejected_before_second_execution(self):
-        self.service.handle_request(self.request)
-        with self.assertRaisesRegex(BrokerRequestRejected, "already been used"):
-            self.service.handle_request(self.request)
+        first = self.service.handle_request(self.request)
+        second = self.service.handle_request(self.request)
+        self.assertEqual(second, first)
         self.assertEqual(len(self.calls), 1)
 
     def test_service_rejects_workspace_with_untrusted_writable_parent(self):
@@ -722,6 +722,24 @@ class SandboxBrokerServiceTests(unittest.TestCase):
                 signing_key=self.key, key_id="broker-test-key",
             )
 
+    def test_claimed_request_without_cached_response_is_indeterminate(self):
+        self.store.claim(self.request_id, self.request)
+        with self.assertRaisesRegex(BrokerRequestRejected, "indeterminate"):
+            self.store.claim(self.request_id, self.request)
+
+    def test_same_request_id_with_different_digest_is_rejected(self):
+        self.store.claim(self.request_id, self.request)
+        changed = dict(self.request, timeout_seconds=self.request["timeout_seconds"] + 1)
+        with self.assertRaisesRegex(BrokerRequestRejected, "different request digest"):
+            self.store.claim(self.request_id, changed)
+
+    def test_completed_response_is_cached_exactly_across_store_restart(self):
+        self.store.claim(self.request_id, self.request)
+        response = {"request_id": self.request_id, "signature": {"value": "original"}}
+        self.store.complete(self.request_id, self.request, response)
+        restarted = BrokerReplayStore(self.db)
+        self.assertEqual(restarted.claim(self.request_id, self.request), response)
+
     def test_replay_store_survives_service_reconstruction(self):
         self.service.handle_request(self.request)
         restarted = SandboxBrokerService(
@@ -731,8 +749,8 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             signing_key=self.key,
             key_id="broker-test-key",
         )
-        with self.assertRaisesRegex(BrokerRequestRejected, "already been used"):
-            restarted.handle_request(self.request)
+        replayed = restarted.handle_request(self.request)
+        self.assertEqual(replayed, self.service.handle_request(self.request))
         self.assertEqual(len(self.calls), 1)
 
     def test_rejects_unregistered_workspace_before_consuming_or_executing(self):
