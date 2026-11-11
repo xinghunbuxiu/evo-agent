@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -88,10 +89,21 @@ class SkillReplayMissionAdapter:
         if not isinstance(input_summary, str):
             raise ValueError("input_summary must be a string")
 
+        # A retry of the same Mission task must address the same Broker
+        # operation. Broker returns the original signed response if complete,
+        # and refuses re-execution if the prior outcome is indeterminate.
+        request_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "evo-agent:skill-replay:execute:"
+            + ":".join(context[key] for key in (
+                "tenant_id", "mission_run_id", "node_id", "task_id",
+            )),
+        ))
         attested = execute_via_broker_attested(
             self.socket_path, self.workspace_id, spec,
             mission_context=context, public_key=self.broker_public_key,
             expected_key_id=self.broker_key_id, skill_binding=binding,
+            request_id=request_id,
         )
         evidence_ref = self.evidence_store.record(
             attested, tenant_id=tenant_id, workspace_id=self.workspace_id,

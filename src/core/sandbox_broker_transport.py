@@ -201,6 +201,7 @@ def execute_via_broker_attested(
     public_key: bytes,
     expected_key_id: str,
     skill_binding: dict | None = None,
+    request_id: str | None = None,
     timeout_seconds: float | None = None,
 ) -> dict:
     """Execute and return both the signed envelope and its verified result.
@@ -208,7 +209,10 @@ def execute_via_broker_attested(
     Persist the complete attestation envelope, not only the result, so the
     Mission verifier can re-check the original signature after task reload.
     """
-    request = build_broker_request(workspace_id, spec, mission_context=mission_context, skill_binding=skill_binding)
+    request = build_broker_request(
+        workspace_id, spec, mission_context=mission_context,
+        skill_binding=skill_binding, request_id=request_id,
+    )
     timeout = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds + 30
     response = request_broker(socket_path, request, timeout_seconds=timeout)
     result = verify_broker_response(
@@ -247,6 +251,7 @@ def stage_skill_candidate_via_broker(
     code: str,
     public_key: bytes,
     expected_key_id: str,
+    request_id: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict:
     """Transfer one executable draft to Broker storage and verify its signed receipt."""
@@ -272,7 +277,7 @@ def stage_skill_candidate_via_broker(
         raise ValueError("candidate code exceeds the 256 KiB limit")
     request = {
         "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
-        "request_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
         "workspace_id": workspace_id,
         "mission_context": context,
         "skill_id": skill_id,
@@ -335,6 +340,7 @@ def promote_skill_candidate_via_broker(
     validation_attestation: dict,
     public_key: bytes,
     expected_key_id: str,
+    request_id: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict:
     """Submit an independent Validator statement and verify Broker publication receipt."""
@@ -360,7 +366,7 @@ def promote_skill_candidate_via_broker(
 
     request = {
         "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
-        "request_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
         "workspace_id": workspace_id,
         "mission_context": context,
         "skill_id": skill_id,

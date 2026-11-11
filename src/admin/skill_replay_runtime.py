@@ -220,6 +220,13 @@ class SkillReplayRuntime:
             code=skill.code,
             public_key=self.broker_public_key,
             expected_key_id=self.broker_key_id,
+            request_id=str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "evo-agent:skill-replay:stage:"
+                + ":".join(context[key] for key in (
+                    "tenant_id", "mission_run_id", "node_id", "task_id",
+                )),
+            )),
         )
         spec = ExecutionProfileSpec(
             profile_id=SKILL_REPLAY_PROFILE_ID,
@@ -317,6 +324,13 @@ class SkillReplayRuntime:
                         validation_attestation=validation_attestation,
                         public_key=self.broker_public_key,
                         expected_key_id=self.broker_key_id,
+                        request_id=str(uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            "evo-agent:skill-replay:promotion:"
+                            + ":".join(context[key] for key in (
+                                "tenant_id", "mission_run_id", "node_id", "task_id",
+                            )),
+                        )),
                     )
                     promotion = {
                         "status": "published",
