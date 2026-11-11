@@ -1714,6 +1714,11 @@ def create_app() -> FastAPI:
                 f"claims_released={recovery.get('claims_released', 0)} "
                 f"claims_held_for_review={recovery.get('claims_held_for_review', 0)}"
             )
+        except Exception as exc:
+            # Recovery failure must be visible but must not silently release claims
+            # or prevent the admin service from starting.
+            print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
+        try:
             replay_recovery = _mission_bootstrap["reconcile_skill_replays_on_startup"]()
             print(
                 "[mission-replay-recovery] startup reconciliation complete "
@@ -1722,9 +1727,8 @@ def create_app() -> FastAPI:
                 f"replays_held_for_review={replay_recovery.get('replays_held_for_review', 0)}"
             )
         except Exception as exc:
-            # Recovery failure must be visible but must not silently release claims
-            # or prevent the admin service from starting.
-            print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
+            # Keep Replay quarantine independent from worker-claim reconciliation.
+            print(f"[mission-replay-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
         if not autonomy_thread.is_alive():
             autonomy_thread.start()
         nonlocal experience_outbox_task
