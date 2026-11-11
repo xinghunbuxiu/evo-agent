@@ -384,6 +384,10 @@ class SkillValidatorService:
             return self._validate_uncached(request)
         if not isinstance(request, dict) or not isinstance(request.get("request_id"), str):
             raise SkillValidatorError("validation request_id is invalid")
+        try:
+            uuid.UUID(request["request_id"])
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise SkillValidatorError("validation request_id is invalid") from exc
         cached = self.request_store.claim(request["request_id"], request)
         if cached is not None:
             return cached

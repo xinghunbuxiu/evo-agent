@@ -16,8 +16,13 @@ class SkillValidatorDeploymentTests(unittest.TestCase):
         self.assertIn("Group=evo-validator-client", unit)
         self.assertIn("RuntimeDirectory=evo-skill-validator", unit)
         self.assertIn("RuntimeDirectoryMode=0750", unit)
+        self.assertIn("StateDirectory=evo-skill-validator", unit)
+        self.assertIn("StateDirectoryMode=0700", unit)
+        self.assertIn("/var/lib/evo-skill-validator", unit)
         self.assertNotIn("Group=evo-broker", unit)
         self.assertIn("evo-validator-client", runbook)
+        self.assertIn("replay_store_path", runbook)
+        self.assertIn("/var/lib/evo-skill-validator/requests.sqlite3", runbook)
         self.assertIn("do not authorize worker, runner or general-purpose user accounts", normalized_runbook)
         self.assertIn("the validator should not be able to open the broker socket.", normalized_runbook)
 
