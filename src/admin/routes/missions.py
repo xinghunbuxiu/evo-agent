@@ -170,12 +170,21 @@ def register_mission_routes(
             if any(
                 isinstance(item, dict)
                 and item.get("action_type") == "skill_replay"
-                and item.get("status") == "running"
+                and (
+                    item.get("status") == "running"
+                    or (
+                        item.get("status") == "interrupted"
+                        and item.get("recovery_status") == "needs_review"
+                    )
+                )
                 and item.get("skill_id") == skill_id
                 and item.get("node_id") == node_id
                 for item in actions
             ):
-                return error_response("该 Skill 在此 Mission 节点已有 Replay 正在执行", 409)
+                return error_response(
+                    "该 Skill 在此 Mission 节点已有未完成或中断的 Replay；请先核验 Broker 与 Evidence Store，不得直接重跑",
+                    409,
+                )
             actions.append(action)
             mission_run["actions"] = actions
             mission_run["updated_at"] = datetime.now().astimezone().isoformat()

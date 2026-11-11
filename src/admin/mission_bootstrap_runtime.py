@@ -11,7 +11,7 @@ from core.tenant import TenantManager
 
 from admin.mission_request_runtime import prepare_mission_work_type_bundle
 from admin.mission_run_builder_runtime import create_mission_run_builder
-from admin.mission_runtime import create_start_mission, reconcile_worker_claims_on_startup, refresh_mission_runs
+from admin.mission_runtime import (\n    create_start_mission, reconcile_skill_replays_on_startup,\n    reconcile_worker_claims_on_startup, refresh_mission_runs,\n)
 
 
 def create_mission_bootstrap_runtime_bindings(
@@ -89,6 +89,9 @@ def create_mission_bootstrap_runtime_bindings(
             workspace=workspace,
             task_queue=task_queue,
             organization_registry=organization_registry,
+        ),
+        "reconcile_skill_replays_on_startup": lambda: reconcile_skill_replays_on_startup(
+            workspace=workspace,
         ),
         "start_mission": start_mission,
     }

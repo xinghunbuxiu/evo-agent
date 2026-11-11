@@ -133,11 +133,54 @@ def _mission_run_has_active_worker_claim(mission_run: dict) -> bool:
             )
             or (
                 action.get("action_type") == "skill_replay"
-                and action.get("status") == "running"
+                and (
+                    action.get("status") == "running"
+                    or (
+                        action.get("status") == "interrupted"
+                        and action.get("recovery_status") == "needs_review"
+                    )
+                )
             )
         )
         for action in actions
     )
+
+
+
+def reconcile_skill_replays_on_startup(*, workspace: Path) -> dict:
+    """Mark interrupted Replay operations for review; never re-execute after restart."""
+    with exclusive_mission_claim_lock(workspace):
+        state = load_mission_runs_strict(workspace)
+        items = state["items"]
+        interrupted = 0
+        timestamp = datetime.now().astimezone().isoformat()
+        for run in items:
+            actions = run.get("actions", []) if isinstance(run.get("actions"), list) else []
+            for action in actions:
+                if (
+                    not isinstance(action, dict)
+                    or action.get("action_type") != "skill_replay"
+                    or action.get("status") != "running"
+                ):
+                    continue
+                action.update({
+                    "status": "interrupted",
+                    "recovery_status": "needs_review",
+                    "recovery_reason": "admin_process_restarted_during_replay",
+                    "interrupted_at": timestamp,
+                    "detail": (
+                        "Admin 在 Replay 完成前重启。Broker 是否已执行或发布不能仅凭 Mission 状态判断；"
+                        "已保留原 task_id 和证据引用，需先核验 Broker/Evidence Store，再决定恢复。"
+                    ),
+                })
+                interrupted += 1
+        if interrupted:
+            _write_mission_runs_atomic(workspace, {"items": items})
+        return {
+            "mission_runs": len(items),
+            "replays_marked_interrupted": interrupted,
+            "replays_held_for_review": interrupted,
+        }
 
 
 def _retain_mission_runs(items: list, limit: int = 50) -> list[dict]:

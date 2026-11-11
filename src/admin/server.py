@@ -1714,6 +1714,13 @@ def create_app() -> FastAPI:
                 f"claims_released={recovery.get('claims_released', 0)} "
                 f"claims_held_for_review={recovery.get('claims_held_for_review', 0)}"
             )
+            replay_recovery = _mission_bootstrap["reconcile_skill_replays_on_startup"]()
+            print(
+                "[mission-replay-recovery] startup reconciliation complete "
+                f"mission_runs={replay_recovery.get('mission_runs', 0)} "
+                f"replays_marked_interrupted={replay_recovery.get('replays_marked_interrupted', 0)} "
+                f"replays_held_for_review={replay_recovery.get('replays_held_for_review', 0)}"
+            )
         except Exception as exc:
             # Recovery failure must be visible but must not silently release claims
             # or prevent the admin service from starting.
