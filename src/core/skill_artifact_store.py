@@ -142,6 +142,45 @@ def _write_create_once(path: Path, payload: bytes, *, collision_message: str) ->
                 pass
 
 
+
+def _existing_create_once_matches(path: Path, payload: bytes, *, collision_message: str) -> bool:
+    """Accept a create-once collision only when the existing immutable bytes match."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SkillArtifactStoreError(
+            "existing Skill artifact is unavailable or unsafe"
+        ) from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()}
+            or info.st_mode & 0o222
+            or info.st_size > 2 * 1024 * 1024
+        ):
+            raise SkillArtifactStoreError("existing Skill artifact is unsafe or oversized")
+        chunks = []
+        remaining = 2 * 1024 * 1024 + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        existing = b"".join(chunks)
+        if len(existing) > 2 * 1024 * 1024:
+            raise SkillArtifactStoreError("existing Skill artifact is oversized")
+    finally:
+        os.close(fd)
+    if existing != payload:
+        raise SkillArtifactStoreError(collision_message)
+    return True
+
+
 def _secure_directory(path: Path, *, create: bool) -> Path:
     if not path.is_absolute() or path.is_symlink():
         raise SkillArtifactStoreError("artifact store path must be absolute and non-symlink")
@@ -332,10 +371,20 @@ class SkillArtifactStore:
         }
         payload = _canonical_json(artifact)
         path = self._artifact_path(normalized_tenant, skill_id, version, create=True)
-        _write_create_once(
-            path, payload,
-            collision_message="Skill artifact version already exists; publish a new version",
-        )
+        collision_message = "Skill artifact version already exists; publish a new version"
+        try:
+            _write_create_once(
+                path, payload, collision_message=collision_message,
+            )
+        except SkillArtifactStoreError as exc:
+            if str(exc) != collision_message:
+                raise
+            # A retry after a lost Broker response is successful only if the
+            # immutable file is byte-for-byte identical, including the signed
+            # Validator attestation and Mission/Broker evidence lineage.
+            _existing_create_once_matches(
+                path, payload, collision_message=collision_message,
+            )
         return {
             "tenant_id": normalized_tenant,
             "skill_id": skill_id,

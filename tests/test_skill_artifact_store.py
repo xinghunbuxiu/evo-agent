@@ -270,7 +270,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         self.assertEqual(loaded.code, self.skill.code)
         self.assertEqual(json.loads(artifact_path.read_text(encoding="utf-8"))["code"], self.skill.code)
 
-    def test_concurrent_publishers_have_exactly_one_create_once_winner(self):
+    def test_concurrent_identical_publishers_all_receive_the_same_create_once_result(self):
         barrier = threading.Barrier(8)
 
         def publish_same_version(_index):
@@ -288,13 +288,10 @@ class SkillArtifactStoreTests(unittest.TestCase):
             results = list(pool.map(publish_same_version, range(8)))
 
         successes = [result for result in results if isinstance(result, dict)]
-        collisions = [
-            result for result in results
-            if isinstance(result, SkillArtifactStoreError)
-            and "already exists" in str(result)
-        ]
-        self.assertEqual(len(successes), 1)
-        self.assertEqual(len(collisions), 7)
+        failures = [result for result in results if isinstance(result, Exception)]
+        self.assertEqual(len(successes), 8)
+        self.assertEqual(failures, [])
+        self.assertTrue(all(result == successes[0] for result in successes))
         binding = {
             "schema_version": "mission.skill-replay-binding.v1",
             "skill_id": self.skill.id,
@@ -304,6 +301,43 @@ class SkillArtifactStoreTests(unittest.TestCase):
             "mission_context": self.context,
         }
         self.assertEqual(self.store.load_for_binding(binding).code, self.skill.code)
+
+    def test_exact_repeat_publication_is_idempotent(self):
+        attestation = self._attestation()
+        first = self._publish(validation_attestation=attestation)
+        second = self._publish(validation_attestation=attestation)
+        self.assertEqual(second, first)
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": first["skill_id"],
+            "skill_version": first["skill_version"],
+            "content_sha256": first["content_sha256"],
+            "trust_level": first["trust_level"],
+            "mission_context": self.context,
+        }
+        self.assertEqual(self.store.load_for_binding(binding).code, self.skill.code)
+
+    def test_existing_artifact_with_different_signed_attestation_is_not_reused(self):
+        self._publish()
+        changed_attestation = self._attestation()
+        signed_payload = {
+            key: value for key, value in changed_attestation.items()
+            if key != "signature"
+        }
+        signed_payload["validation_id"] = "validation-002"
+        signature = self.validator_key.sign(json.dumps(
+            signed_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8"))
+        changed_attestation = {
+            **signed_payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "validator-test-key",
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
+        with self.assertRaisesRegex(SkillArtifactStoreError, "already exists"):
+            self._publish(validation_attestation=changed_attestation)
 
     def test_rejects_duplicate_version_instead_of_overwriting(self):
         self._publish_binding()
