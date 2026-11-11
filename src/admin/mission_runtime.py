@@ -163,6 +163,10 @@ def reconcile_skill_replays_on_startup(*, workspace: Path) -> dict:
                     or action.get("status") != "running"
                 ):
                     continue
+                # Null evidence placeholders are not evidence references. Keep a real
+                # evidence_id if one was persisted, but omit an empty placeholder.
+                if action.get("evidence_id") is None:
+                    action.pop("evidence_id", None)
                 action.update({
                     "status": "interrupted",
                     "recovery_status": "needs_review",
