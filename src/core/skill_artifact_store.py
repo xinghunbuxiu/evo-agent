@@ -178,6 +178,9 @@ def _existing_create_once_matches(path: Path, payload: bytes, *, collision_messa
         os.close(fd)
     if existing != payload:
         raise SkillArtifactStoreError(collision_message)
+    # A concurrent publisher may have linked the final name but not yet
+    # completed its directory fsync. Confirm durability before accepting retry.
+    _fsync_directory(path.parent)
     return True
 
 
