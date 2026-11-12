@@ -1,4 +1,4 @@
-import { get, post } from './request'
+import { get, post, request } from './request'
 
 export interface MissionTemplate {
   mission_kind: string
