@@ -99,12 +99,20 @@ class SkillReplayMissionAdapter:
                 "tenant_id", "mission_run_id", "node_id", "task_id",
             )),
         ))
-        attested = execute_via_broker_attested(
-            self.socket_path, self.workspace_id, spec,
-            mission_context=context, public_key=self.broker_public_key,
-            expected_key_id=self.broker_key_id, skill_binding=binding,
-            request_id=request_id,
-        )
+        try:
+            attested = execute_via_broker_attested(
+                self.socket_path, self.workspace_id, spec,
+                mission_context=context, public_key=self.broker_public_key,
+                expected_key_id=self.broker_key_id, skill_binding=binding,
+                request_id=request_id,
+            )
+        except Exception as exc:
+            # The request may have reached the Broker even when the signed
+            # response could not be received or verified. Never expose this
+            # as a retry-safe ValueError to the HTTP route.
+            raise SkillReplayMissionError(
+                "Broker Skill Replay outcome could not be verified",
+            ) from exc
         try:
             evidence_ref = self.evidence_store.record(
                 attested, tenant_id=tenant_id, workspace_id=self.workspace_id,

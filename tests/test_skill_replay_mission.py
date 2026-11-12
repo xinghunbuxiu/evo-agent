@@ -20,7 +20,7 @@ from core.sandbox_broker_protocol import (
     SKILL_REPLAY_OUTPUT_SCHEMA, SKILL_REPLAY_PROFILE_ID,
 )
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
-from core.skill_replay_mission import SkillReplayMissionAdapter
+from core.skill_replay_mission import SkillReplayMissionAdapter, SkillReplayMissionError
 from core.learning import ExperienceStore
 
 
@@ -142,6 +142,21 @@ class SkillReplayMissionAdapterTests(unittest.TestCase):
         self.assertEqual(replay["failure"]["type"], "AssertionError")
         self.assertEqual(replay["reflection"]["error_reason"]["message"], "expected true")
         self.assertEqual(replay["reflection"]["status"], "pending")
+
+    @mock.patch("core.skill_replay_mission.execute_via_broker_attested")
+    def test_broker_transport_or_attestation_error_is_marked_indeterminate(self, execute):
+        execute.side_effect = RuntimeError("socket closed after request dispatch")
+        with self.assertRaisesRegex(SkillReplayMissionError, "outcome could not be verified"):
+            self.adapter.execute(
+                self.spec, tenant_id="tenant-a", mission_context=self.context,
+                skill_binding=self.binding, domain="python", task_type="skill_replay",
+                input_summary="uncertain broker result",
+            )
+        execute.assert_called_once()
+        self.assertEqual(
+            ExperienceStore(self.root / "workspace", "tenant-a").load_by_domain("python"),
+            [],
+        )
 
     @mock.patch("core.skill_replay_mission.execute_via_broker_attested")
     def test_tenant_mismatch_is_rejected_before_broker_call(self, execute):

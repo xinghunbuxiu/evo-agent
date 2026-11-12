@@ -278,7 +278,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         ))
         self.assertEqual(first["status"], 502)
         self.assertEqual(second["status"], 409)
-        self.assertEqual(runtime.calls.__len__(), 1)
+        self.assertEqual(len(runtime.calls), 1)
         actions = load_mission_runs(self.workspace)["items"][0]["actions"]
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["status"], "interrupted")
