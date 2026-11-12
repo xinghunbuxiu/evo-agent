@@ -14,7 +14,7 @@ import re
 import stat
 import uuid
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
@@ -27,7 +27,7 @@ from core.skill_validator import VALIDATION_REQUEST_SCHEMA
 from core.skill_validator_transport import request_skill_validation
 from core.skill_replay_contract import build_skill_replay_binding
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
-from core.skill_replay_mission import SkillReplayMissionAdapter
+from core.skill_replay_mission import SkillReplayMissionAdapter, build_skill_replay_execution_request_id
 
 LOGGER = logging.getLogger("evo.skill_replay")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -178,7 +178,8 @@ class SkillReplayRuntime:
             raise ValueError("executable Skill entry point must have exactly one argument named context")
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
-                         node_id: str, task_id: str, skill_id: str) -> dict:
+                         node_id: str, task_id: str, skill_id: str,
+                         on_candidate_bound: Callable[[dict], None] | None = None) -> dict:
         if not isinstance(tenant_id, str) or not _ID_RE.fullmatch(tenant_id):
             raise ValueError("tenant_id is invalid")
         if not isinstance(mission_run, Mapping):
@@ -224,6 +225,23 @@ class SkillReplayRuntime:
             "task_id": task_id,
         }
         binding = build_skill_replay_binding(skill, context)
+        stage_request_id = _deterministic_request_id("stage", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+        })
+        execution_request_id = build_skill_replay_execution_request_id(context)
+        if on_candidate_bound is not None:
+            if not callable(on_candidate_bound):
+                raise ValueError("on_candidate_bound must be callable")
+            # Persist the immutable candidate and Broker request identities
+            # before either staging or execution can create a side effect.
+            on_candidate_bound({
+                "skill_binding": binding,
+                "stage_request_id": stage_request_id,
+                "execution_request_id": execution_request_id,
+            })
         stage_receipt = stage_skill_candidate_via_broker(
             self.socket_path,
             self.workspace_id,
@@ -234,12 +252,7 @@ class SkillReplayRuntime:
             code=skill.code,
             public_key=self.broker_public_key,
             expected_key_id=self.broker_key_id,
-            request_id=_deterministic_request_id("stage", {
-                "mission_context": context,
-                "skill_id": skill.id,
-                "skill_version": skill.version,
-                "content_sha256": binding["content_sha256"],
-            }),
+            request_id=stage_request_id,
         )
         spec = ExecutionProfileSpec(
             profile_id=SKILL_REPLAY_PROFILE_ID,

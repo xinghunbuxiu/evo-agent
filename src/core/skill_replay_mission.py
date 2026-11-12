@@ -15,6 +15,20 @@ _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _WORKSPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+def build_skill_replay_execution_request_id(mission_context: Mapping[str, Any]) -> str:
+    """Return the stable Broker request ID for one exact Mission Replay task."""
+    required = {"tenant_id", "mission_run_id", "node_id", "task_id"}
+    if not isinstance(mission_context, Mapping) or set(mission_context) != required:
+        raise ValueError("Mission context has unsupported or missing fields")
+    values = [mission_context[key] for key in ("tenant_id", "mission_run_id", "node_id", "task_id")]
+    if any(not isinstance(value, str) or not _IDENTITY_RE.fullmatch(value) for value in values):
+        raise ValueError("Mission context contains an invalid identity")
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        "evo-agent:skill-replay:execute:" + ":".join(values),
+    ))
+
+
 class SkillReplayMissionError(RuntimeError):
     """Mission Replay failed after a known point in the evidence lifecycle."""
 
@@ -92,13 +106,7 @@ class SkillReplayMissionAdapter:
         # A retry of the same Mission task must address the same Broker
         # operation. Broker returns the original signed response if complete,
         # and refuses re-execution if the prior outcome is indeterminate.
-        request_id = str(uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            "evo-agent:skill-replay:execute:"
-            + ":".join(context[key] for key in (
-                "tenant_id", "mission_run_id", "node_id", "task_id",
-            )),
-        ))
+        request_id = build_skill_replay_execution_request_id(context)
         try:
             attested = execute_via_broker_attested(
                 self.socket_path, self.workspace_id, spec,
@@ -152,4 +160,4 @@ class SkillReplayMissionAdapter:
         }
 
 
-__all__ = ["SkillReplayMissionAdapter", "SkillReplayMissionError"]
+__all__ = ["SkillReplayMissionAdapter", "SkillReplayMissionError", "build_skill_replay_execution_request_id"]

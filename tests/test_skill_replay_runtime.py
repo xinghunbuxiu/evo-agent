@@ -257,6 +257,43 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["promotion"]["status"], "not_attempted")
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_candidate_binding_callback_runs_before_broker_staging(self, stage):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill())
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v1"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-1"},
+            "experience": {"id": "experience-1"},
+        }
+        events = []
+        def on_bound(payload):
+            events.append(("bound", payload))
+        stage.side_effect = lambda *args, **kwargs: events.append(("stage", kwargs)) or {
+            "schema_version": "mission.skill-candidate-stage-response.v1"
+        }
+        runtime.replay_candidate(
+            tenant_id="tenant-a",
+            mission_run={
+                "mission_run_id": "mission-1",
+                "tenant_id": "tenant-a",
+                "plan": {"nodes": [{"id": "node-1"}]},
+            },
+            node_id="node-1",
+            task_id="task-1",
+            skill_id="skill-demo",
+            on_candidate_bound=on_bound,
+        )
+        self.assertEqual(events[0][0], "bound")
+        self.assertEqual(events[1][0], "stage")
+        pinned = events[0][1]
+        self.assertEqual(len(pinned["skill_binding"]["content_sha256"]), 64)
+        self.assertEqual(events[1][1]["request_id"], pinned["stage_request_id"])
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_requires_explicit_mission_tenant_before_broker_staging(self, stage):
         from admin.knowledge_runtime import write_skill_candidate
 

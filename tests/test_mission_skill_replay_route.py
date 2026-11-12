@@ -89,6 +89,28 @@ class _ReplayRuntime:
 
     def replay_candidate(self, **kwargs):
         self.calls.append(kwargs)
+        if self.error and isinstance(self.error, (FileNotFoundError, PermissionError, ValueError)):
+            raise self.error
+        callback = kwargs.get("on_candidate_bound")
+        if callable(callback):
+            context = {
+                "tenant_id": "tenant-a",
+                "mission_run_id": "run-a",
+                "node_id": kwargs["node_id"],
+                "task_id": kwargs["task_id"],
+            }
+            callback({
+                "skill_binding": {
+                    "schema_version": "mission.skill-replay-binding.v1",
+                    "skill_id": kwargs["skill_id"],
+                    "skill_version": "1.0.0",
+                    "content_sha256": "a" * 64,
+                    "trust_level": "draft",
+                    "mission_context": context,
+                },
+                "stage_request_id": "33333333-3333-4333-8333-333333333333",
+                "execution_request_id": "44444444-4444-4444-8444-444444444444",
+            })
         if self.error:
             raise self.error
         return self.result
@@ -134,6 +156,10 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(actions[0]["experience_id"], "experience-a")
         self.assertTrue(actions[0]["execution_succeeded"])
         self.assertEqual(actions[0]["idempotency_key"], "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(actions[0]["candidate_skill_version"], "1.0.0")
+        self.assertEqual(actions[0]["candidate_content_sha256"], "a" * 64)
+        self.assertEqual(actions[0]["stage_request_id"], "33333333-3333-4333-8333-333333333333")
+        self.assertEqual(actions[0]["execution_request_id"], "44444444-4444-4444-8444-444444444444")
         self.assertEqual(actions[0]["operation_result"], response["data"])
 
     def test_same_idempotency_key_returns_cached_operation_without_second_broker_call(self):

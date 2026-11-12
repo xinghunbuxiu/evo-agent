@@ -231,6 +231,42 @@ def register_mission_routes(
 
         partial_evidence_ref = None
         outcome_indeterminate = False
+
+        def persist_candidate_binding(candidate_binding: dict) -> None:
+            if not isinstance(candidate_binding, dict):
+                raise ValueError("Replay candidate binding must be an object")
+            binding = candidate_binding.get("skill_binding")
+            if not isinstance(binding, dict):
+                raise ValueError("Replay candidate binding is missing its immutable Skill identity")
+            with exclusive_mission_claim_lock(workspace):
+                current_state = load_mission_runs_strict(workspace)
+                current_run = next((
+                    item for item in current_state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                if not isinstance(current_run, dict):
+                    raise RuntimeError("Mission disappeared before candidate identity could be pinned")
+                current_actions = current_run.get("actions") if isinstance(current_run.get("actions"), list) else []
+                current_action = next((
+                    item for item in current_actions
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if not isinstance(current_action, dict) or current_action.get("status") != "running":
+                    raise RuntimeError("Replay action is no longer running; refusing Broker dispatch")
+                current_action.update({
+                    "skill_binding": binding,
+                    "candidate_skill_version": binding.get("skill_version"),
+                    "candidate_content_sha256": binding.get("content_sha256"),
+                    "stage_request_id": candidate_binding.get("stage_request_id"),
+                    "execution_request_id": candidate_binding.get("execution_request_id"),
+                    "candidate_pinned_at": datetime.now().astimezone().isoformat(),
+                })
+                current_run["actions"] = current_actions
+                current_run["updated_at"] = datetime.now().astimezone().isoformat()
+                save_mission_runs(workspace, current_state)
+
         try:
             operation = await asyncio.to_thread(
                 skill_replay_runtime.replay_candidate,
@@ -239,6 +275,7 @@ def register_mission_routes(
                 node_id=node_id,
                 task_id=task_id,
                 skill_id=skill_id,
+                on_candidate_bound=persist_candidate_binding,
             )
         except FileNotFoundError:
             error_status, error_message = 404, "未找到该租户的 Skill 候选"
