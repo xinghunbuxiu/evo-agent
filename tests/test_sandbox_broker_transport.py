@@ -50,6 +50,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         self.key = Ed25519PrivateKey.generate()
         self.service = SandboxBrokerService(
             workspace_roots={"test-workspace": root},
+            workspace_tenants={"test-workspace": ["tenant-test"]},
             replay_store=BrokerReplayStore(Path(self.temp.name) / "broker" / "replay.sqlite3"),
             executor=lambda _spec: RunnerProcessOutput(0, b"ok", b""),
             signing_key=self.key,
