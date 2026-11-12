@@ -28,14 +28,14 @@ class RouteApp:
         return decorator
 
 
-def _request(body=None, *, authenticated=True):
+def _request(body=None, *, authenticated=True, idempotency_key="11111111-1111-4111-8111-111111111111"):
     payload = json.dumps(body or {}).encode("utf-8")
 
     async def receive():
         return {"type": "http.request", "body": payload, "more_body": False}
 
     headers = [(b"cookie", b"session=valid")] if authenticated else []
-    headers.append((b"idempotency-key", b"11111111-1111-4111-8111-111111111111"))
+    headers.append((b"idempotency-key", idempotency_key.encode("ascii")))
     return Request({
         "type": "http",
         "method": "POST",
@@ -252,9 +252,37 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         ))
         self.assertEqual(response["status"], 502)
         action = load_mission_runs(self.workspace)["items"][0]["actions"][0]
-        self.assertEqual(action["status"], "failed")
+        self.assertEqual(action["status"], "interrupted")
+        self.assertEqual(action["recovery_status"], "needs_review")
+        self.assertEqual(action["recovery_reason"], "skill_replay_outcome_indeterminate")
         self.assertEqual(action["evidence_id"], "evidence-partial")
         self.assertEqual(action["evidence_ref"]["sha256"], "a" * 64)
+
+    def test_indeterminate_replay_blocks_a_new_idempotency_key(self):
+        runtime = _ReplayRuntime(error=RuntimeError("Broker response outcome is unknown"))
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
+        first = asyncio.run(handler(
+            request=_request({"node_id": "node-a"}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        second = asyncio.run(handler(
+            request=_request(
+                {"node_id": "node-a"},
+                idempotency_key="22222222-2222-4222-8222-222222222222",
+            ),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+        ))
+        self.assertEqual(first["status"], 502)
+        self.assertEqual(second["status"], 409)
+        self.assertEqual(runtime.calls.__len__(), 1)
+        actions = load_mission_runs(self.workspace)["items"][0]["actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["status"], "interrupted")
+        self.assertEqual(actions[0]["recovery_status"], "needs_review")
 
     def test_unknown_node_is_rejected_without_action_or_broker_call(self):
         runtime = _ReplayRuntime()

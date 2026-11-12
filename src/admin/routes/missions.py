@@ -314,7 +314,10 @@ def register_mission_routes(
                 save_mission_runs(workspace, state)
             return success_response(operation, completion_message)
 
-        # Keep a durable failed operation record; a transport failure is not evidence of Skill success.
+        # Once the runtime has been entered, an unclassified exception may
+        # follow a Broker side effect whose response was lost. Keep the node
+        # blocked for review; a new HTTP idempotency key must not create a new
+        # Broker task and accidentally execute the Skill twice.
         try:
             with exclusive_mission_claim_lock(workspace):
                 state = load_mission_runs_strict(workspace)
@@ -331,12 +334,14 @@ def register_mission_routes(
                     ), None)
                     if isinstance(recorded, dict):
                         recorded.update({
-                            "status": "failed",
+                            "status": "interrupted",
+                            "recovery_status": "needs_review",
+                            "recovery_reason": "skill_replay_outcome_indeterminate",
                             "detail": error_message,
-                            "error_type": "skill_replay_rejected_or_unavailable",
+                            "error_type": "skill_replay_outcome_indeterminate",
                             "error_status": error_status,
                             "error_message": error_message,
-                            "completed_at": datetime.now().astimezone().isoformat(),
+                            "interrupted_at": datetime.now().astimezone().isoformat(),
                         })
                         if isinstance(partial_evidence_ref, dict):
                             recorded["evidence_ref"] = partial_evidence_ref

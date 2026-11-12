@@ -105,10 +105,18 @@ class SkillReplayMissionAdapter:
             expected_key_id=self.broker_key_id, skill_binding=binding,
             request_id=request_id,
         )
-        evidence_ref = self.evidence_store.record(
-            attested, tenant_id=tenant_id, workspace_id=self.workspace_id,
-            mission_context=context, skill_binding=binding,
-        )
+        try:
+            evidence_ref = self.evidence_store.record(
+                attested, tenant_id=tenant_id, workspace_id=self.workspace_id,
+                mission_context=context, skill_binding=binding,
+            )
+        except Exception as exc:
+            # The Broker may already have executed this exact request. If local
+            # evidence persistence fails, surface an indeterminate operation
+            # rather than a retry-safe candidate validation error.
+            raise SkillReplayMissionError(
+                "Broker execution completed but signed evidence persistence failed",
+            ) from exc
         try:
             experience = self.evidence_store.record_experience(
                 self.experience_workspace, tenant_id=tenant_id,
