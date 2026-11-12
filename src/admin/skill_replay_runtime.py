@@ -55,6 +55,14 @@ class SkillReplayRuntimeConfigurationError(ValueError):
     """The optional Mission-to-Broker replay configuration is unsafe or incomplete."""
 
 
+class SkillReplayOutcomeIndeterminate(RuntimeError):
+    """A downstream request may have committed; only status review can resolve it."""
+
+    def __init__(self, message: str, *, evidence_ref: dict | None = None):
+        super().__init__(message)
+        self.evidence_ref = dict(evidence_ref) if isinstance(evidence_ref, dict) else None
+
+
 def _deterministic_request_id(operation: str, identity: Mapping) -> str:
     """Bind Broker idempotency to the exact candidate or signed promotion evidence."""
     payload = json.dumps(
@@ -370,8 +378,14 @@ class SkillReplayRuntime:
                     "checks_sha256": validation_attestation.get("checks_sha256"),
                 }
             except Exception as exc:
-                validation = {"status": "rejected", "error_type": type(exc).__name__}
-                promotion = {"status": "blocked", "reason": "independent_validation_failed"}
+                # The Validator claims the request before evaluating it. A lost
+                # response or rejected policy can therefore leave a durable
+                # indeterminate claim; do not collapse that into a terminal
+                # rejection or continue to publication.
+                raise SkillReplayOutcomeIndeterminate(
+                    "independent Validator outcome is not durably confirmed",
+                    evidence_ref=replay.get("evidence"),
+                ) from exc
             else:
                 try:
                     promotion_request_id = _deterministic_request_id("promotion", {
@@ -406,7 +420,13 @@ class SkillReplayRuntime:
                         "validation_provenance": receipt.get("validation_provenance"),
                     }
                 except Exception as exc:
-                    promotion = {"status": "failed", "error_type": type(exc).__name__}
+                    # Broker publication is create-once and may have committed
+                    # before the response was lost. Keep the Mission action in
+                    # manual recovery rather than recording a terminal failure.
+                    raise SkillReplayOutcomeIndeterminate(
+                        "Artifact Store publication outcome is not durably confirmed",
+                        evidence_ref=replay.get("evidence"),
+                    ) from exc
         LOGGER.info(
             "Mission Skill Replay recorded mission_run_id=%s node_id=%s skill_id=%s execution_succeeded=%s evidence_id=%s validation_status=%s promotion_status=%s",
             mission_run_id, node_id, skill.id,

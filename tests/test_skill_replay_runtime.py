@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from core import Skill, SkillTrustLevel
 from admin.skill_replay_runtime import (
+    SkillReplayOutcomeIndeterminate,
     SkillReplayRuntimeConfigurationError,
     SkillReplayRuntime,
     create_skill_replay_runtime,
@@ -165,15 +166,55 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         runtime.evidence_store.load_verified = lambda **kwargs: {
             "broker_attestation": {"schema_version": "mission.sandbox-broker-response.v4"},
         }
-        validate.side_effect = RuntimeError("policy rejected")
-        result = runtime.replay_candidate(
-            tenant_id="tenant-a",
-            mission_run={"mission_run_id": "mission-1", "tenant_id": "tenant-a", "plan": {"nodes": [{"id": "node-1"}]}},
-            node_id="node-1", task_id="task-1", skill_id="skill-demo",
-        )
-        self.assertEqual(result["validation"]["status"], "rejected")
-        self.assertEqual(result["promotion"]["status"], "blocked")
+        validate.side_effect = RuntimeError("policy rejected after Validator request claim")
+        with self.assertRaises(SkillReplayOutcomeIndeterminate) as raised:
+            runtime.replay_candidate(
+                tenant_id="tenant-a",
+                mission_run={"mission_run_id": "mission-1", "tenant_id": "tenant-a", "plan": {"nodes": [{"id": "node-1"}]}},
+                node_id="node-1", task_id="task-1", skill_id="skill-demo",
+            )
+        self.assertEqual(raised.exception.evidence_ref["evidence_id"], "evidence-1")
+        self.assertIn("Validator outcome", str(raised.exception))
         promote.assert_not_called()
+
+    @patch("admin.skill_replay_runtime.promote_skill_candidate_via_broker")
+    @patch("admin.skill_replay_runtime.request_skill_validation")
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_uncertain_artifact_publication_requires_manual_recovery(self, stage, validate, promote):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill())
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v1"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-1", "sha256": "b" * 64},
+            "experience": {"id": "experience-1"},
+        }
+        runtime.evidence_store.load_verified = lambda **kwargs: {
+            "broker_attestation": {"schema_version": "mission.sandbox-broker-response.v4"},
+        }
+        validate.return_value = {
+            "schema_version": "mission.skill-validation-attestation.v1",
+            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "policy_id": "policy-1",
+        }
+        promote.side_effect = RuntimeError("Broker response lost after possible publication")
+        with self.assertRaises(SkillReplayOutcomeIndeterminate) as raised:
+            runtime.replay_candidate(
+                tenant_id="tenant-a",
+                mission_run={"mission_run_id": "mission-1", "tenant_id": "tenant-a", "plan": {"nodes": [{"id": "node-1"}]}},
+                node_id="node-1", task_id="task-1", skill_id="skill-demo",
+            )
+        self.assertEqual(raised.exception.evidence_ref["evidence_id"], "evidence-1")
+        self.assertIn("publication outcome", str(raised.exception))
+        promote.assert_called_once()
 
     def test_rejects_symlinked_broker_public_key(self):
         real_key = self.root / "real-broker.pub"
