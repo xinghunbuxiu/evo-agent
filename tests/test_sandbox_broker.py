@@ -778,5 +778,19 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+    def test_replay_lookup_is_scoped_to_mission_identity(self):
+        self.store.claim(self.request_id,self.request)
+        self.assertEqual(self.store.lookup(self.request_id,workspace_id="project-test",mission_context=self.request["mission_context"]),{"status":"indeterminate"})
+        with self.assertRaisesRegex(BrokerRequestRejected,"not available"):
+            self.store.lookup(self.request_id,workspace_id="project-test",mission_context={**self.request["mission_context"],"tenant_id":"tenant-other"})
+        self.assertEqual(self.store.lookup(str(uuid.uuid4()),workspace_id="project-test",mission_context=self.request["mission_context"]),{"status":"not_found"})
+
+    def test_completed_replay_lookup_returns_exact_cached_response(self):
+        self.store.claim(self.request_id,self.request)
+        response={"request_id":self.request_id,"signature":{"value":"signed"}}
+        self.store.complete(self.request_id,self.request,response)
+        self.assertEqual(self.store.lookup(self.request_id,workspace_id="project-test",mission_context=self.request["mission_context"]),{"status":"completed","response":response})
+
+
 if __name__ == "__main__":
     unittest.main()

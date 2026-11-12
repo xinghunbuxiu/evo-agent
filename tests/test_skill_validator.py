@@ -347,5 +347,18 @@ class SkillValidatorTests(unittest.TestCase):
             )
 
 
+    def test_validator_replay_lookup_is_scoped_to_mission_identity(self):
+        request_id=self.request["request_id"]
+        self.request_store.claim(request_id,self.request)
+        self.assertEqual(self.request_store.lookup(request_id,workspace_id=self.workspace_id,mission_context=self.context),{"status":"indeterminate"})
+        with self.assertRaisesRegex(SkillValidatorError,"not available"):
+            self.request_store.lookup(request_id,workspace_id=self.workspace_id,mission_context={**self.context,"tenant_id":"tenant-other"})
+        self.assertEqual(self.request_store.lookup(str(uuid.uuid4()),workspace_id=self.workspace_id,mission_context=self.context),{"status":"not_found"})
+
+    def test_completed_validator_lookup_returns_exact_cached_response(self):
+        response=self.service.validate(self.request)
+        self.assertEqual(self.request_store.lookup(self.request["request_id"],workspace_id=self.workspace_id,mission_context=self.context),{"status":"completed","response":response})
+
+
 if __name__ == "__main__":
     unittest.main()

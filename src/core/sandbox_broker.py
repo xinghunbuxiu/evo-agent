@@ -96,7 +96,8 @@ class BrokerReplayStore:
                     request_id TEXT PRIMARY KEY,
                     request_digest TEXT NOT NULL,
                     claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    response_json TEXT
+                    response_json TEXT,
+                    workspace_id TEXT, tenant_id TEXT, mission_run_id TEXT, node_id TEXT, task_id TEXT
                 )
                 """
             )
@@ -105,10 +106,10 @@ class BrokerReplayStore:
                     "PRAGMA table_info(broker_requests)"
                 ).fetchall()
             }
-            if "response_json" not in columns:
-                connection.execute(
-                    "ALTER TABLE broker_requests ADD COLUMN response_json TEXT"
-                )
+            migrations = {"response_json":"TEXT","workspace_id":"TEXT","tenant_id":"TEXT","mission_run_id":"TEXT","node_id":"TEXT","task_id":"TEXT"}
+            for name, sql_type in migrations.items():
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE broker_requests ADD COLUMN {name} {sql_type}")
         finally:
             connection.close()
         if self.database_path.exists():
@@ -153,9 +154,17 @@ class BrokerReplayStore:
                         "cached Broker response is invalid; operator review is required"
                     )
                 return response
+            context = request.get("mission_context")
+            workspace_id = request.get("workspace_id")
+            if not isinstance(context, dict) or not isinstance(workspace_id, str):
+                raise BrokerRequestRejected("request identity is missing from replay ledger claim")
+            identity = tuple(context.get(key) for key in ("tenant_id","mission_run_id","node_id","task_id"))
+            if any(not isinstance(value,str) or not value for value in identity):
+                raise BrokerRequestRejected("request Mission identity is invalid")
             connection.execute(
-                "INSERT INTO broker_requests(request_id, request_digest) VALUES (?, ?)",
-                (request_id, digest),
+                """INSERT INTO broker_requests(request_id,request_digest,workspace_id,tenant_id,mission_run_id,node_id,task_id)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (request_id,digest,workspace_id,*identity),
             )
             connection.execute("COMMIT")
             return None
@@ -165,6 +174,33 @@ class BrokerReplayStore:
             raise
         finally:
             connection.close()
+
+    def lookup(self, request_id: str, *, workspace_id: str, mission_context: dict) -> dict:
+        """Read an outcome only for its exact persisted Mission identity."""
+        if not isinstance(request_id,str) or not _UUID_RE.fullmatch(request_id):
+            raise BrokerRequestRejected("request_id is invalid")
+        try: context = _normalize_mission_context(mission_context)
+        except ValueError as exc: raise BrokerRequestRejected("Mission identity is invalid") from exc
+        if not isinstance(workspace_id,str) or not _WORKSPACE_ID_RE.fullmatch(workspace_id):
+            raise BrokerRequestRejected("workspace_id is invalid")
+        connection=self._connect()
+        try:
+            row=connection.execute(
+                "SELECT response_json,workspace_id,tenant_id,mission_run_id,node_id,task_id FROM broker_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+        finally: connection.close()
+        if row is None: return {"status":"not_found"}
+        expected=(workspace_id,context["tenant_id"],context["mission_run_id"],context["node_id"],context["task_id"])
+        if any(value is None for value in row[1:]) or tuple(row[1:])!=expected:
+            raise BrokerRequestRejected("request outcome is not available for this Mission identity")
+        if row[0] is None: return {"status":"indeterminate"}
+        try: response=json.loads(row[0])
+        except (TypeError,json.JSONDecodeError) as exc:
+            raise BrokerRequestRejected("cached Broker response is corrupt; operator review is required") from exc
+        if not isinstance(response,dict) or response.get("request_id")!=request_id:
+            raise BrokerRequestRejected("cached Broker response is invalid; operator review is required")
+        return {"status":"completed","response":response}
 
     def complete(self, request_id: str, request: dict, response: dict) -> None:
         """Durably cache the signed response before it is sent over the socket."""

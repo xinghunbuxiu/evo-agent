@@ -299,10 +299,16 @@ class SkillValidatorRequestStore:
                     request_id TEXT PRIMARY KEY,
                     request_digest TEXT NOT NULL,
                     claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    response_json TEXT
+                    response_json TEXT,
+                    workspace_id TEXT, tenant_id TEXT, mission_run_id TEXT, node_id TEXT, task_id TEXT
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(validator_requests)").fetchall()}
+            migrations = {"workspace_id":"TEXT","tenant_id":"TEXT","mission_run_id":"TEXT","node_id":"TEXT","task_id":"TEXT"}
+            for name, sql_type in migrations.items():
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE validator_requests ADD COLUMN {name} {sql_type}")
             self._secure_database_files()
         finally:
             connection.close()
@@ -337,9 +343,15 @@ class SkillValidatorRequestStore:
                 if not isinstance(response, dict):
                     raise SkillValidatorError("cached Validator response is invalid")
                 return response
+            context = request.get("mission_context")
+            workspace_id = request.get("workspace_id")
+            if not isinstance(context, Mapping) or not isinstance(workspace_id,str):
+                raise SkillValidatorError("validation Mission identity is missing from replay ledger claim")
+            normalized = _context(context)
             connection.execute(
-                "INSERT INTO validator_requests(request_id, request_digest) VALUES (?, ?)",
-                (request_id, digest),
+                """INSERT INTO validator_requests(request_id,request_digest,workspace_id,tenant_id,mission_run_id,node_id,task_id)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (request_id,digest,workspace_id,normalized["tenant_id"],normalized["mission_run_id"],normalized["node_id"],normalized["task_id"]),
             )
             connection.execute("COMMIT")
             self._secure_database_files()
@@ -350,6 +362,30 @@ class SkillValidatorRequestStore:
             raise
         finally:
             connection.close()
+
+    def lookup(self, request_id: str, *, workspace_id: str, mission_context: Mapping[str, Any]) -> dict:
+        """Read a validation outcome only for its exact persisted Mission identity."""
+        try: uuid.UUID(request_id)
+        except (ValueError,TypeError,AttributeError) as exc: raise SkillValidatorError("validation request_id is invalid") from exc
+        workspace_id=_identity(workspace_id,"workspace_id",_WORKSPACE_RE)
+        context=_context(mission_context)
+        connection=self._connect()
+        try:
+            row=connection.execute(
+                "SELECT response_json,workspace_id,tenant_id,mission_run_id,node_id,task_id FROM validator_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+        finally: connection.close()
+        if row is None: return {"status":"not_found"}
+        expected=(workspace_id,context["tenant_id"],context["mission_run_id"],context["node_id"],context["task_id"])
+        if any(value is None for value in row[1:]) or tuple(row[1:])!=expected:
+            raise SkillValidatorError("validation outcome is not available for this Mission identity")
+        if row[0] is None: return {"status":"indeterminate"}
+        try: response=json.loads(row[0])
+        except (TypeError,json.JSONDecodeError) as exc: raise SkillValidatorError("cached Validator response is corrupt; operator review is required") from exc
+        if not isinstance(response,dict) or response.get("request_id")!=request_id:
+            raise SkillValidatorError("cached Validator response is invalid; operator review is required")
+        return {"status":"completed","response":response}
 
     def complete(self, request_id: str, request: dict, response: dict) -> None:
         encoded = _canonical_json(response).decode("utf-8")
