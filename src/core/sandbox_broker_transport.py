@@ -125,7 +125,9 @@ def handle_broker_connection(
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BrokerTransportError("request frame is not valid UTF-8 JSON") from exc
         connection.settimeout(330.0)
-        if isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
+        if isinstance(request, dict) and request.get("schema_version") == "mission.broker-replay-status-request.v1":
+            response = service.lookup_replay_status(request)
+        elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
             response = service.stage_skill_candidate(request)
         elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
             response = service.promote_skill_candidate(request)
@@ -492,11 +494,31 @@ def request_broker(
     return response
 
 
+def request_broker_replay_status(
+    socket_path: str, *, request_id: str, workspace_id: str,
+    mission_context: dict[str, str], timeout_seconds: float = 10.0,
+) -> dict:
+    """Query the durable outcome for one original Broker request identity."""
+    request={"schema_version":"mission.broker-replay-status-request.v1",
+             "request_id":request_id,"workspace_id":workspace_id,
+             "mission_context":dict(mission_context)}
+    response=request_broker(socket_path,request,timeout_seconds=timeout_seconds)
+    if response.get("schema_version")!="mission.broker-replay-status-response.v1" or response.get("request_id")!=request_id:
+        raise BrokerTransportError("Broker replay status response is malformed or rejected")
+    status=response.get("status")
+    if status not in {"not_found","indeterminate","completed"}:
+        raise BrokerTransportError("Broker replay status value is invalid")
+    if status=="completed" and not isinstance(response.get("response"),dict):
+        raise BrokerTransportError("Broker completed replay response is missing")
+    return response
+
+
 __all__ = [
     "BrokerTransportError",
     "handle_broker_connection",
     "serve_listener",
     "request_broker",
+    "request_broker_replay_status",
     "execute_via_broker",
     "execute_via_broker_attested",
     "stage_skill_candidate_via_broker",

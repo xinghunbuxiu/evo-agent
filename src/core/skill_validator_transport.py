@@ -79,7 +79,10 @@ def handle_validator_connection(
     raw = _recv_frame(connection, MAX_VALIDATOR_REQUEST_BYTES)
     try:
         request = json.loads(raw.decode("utf-8"))
-        response = service.validate(request)
+        if isinstance(request,dict) and request.get("schema_version")=="mission.skill-validation-status-request.v1":
+            response=service.lookup_request_status(request)
+        else:
+            response = service.validate(request)
         payload = json.dumps(
             response, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False, allow_nan=False,
@@ -175,7 +178,39 @@ def request_skill_validation(
         raise SkillValidatorTransportError("Validator attestation verification failed") from exc
 
 
+def request_skill_validator_status(
+    socket_path: str, *, request_id: str, workspace_id: str,
+    mission_context: dict[str,str], timeout_seconds: float = 10.0,
+) -> dict:
+    """Query the durable outcome for one original Validator request identity."""
+    request={"schema_version":"mission.skill-validation-status-request.v1",
+             "request_id":request_id,"workspace_id":workspace_id,
+             "mission_context":dict(mission_context)}
+    try:
+        payload=json.dumps(request,sort_keys=True,separators=(",",":"),ensure_ascii=False,allow_nan=False).encode("utf-8")
+    except (TypeError,ValueError,UnicodeError) as exc:
+        raise ValueError("Validator status request is not strict JSON") from exc
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+        connection.settimeout(timeout_seconds)
+        try:
+            connection.connect(socket_path)
+            connection.sendall(_FRAME.pack(len(payload))+payload)
+            response_bytes=_recv_frame(connection,MAX_VALIDATOR_RESPONSE_BYTES)
+        except OSError as exc:
+            raise SkillValidatorTransportError("could not complete Validator status query") from exc
+    try: response=json.loads(response_bytes.decode("utf-8"))
+    except (UnicodeDecodeError,json.JSONDecodeError) as exc: raise SkillValidatorTransportError("Validator returned invalid status JSON") from exc
+    if not isinstance(response,dict) or response.get("schema_version")!="mission.skill-validation-status-response.v1" or response.get("request_id")!=request_id:
+        raise SkillValidatorTransportError("Validator status response is malformed or rejected")
+    if response.get("status") not in {"not_found","indeterminate","completed"}:
+        raise SkillValidatorTransportError("Validator status value is invalid")
+    if response["status"]=="completed" and not isinstance(response.get("response"),dict):
+        raise SkillValidatorTransportError("Validator completed response is missing")
+    return response
+
+
 __all__ = [
     "SkillValidatorTransportError", "handle_validator_connection",
     "serve_validator_listener", "request_skill_validation",
+    "request_skill_validator_status",
 ]

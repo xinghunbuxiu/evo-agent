@@ -471,6 +471,24 @@ class SkillValidatorService:
         self.request_store.complete(request["request_id"], request, response)
         return response
 
+    def lookup_request_status(self, request: Any) -> dict[str, Any]:
+        fields={"schema_version","request_id","workspace_id","mission_context"}
+        if not isinstance(request,dict) or set(request)!=fields:
+            raise SkillValidatorError("Validator status request has unsupported or missing fields")
+        if request.get("schema_version")!="mission.skill-validation-status-request.v1":
+            raise SkillValidatorError("unsupported Validator status request schema")
+        request_id=request.get("request_id")
+        try: uuid.UUID(request_id)
+        except (ValueError,TypeError,AttributeError) as exc: raise SkillValidatorError("validation request_id is invalid") from exc
+        workspace_id=_identity(request.get("workspace_id"),"workspace_id",_WORKSPACE_RE)
+        if workspace_id not in self.workspace_ids:
+            raise SkillValidatorError("workspace_id is not authorized for this Validator")
+        context=_context(request.get("mission_context"))
+        if self.request_store is None:
+            raise SkillValidatorError("Validator replay status store is not configured")
+        outcome=self.request_store.lookup(request_id,workspace_id=workspace_id,mission_context=context)
+        return {"schema_version":"mission.skill-validation-status-response.v1","request_id":request_id,**outcome}
+
     def _validate_uncached(self, request: Any) -> dict[str, Any]:
         fields = {
             "schema_version", "request_id", "workspace_id", "mission_context",

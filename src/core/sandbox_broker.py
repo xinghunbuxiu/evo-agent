@@ -647,6 +647,24 @@ class SandboxBrokerService:
         self.replay_store.complete(request_id, request, response)
         return response
 
+    def lookup_replay_status(self, request: object) -> dict:
+        fields={"schema_version","request_id","workspace_id","mission_context"}
+        if not isinstance(request,dict) or set(request)!=fields:
+            raise BrokerRequestRejected("Broker status request has unsupported or missing fields")
+        if request.get("schema_version")!="mission.broker-replay-status-request.v1":
+            raise BrokerRequestRejected("unsupported Broker status request schema")
+        request_id=request.get("request_id")
+        if not isinstance(request_id,str) or not _UUID_RE.fullmatch(request_id):
+            raise BrokerRequestRejected("request_id is invalid")
+        workspace_id=request.get("workspace_id")
+        if not isinstance(workspace_id,str) or workspace_id not in self.workspace_roots:
+            raise BrokerRequestRejected("workspace_id is not registered with this broker")
+        try: context=_normalize_mission_context(request.get("mission_context"))
+        except ValueError as exc: raise BrokerRequestRejected("Mission identity is invalid") from exc
+        self._authorize_workspace_tenant(workspace_id,context["tenant_id"])
+        outcome=self.replay_store.lookup(request_id,workspace_id=workspace_id,mission_context=context)
+        return {"schema_version":"mission.broker-replay-status-response.v1","request_id":request_id,**outcome}
+
     def handle_request(self, request: object) -> dict:
         validated = validate_broker_request(request)
         request_id = validated["request_id"]
