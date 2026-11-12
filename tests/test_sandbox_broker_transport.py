@@ -25,6 +25,7 @@ from core.sandbox_broker_transport import (
     BrokerTransportError,
     handle_broker_connection,
     request_broker,
+    request_broker_replay_status,
     serve_listener,
     stage_skill_candidate_via_broker,
 )
@@ -284,6 +285,43 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         thread.join(timeout=3)
         listener.close()
         self.assertEqual(response["request_id"], self.request_id)
+
+
+    def test_replay_status_round_trips_over_authenticated_unix_socket(self):
+        import os
+        completed = self.service.handle_request(self.request)
+        socket_path = str(Path(self.temp.name) / "broker-status.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(socket_path)
+        listener.listen(8)
+        stop = threading.Event()
+        thread = threading.Thread(target=serve_listener, kwargs={
+            "listener": listener, "service": self.service,
+            "allowed_uids": [os.getuid()], "stop_event": stop, "max_workers": 1,
+        }, daemon=True)
+        thread.start()
+        try:
+            status = request_broker_replay_status(
+                socket_path, request_id=self.request_id, workspace_id="test-workspace",
+                mission_context=self.request["mission_context"],
+            )
+            self.assertEqual(status["status"], "completed")
+            self.assertEqual(status["response"], completed)
+            missing = request_broker_replay_status(
+                socket_path, request_id=str(uuid.uuid4()), workspace_id="test-workspace",
+                mission_context=self.request["mission_context"],
+            )
+            self.assertEqual(missing["status"], "not_found")
+            with self.assertRaises(BrokerTransportError):
+                request_broker_replay_status(
+                    socket_path, request_id=self.request_id, workspace_id="test-workspace",
+                    mission_context={**self.request["mission_context"], "tenant_id": "tenant-other"},
+                )
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+            listener.close()
+            Path(socket_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

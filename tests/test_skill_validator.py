@@ -26,7 +26,10 @@ from core.skill_validator import (
     VALIDATION_REQUEST_SCHEMA, SkillValidatorError, SkillValidatorRequestStore,
     SkillValidatorService, verify_validation_response,
 )
-from core.skill_validator_transport import request_skill_validation, serve_validator_listener
+from core.skill_validator_transport import (
+    request_skill_validation, request_skill_validator_status,
+    serve_validator_listener, SkillValidatorTransportError,
+)
 
 
 def _canonical(value):
@@ -358,6 +361,50 @@ class SkillValidatorTests(unittest.TestCase):
     def test_completed_validator_lookup_returns_exact_cached_response(self):
         response=self.service.validate(self.request)
         self.assertEqual(self.request_store.lookup(self.request["request_id"],workspace_id=self.workspace_id,mission_context=self.context),{"status":"completed","response":response})
+
+
+    def test_validator_status_round_trips_over_authenticated_unix_socket(self):
+        completed = self.service.validate(self.request)
+        pending_id = str(uuid.uuid4())
+        self.request_store.claim(pending_id, {**self.request, "request_id": pending_id})
+        socket_path = self.root / "validator-status.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(socket_path))
+        listener.listen(8)
+        stop = threading.Event()
+        thread = threading.Thread(target=serve_validator_listener, kwargs={
+            "listener": listener, "service": self.service,
+            "allowed_uids": [os.getuid()], "stop_event": stop, "max_workers": 1,
+        }, daemon=True)
+        thread.start()
+        try:
+            status = request_skill_validator_status(
+                str(socket_path), request_id=self.request["request_id"],
+                workspace_id=self.workspace_id, mission_context=self.context,
+            )
+            self.assertEqual(status["status"], "completed")
+            self.assertEqual(status["response"], completed)
+            pending = request_skill_validator_status(
+                str(socket_path), request_id=pending_id,
+                workspace_id=self.workspace_id, mission_context=self.context,
+            )
+            self.assertEqual(pending["status"], "indeterminate")
+            missing = request_skill_validator_status(
+                str(socket_path), request_id=str(uuid.uuid4()),
+                workspace_id=self.workspace_id, mission_context=self.context,
+            )
+            self.assertEqual(missing["status"], "not_found")
+            with self.assertRaises(SkillValidatorTransportError):
+                request_skill_validator_status(
+                    str(socket_path), request_id=self.request["request_id"],
+                    workspace_id=self.workspace_id,
+                    mission_context={**self.context, "tenant_id": "tenant-other"},
+                )
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+            listener.close()
+            socket_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
