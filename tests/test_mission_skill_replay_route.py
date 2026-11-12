@@ -45,6 +45,20 @@ def _request(body=None, *, authenticated=True, idempotency_key="11111111-1111-41
     }, receive)
 
 
+def _get_request(*, tenant_id="tenant-a", authenticated=True):
+    headers = [(b"cookie", b"session=valid")] if authenticated else []
+    query = f"tenant_id={tenant_id}&limit=20".encode("utf-8") if tenant_id else b"limit=20"
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+    return Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/missions/skill-replays/recovery-review",
+        "headers": headers,
+        "query_string": query,
+    }, receive)
+
+
 def _register(app, workspace, runtime, *, authorized=True, role="tenant_admin"):
     return register_mission_routes(
         app,
@@ -309,6 +323,73 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["status"], "interrupted")
         self.assertEqual(actions[0]["recovery_status"], "needs_review")
+
+    def test_skill_replay_recovery_review_is_tenant_admin_only_and_exposes_pinned_identity(self):
+        save_mission_runs(self.workspace, {"items": [
+            {
+                "mission_run_id": "run-a",
+                "tenant_id": "tenant-a",
+                "goal": "review interrupted replay",
+                "actions": [{
+                    "action_type": "skill_replay",
+                    "status": "interrupted",
+                    "recovery_status": "needs_review",
+                    "recovery_reason": "skill_replay_outcome_indeterminate",
+                    "task_id": "task-a",
+                    "node_id": "node-a",
+                    "skill_id": "skill-a",
+                    "idempotency_key": "11111111-1111-4111-8111-111111111111",
+                    "skill_binding": {
+                        "schema_version": "mission.skill-replay-binding.v1",
+                        "skill_id": "skill-a",
+                        "skill_version": "1.0.0",
+                        "content_sha256": "a" * 64,
+                        "trust_level": "draft",
+                        "mission_context": {
+                            "tenant_id": "tenant-a",
+                            "mission_run_id": "run-a",
+                            "node_id": "node-a",
+                            "task_id": "task-a",
+                        },
+                    },
+                    "stage_request_id": "33333333-3333-4333-8333-333333333333",
+                    "execution_request_id": "44444444-4444-4444-8444-444444444444",
+                }, {
+                    "action_type": "skill_replay",
+                    "status": "completed",
+                    "task_id": "task-done",
+                    "node_id": "node-a",
+                    "skill_id": "skill-a",
+                }],
+            },
+            {
+                "mission_run_id": "run-other",
+                "tenant_id": "tenant-other",
+                "actions": [{
+                    "action_type": "skill_replay",
+                    "status": "interrupted",
+                    "recovery_status": "needs_review",
+                    "task_id": "task-other",
+                    "node_id": "node-other",
+                    "skill_id": "skill-other",
+                }],
+            },
+        ]})
+        app = RouteApp()
+        _register(app, self.workspace, _ReplayRuntime())
+        handler = app.routes[("GET", "/api/missions/skill-replays/recovery-review")]
+        response = asyncio.run(handler(request=_get_request(), tenant_id="tenant-a", limit=20))
+        self.assertEqual(response["data"]["count"], 1)
+        item = response["data"]["items"][0]
+        self.assertEqual(item["candidate_binding_status"], "pinned")
+        self.assertEqual(item["skill_binding"]["content_sha256"], "a" * 64)
+        self.assertEqual(item["execution_request_id"], "44444444-4444-4444-8444-444444444444")
+
+        member_app = RouteApp()
+        _register(member_app, self.workspace, _ReplayRuntime(), role="member")
+        member_handler = member_app.routes[("GET", "/api/missions/skill-replays/recovery-review")]
+        denied = asyncio.run(member_handler(request=_get_request(), tenant_id="tenant-a", limit=20))
+        self.assertEqual(denied["status"], 403)
 
     def test_unknown_node_is_rejected_without_action_or_broker_call(self):
         runtime = _ReplayRuntime()
