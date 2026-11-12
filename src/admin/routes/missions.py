@@ -230,6 +230,7 @@ def register_mission_routes(
             save_mission_runs(workspace, state)
 
         partial_evidence_ref = None
+        outcome_indeterminate = False
         try:
             operation = await asyncio.to_thread(
                 skill_replay_runtime.replay_candidate,
@@ -246,6 +247,7 @@ def register_mission_routes(
         except ValueError as exc:
             error_status, error_message = 409, f"Skill 候选不符合 Replay 契约: {str(exc)[:180]}"
         except Exception as exc:
+            outcome_indeterminate = True
             candidate_evidence_ref = getattr(exc, "evidence_ref", None)
             if isinstance(candidate_evidence_ref, dict):
                 partial_evidence_ref = dict(candidate_evidence_ref)
@@ -334,15 +336,24 @@ def register_mission_routes(
                     ), None)
                     if isinstance(recorded, dict):
                         recorded.update({
-                            "status": "interrupted",
-                            "recovery_status": "needs_review",
-                            "recovery_reason": "skill_replay_outcome_indeterminate",
+                            "status": "interrupted" if outcome_indeterminate else "failed",
                             "detail": error_message,
-                            "error_type": "skill_replay_outcome_indeterminate",
+                            "error_type": (
+                                "skill_replay_outcome_indeterminate"
+                                if outcome_indeterminate
+                                else "skill_replay_rejected_or_unavailable"
+                            ),
                             "error_status": error_status,
                             "error_message": error_message,
-                            "interrupted_at": datetime.now().astimezone().isoformat(),
                         })
+                        if outcome_indeterminate:
+                            recorded.update({
+                                "recovery_status": "needs_review",
+                                "recovery_reason": "skill_replay_outcome_indeterminate",
+                                "interrupted_at": datetime.now().astimezone().isoformat(),
+                            })
+                        else:
+                            recorded["completed_at"] = datetime.now().astimezone().isoformat()
                         if isinstance(partial_evidence_ref, dict):
                             recorded["evidence_ref"] = partial_evidence_ref
                             recorded["evidence_id"] = partial_evidence_ref.get("evidence_id")
