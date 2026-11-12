@@ -419,6 +419,10 @@ def create_mission_delivery_skill_candidate(
     record_growth_event: Callable[..., object],
 ) -> dict:
     metrics = reconstruct_snapshot.get("evaluation_metrics", {}) if isinstance(reconstruct_snapshot.get("evaluation_metrics"), dict) else {}
+    if reconstruct_snapshot.get("evaluation_verdict") != "pass" or metrics.get("has_target_dir") is not True:
+        raise ValueError("Mission delivery acceptance must pass with a real target directory before drafting a Skill candidate")
+    if not str(reconstruct_snapshot.get("task_id") or "").strip():
+        raise ValueError("Mission delivery candidate requires the reconstruct task evidence ID")
     components = int(metrics.get("components", 0) or 0)
     promotion_node = next(
         node for node in mission_run["plan"]["nodes"]
