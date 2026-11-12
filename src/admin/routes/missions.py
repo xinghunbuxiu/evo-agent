@@ -555,6 +555,64 @@ def register_mission_routes(
                     elif skill_replay_runtime is None:
                         validator_status = {"status": "not_configured"}
 
+                # Status lookups are read-only and intentionally do not expose
+                # cached signed payloads here. A status alone is not proof that
+                # the Mission can be marked complete or safely replayed.
+                broker_values = {
+                    name: value.get("status") if isinstance(value, dict) else "unavailable"
+                    for name, value in broker_statuses.items()
+                }
+                validator_value = validator_status.get("status")
+                observed_statuses = [*broker_values.values(), validator_value]
+                if binding_status != "pinned":
+                    assessment = {
+                        "status": "invalid_or_missing_binding",
+                        "automatic_resume": False,
+                        "next_step": "operator_review_required",
+                    }
+                elif skill_replay_runtime is None or "unavailable" in observed_statuses:
+                    assessment = {
+                        "status": "status_unavailable",
+                        "automatic_resume": False,
+                        "next_step": "restore_status_services_and_retry_read_only_review",
+                    }
+                elif "indeterminate" in observed_statuses:
+                    assessment = {
+                        "status": "indeterminate",
+                        "automatic_resume": False,
+                        "next_step": "operator_review_required_no_replay",
+                    }
+                elif "not_found" in observed_statuses:
+                    assessment = {
+                        "status": "not_found",
+                        "automatic_resume": False,
+                        "next_step": "verify_original_immutable_payload_before_same_request_reissue",
+                    }
+                elif "not_recorded" in observed_statuses:
+                    assessment = {
+                        "status": "incomplete_lineage",
+                        "automatic_resume": False,
+                        "next_step": "operator_review_required",
+                    }
+                elif validator_value == "not_configured":
+                    assessment = {
+                        "status": "broker_only",
+                        "automatic_resume": False,
+                        "next_step": "skill_remains_draft_no_publication",
+                    }
+                elif all(value == "completed" for value in broker_values.values()) and validator_value == "completed":
+                    assessment = {
+                        "status": "completed_unverified",
+                        "automatic_resume": False,
+                        "next_step": "verify_signed_receipts_and_evidence_before_reconciling_mission",
+                    }
+                else:
+                    assessment = {
+                        "status": "manual_review_required",
+                        "automatic_resume": False,
+                        "next_step": "operator_review_required",
+                    }
+
                 reviews.append({
                     "mission_run_id": mission_run_id,
                     "tenant_id": tenant_id,
@@ -575,6 +633,7 @@ def register_mission_routes(
                     "promotion_request_id": action.get("promotion_request_id"),
                     "broker_status": broker_statuses,
                     "validator_status": validator_status,
+                    "recovery_assessment": assessment,
                     "evidence_ref": safe_evidence_ref,
                 })
                 if len(reviews) >= max(1, min(limit, 500)):

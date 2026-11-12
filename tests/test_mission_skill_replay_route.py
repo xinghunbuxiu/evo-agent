@@ -406,12 +406,63 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(item["broker_status"]["execution"]["status"], "completed")
         self.assertEqual(item["broker_status"]["promotion"]["status"], "completed")
         self.assertEqual(item["validator_status"]["status"], "indeterminate")
+        self.assertEqual(item["recovery_assessment"]["status"], "indeterminate")
+        self.assertFalse(item["recovery_assessment"]["automatic_resume"])
+        self.assertEqual(item["recovery_assessment"]["next_step"], "operator_review_required_no_replay")
 
         member_app = RouteApp()
         _register(member_app, self.workspace, _ReplayRuntime(), role="member")
         member_handler = member_app.routes[("GET", "/api/missions/skill-replays/recovery-review")]
         denied = asyncio.run(member_handler(request=_get_request(), tenant_id="tenant-a", limit=20))
         self.assertEqual(denied["status"], 403)
+
+    def test_recovery_review_reports_not_found_without_authorizing_automatic_replay(self):
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a",
+            "tenant_id": "tenant-a",
+            "goal": "review missing Broker request",
+            "actions": [{
+                "action_type": "skill_replay",
+                "status": "interrupted",
+                "recovery_status": "needs_review",
+                "task_id": "task-a",
+                "node_id": "node-a",
+                "skill_id": "skill-a",
+                "skill_binding": {
+                    "schema_version": "mission.skill-replay-binding.v1",
+                    "skill_id": "skill-a",
+                    "skill_version": "1.0.0",
+                    "content_sha256": "a" * 64,
+                    "trust_level": "draft",
+                    "mission_context": {
+                        "tenant_id": "tenant-a",
+                        "mission_run_id": "run-a",
+                        "node_id": "node-a",
+                        "task_id": "task-a",
+                    },
+                },
+                "stage_request_id": "33333333-3333-4333-8333-333333333333",
+                "execution_request_id": "44444444-4444-4444-8444-444444444444",
+                "validation_request_id": "55555555-5555-4555-8555-555555555555",
+                "promotion_request_id": "66666666-6666-4666-8666-666666666666",
+            }],
+        }]})
+        runtime = _ReplayRuntime()
+        runtime.broker_request_status = lambda request_id, mission_context: {
+            "status": "not_found" if request_id == "66666666-6666-4666-8666-666666666666" else "completed"
+        }
+        runtime.validator_request_status = lambda request_id, mission_context: {"status": "completed"}
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("GET", "/api/missions/skill-replays/recovery-review")]
+        response = asyncio.run(handler(request=_get_request(), tenant_id="tenant-a", limit=20))
+        item = response["data"]["items"][0]
+        self.assertEqual(item["recovery_assessment"]["status"], "not_found")
+        self.assertFalse(item["recovery_assessment"]["automatic_resume"])
+        self.assertEqual(
+            item["recovery_assessment"]["next_step"],
+            "verify_original_immutable_payload_before_same_request_reissue",
+        )
 
     def test_unknown_node_is_rejected_without_action_or_broker_call(self):
         runtime = _ReplayRuntime()
