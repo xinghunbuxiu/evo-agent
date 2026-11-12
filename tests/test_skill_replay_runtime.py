@@ -45,7 +45,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _skill(self, *, code="def run(context):\n    return {'ok': True}\n", contract=None):
+    def _skill(self, *, code="def run(context):\n    return {'ok': True}\n", contract=None, version="1.0.0"):
         parameters = {
             "mission_run_id": "mission-1",
             "mission_node_id": "node-1",
@@ -62,7 +62,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             code=code,
             parameters=parameters,
             trust_level=SkillTrustLevel.DRAFT,
-            version="1.0.0",
+            version=version,
         )
 
     def test_missing_configuration_keeps_replay_disabled(self):
@@ -255,6 +255,65 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["replay"]["evidence"]["evidence_id"], "evidence-1")
         self.assertEqual(result["validation"]["status"], "not_configured")
         self.assertEqual(result["promotion"]["status"], "not_attempted")
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_replay_requires_explicit_mission_tenant_before_broker_staging(self, stage):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill())
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        with self.assertRaisesRegex(ValueError, "tenant identity is missing or invalid"):
+            runtime.replay_candidate(
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "mission-1",
+                    "plan": {"nodes": [{"id": "node-1"}]},
+                },
+                node_id="node-1",
+                task_id="task-1",
+                skill_id="skill-demo",
+            )
+        stage.assert_not_called()
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_stage_idempotency_is_bound_to_candidate_identity(self, stage):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v1"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-1"},
+            "experience": {"id": "experience-1"},
+        }
+        mission_run = {
+            "mission_run_id": "mission-1",
+            "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-1"}]},
+        }
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill(version="1.0.0"))
+        runtime.replay_candidate(
+            tenant_id="tenant-a", mission_run=mission_run, node_id="node-1",
+            task_id="task-1", skill_id="skill-demo",
+        )
+        first_id = stage.call_args.kwargs["request_id"]
+
+        write_skill_candidate(self.workspace, "tenant-a", self._skill(version="1.0.1"))
+        runtime.replay_candidate(
+            tenant_id="tenant-a", mission_run=mission_run, node_id="node-1",
+            task_id="task-1", skill_id="skill-demo",
+        )
+        second_id = stage.call_args.kwargs["request_id"]
+
+        runtime.replay_candidate(
+            tenant_id="tenant-a", mission_run=mission_run, node_id="node-1",
+            task_id="task-1", skill_id="skill-demo",
+        )
+        third_id = stage.call_args.kwargs["request_id"]
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(second_id, third_id)
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_rejects_recipe_before_broker_staging(self, stage):

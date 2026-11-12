@@ -44,6 +44,51 @@ class MissionDeliverySkillCandidateGateTests(unittest.TestCase):
                 write_candidate.assert_not_called()
         growth_event.assert_not_called()
 
+    def test_promotion_action_does_not_save_experience_when_reconstruct_evidence_id_is_missing(self):
+        analyze_task = object()
+        reconstruct_task = object()
+        candidate = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("workers.javascript_reverse.runtime.ExperienceStore.save") as save_experience:
+                action = complete_javascript_reverse_promotion_action(
+                    workspace=Path(tmp),
+                    tenant_id="tenant-a",
+                    mission_run={
+                        "mission_run_id": "mission-a",
+                        "goal": "restore project",
+                        "context": {},
+                        "work_type_summary": {},
+                        "plan": {"nodes": []},
+                    },
+                    action={"node_id": "promote_knowledge", "decision_trace": []},
+                    analyze_task=analyze_task,
+                    reconstruct_task=reconstruct_task,
+                    inherited_skills=[],
+                    skill_ids_from_items=lambda items: [],
+                    extract_task_snapshot=lambda task: (
+                        {"task_id": "analyze-a", "summary": "Vue project"}
+                        if task is analyze_task
+                        else {
+                            "summary": "accepted output but missing lineage",
+                            "evaluation_verdict": "pass",
+                            "evaluation_score": 1.0,
+                            "evaluation_metrics": {"components": 1, "has_target_dir": True},
+                        }
+                    ),
+                    resolve_effective_growth_policy=lambda **kwargs: {},
+                    infer_framework_hint_from_delivery=lambda payload: "vue",
+                    safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                    create_mission_delivery_skill_candidate=candidate,
+                    build_snapshot_signature=lambda snapshot: {},
+                    record_growth_event=lambda *args, **kwargs: None,
+                    growth_policy_decision_label=lambda policy: "candidate",
+                    effective_platform_promotion_status=lambda policy: "candidate",
+                )
+                self.assertEqual(action["status"], "blocked")
+                self.assertEqual(action["promotion"]["reason"], "delivery_evidence_missing")
+                save_experience.assert_not_called()
+                candidate.assert_not_called()
+
     def test_promotion_action_does_not_save_experience_or_candidate_without_acceptance(self):
         analyze_task = object()
         reconstruct_task = object()

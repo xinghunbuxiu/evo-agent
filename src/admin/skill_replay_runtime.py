@@ -51,6 +51,17 @@ class SkillReplayRuntimeConfigurationError(ValueError):
     """The optional Mission-to-Broker replay configuration is unsafe or incomplete."""
 
 
+def _deterministic_request_id(operation: str, identity: Mapping) -> str:
+    """Bind Broker idempotency to the exact candidate or signed promotion evidence."""
+    payload = json.dumps(
+        {"operation": operation, "identity": dict(identity)},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    )
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"evo-agent:skill-replay:{payload}",
+    ))
+
+
 def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) -> dict | None:
     """Read only a tenant-local draft file without following symlinks."""
     workspace_root = Path(workspace).resolve(strict=True)
@@ -181,7 +192,10 @@ class SkillReplayRuntime:
             raise ValueError("Replay task identity is invalid")
         if not isinstance(skill_id, str) or not _ID_RE.fullmatch(skill_id):
             raise ValueError("skill_id is invalid")
-        if str(mission_run.get("tenant_id") or "default") != tenant_id:
+        mission_tenant_id = mission_run.get("tenant_id")
+        if not isinstance(mission_tenant_id, str) or not _ID_RE.fullmatch(mission_tenant_id):
+            raise ValueError("Mission run tenant identity is missing or invalid")
+        if mission_tenant_id != tenant_id:
             raise PermissionError("Mission tenant does not match replay tenant")
 
         plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
@@ -220,13 +234,12 @@ class SkillReplayRuntime:
             code=skill.code,
             public_key=self.broker_public_key,
             expected_key_id=self.broker_key_id,
-            request_id=str(uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                "evo-agent:skill-replay:stage:"
-                + ":".join(context[key] for key in (
-                    "tenant_id", "mission_run_id", "node_id", "task_id",
-                )),
-            )),
+            request_id=_deterministic_request_id("stage", {
+                "mission_context": context,
+                "skill_id": skill.id,
+                "skill_version": skill.version,
+                "content_sha256": binding["content_sha256"],
+            }),
         )
         spec = ExecutionProfileSpec(
             profile_id=SKILL_REPLAY_PROFILE_ID,
@@ -332,13 +345,13 @@ class SkillReplayRuntime:
                         validation_attestation=validation_attestation,
                         public_key=self.broker_public_key,
                         expected_key_id=self.broker_key_id,
-                        request_id=str(uuid.uuid5(
-                            uuid.NAMESPACE_URL,
-                            "evo-agent:skill-replay:promotion:"
-                            + ":".join(context[key] for key in (
-                                "tenant_id", "mission_run_id", "node_id", "task_id",
-                            )),
-                        )),
+                        request_id=_deterministic_request_id("promotion", {
+                            "mission_context": context,
+                            "skill_id": skill.id,
+                            "skill_version": skill.version,
+                            "content_sha256": binding["content_sha256"],
+                            "validation_attestation": validation_attestation,
+                        }),
                     )
                     promotion = {
                         "status": "published",

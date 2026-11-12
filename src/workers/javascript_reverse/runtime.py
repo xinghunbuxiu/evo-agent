@@ -422,22 +422,40 @@ def complete_javascript_reverse_promotion_action(
     reconstruct_snapshot = extract_task_snapshot(reconstruct_task)
     analyze_snapshot = extract_task_snapshot(analyze_task) if analyze_task else {}
     metrics = reconstruct_snapshot.get("evaluation_metrics", {}) if isinstance(reconstruct_snapshot.get("evaluation_metrics"), dict) else {}
-    if reconstruct_snapshot.get("evaluation_verdict") != "pass" or metrics.get("has_target_dir") is not True:
+    acceptance_failed = (
+        reconstruct_snapshot.get("evaluation_verdict") != "pass"
+        or metrics.get("has_target_dir") is not True
+    )
+    reconstruct_task_id = str(reconstruct_snapshot.get("task_id") or "").strip()
+    if acceptance_failed or not reconstruct_task_id:
+        missing_evidence = not reconstruct_task_id
         current["status"] = "blocked"
-        current["detail"] = "交付验收未通过或缺少真实目标目录；不沉淀成功经验，也不生成 Skill 候选"
+        current["detail"] = (
+            "缺少 reconstruct 任务证据 ID；不沉淀经验，也不生成 Skill 候选"
+            if missing_evidence
+            else "交付验收未通过或缺少真实目标目录；不沉淀成功经验，也不生成 Skill 候选"
+        )
         current["promotion"] = {
             "status": "blocked",
-            "reason": "delivery_acceptance_not_passed",
+            "reason": (
+                "delivery_evidence_missing"
+                if missing_evidence
+                else "delivery_acceptance_not_passed"
+            ),
             "validation_evidence": {
                 "verdict": reconstruct_snapshot.get("evaluation_verdict"),
                 "has_target_dir": metrics.get("has_target_dir"),
                 "reconstruct_task_id": reconstruct_snapshot.get("task_id"),
             },
         }
-        current["next_actions"] = [
-            "检查 reconstruct 的失败验收项和实际交付目录",
-            "修复后重新执行并通过独立验收，再沉淀经验或 Skill 候选",
-        ]
+        current["next_actions"] = (
+            ["恢复 reconstruct 任务证据 ID，再重新执行交付复盘"]
+            if missing_evidence
+            else [
+                "检查 reconstruct 的失败验收项和实际交付目录",
+                "修复后重新执行并通过独立验收，再沉淀经验或 Skill 候选",
+            ]
+        )
         return current
     framework_hint = infer_framework_hint_from_delivery({
         "summary": f"{analyze_snapshot.get('summary') or ''} {reconstruct_snapshot.get('summary') or ''}",
