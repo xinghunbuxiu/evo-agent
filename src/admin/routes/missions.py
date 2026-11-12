@@ -5,6 +5,7 @@ Mission 规划、执行与续跑接口。
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
