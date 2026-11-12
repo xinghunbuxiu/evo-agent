@@ -22,9 +22,13 @@ from core.sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID, broker_respons
 from core.sandbox_broker_transport import (
     promote_skill_candidate_via_broker,
     stage_skill_candidate_via_broker,
+    request_broker_replay_status,
 )
 from core.skill_validator import VALIDATION_REQUEST_SCHEMA
-from core.skill_validator_transport import request_skill_validation
+from core.skill_validator_transport import (
+    request_skill_validation,
+    request_skill_validator_status,
+)
 from core.skill_replay_contract import build_skill_replay_binding
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_replay_mission import SkillReplayMissionAdapter, build_skill_replay_execution_request_id
@@ -176,6 +180,21 @@ class SkillReplayRuntime:
             or arguments.args[0].arg != "context"
         ):
             raise ValueError("executable Skill entry point must have exactly one argument named context")
+
+    def broker_request_status(self, request_id: str, mission_context: Mapping[str, str]) -> dict:
+        return request_broker_replay_status(
+            self.socket_path, request_id=request_id, workspace_id=self.workspace_id,
+            mission_context=dict(mission_context), timeout_seconds=3.0,
+        )
+
+    def validator_request_status(self, request_id: str, mission_context: Mapping[str, str]) -> dict:
+        if not (self.validator_socket_path and self.validator_public_key and self.validator_key_id):
+            return {"status": "not_configured"}
+        return request_skill_validator_status(
+            self.validator_socket_path, request_id=request_id,
+            workspace_id=self.workspace_id, mission_context=dict(mission_context),
+            timeout_seconds=3.0,
+        )
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,

@@ -515,6 +515,46 @@ def register_mission_routes(
                         for key in ("evidence_id", "sha256", "relative_path")
                         if isinstance(evidence_ref.get(key), str)
                     }
+                broker_statuses = {}
+                validator_status = {"status": "not_recorded"}
+                if binding_status == "pinned" and skill_replay_runtime is not None:
+                    context_for_status = {
+                        "tenant_id": tenant_id, "mission_run_id": mission_run_id,
+                        "node_id": node_id, "task_id": task_id,
+                    }
+                    for label, request_id in (
+                        ("stage", stage_request_id),
+                        ("execution", execution_request_id),
+                        ("promotion", action.get("promotion_request_id")),
+                    ):
+                        if not isinstance(request_id, str) or not re.fullmatch(
+                            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", request_id,
+                        ):
+                            broker_statuses[label] = {"status": "not_recorded"}
+                            continue
+                        try:
+                            outcome = await asyncio.to_thread(
+                                skill_replay_runtime.broker_request_status,
+                                request_id, context_for_status,
+                            )
+                            broker_statuses[label] = {"status": outcome.get("status")}
+                        except Exception as exc:
+                            broker_statuses[label] = {"status": "unavailable", "error_type": type(exc).__name__}
+                    validation_request_id = action.get("validation_request_id")
+                    if isinstance(validation_request_id, str) and re.fullmatch(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", validation_request_id,
+                    ):
+                        try:
+                            outcome = await asyncio.to_thread(
+                                skill_replay_runtime.validator_request_status,
+                                validation_request_id, context_for_status,
+                            )
+                            validator_status = {"status": outcome.get("status")}
+                        except Exception as exc:
+                            validator_status = {"status": "unavailable", "error_type": type(exc).__name__}
+                    elif skill_replay_runtime is None:
+                        validator_status = {"status": "not_configured"}
+
                 reviews.append({
                     "mission_run_id": mission_run_id,
                     "tenant_id": tenant_id,
@@ -533,6 +573,8 @@ def register_mission_routes(
                     "execution_request_id": execution_request_id,
                     "validation_request_id": action.get("validation_request_id"),
                     "promotion_request_id": action.get("promotion_request_id"),
+                    "broker_status": broker_statuses,
+                    "validator_status": validator_status,
                     "evidence_ref": safe_evidence_ref,
                 })
                 if len(reviews) >= max(1, min(limit, 500)):

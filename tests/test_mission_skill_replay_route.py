@@ -101,6 +101,12 @@ class _ReplayRuntime:
         }
         self.error = error
 
+    def broker_request_status(self, request_id, mission_context):
+        return {"status": "completed"}
+
+    def validator_request_status(self, request_id, mission_context):
+        return {"status": "indeterminate"}
+
     def replay_candidate(self, **kwargs):
         self.calls.append(kwargs)
         if self.error and isinstance(self.error, (FileNotFoundError, PermissionError, ValueError)):
@@ -394,6 +400,10 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(item["execution_request_id"], "44444444-4444-4444-8444-444444444444")
         self.assertEqual(item["validation_request_id"], "55555555-5555-4555-8555-555555555555")
         self.assertEqual(item["promotion_request_id"], "66666666-6666-4666-8666-666666666666")
+        self.assertEqual(item["broker_status"]["stage"]["status"], "completed")
+        self.assertEqual(item["broker_status"]["execution"]["status"], "completed")
+        self.assertEqual(item["broker_status"]["promotion"]["status"], "completed")
+        self.assertEqual(item["validator_status"]["status"], "indeterminate")
 
         member_app = RouteApp()
         _register(member_app, self.workspace, _ReplayRuntime(), role="member")
