@@ -268,6 +268,34 @@ def register_mission_routes(
                 current_run["updated_at"] = datetime.now().astimezone().isoformat()
                 save_mission_runs(workspace, current_state)
 
+        def persist_replay_request_id(field_name: str, value: str) -> None:
+            if field_name not in {"validation_request_id", "promotion_request_id"}:
+                raise ValueError("unsupported Replay request identity field")
+            if not isinstance(value, str) or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value,
+            ):
+                raise ValueError("Replay request identity is invalid")
+            with exclusive_mission_claim_lock(workspace):
+                current_state = load_mission_runs_strict(workspace)
+                current_run = next((
+                    item for item in current_state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                current_action = next((
+                    item for item in (current_run.get("actions") if isinstance(current_run, dict) and isinstance(current_run.get("actions"), list) else [])
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if not isinstance(current_action, dict) or current_action.get("status") != "running":
+                    raise RuntimeError("Replay action is no longer running; refusing downstream dispatch")
+                prior = current_action.get(field_name)
+                if prior is not None and prior != value:
+                    raise RuntimeError("Replay request identity is immutable")
+                current_action[field_name] = value
+                current_run["updated_at"] = datetime.now().astimezone().isoformat()
+                save_mission_runs(workspace, current_state)
+
         try:
             operation = await asyncio.to_thread(
                 skill_replay_runtime.replay_candidate,
@@ -277,6 +305,12 @@ def register_mission_routes(
                 task_id=task_id,
                 skill_id=skill_id,
                 on_candidate_bound=persist_candidate_binding,
+                on_validation_request_bound=lambda data: persist_replay_request_id(
+                    "validation_request_id", data.get("validation_request_id") if isinstance(data, dict) else None,
+                ),
+                on_promotion_request_bound=lambda data: persist_replay_request_id(
+                    "promotion_request_id", data.get("promotion_request_id") if isinstance(data, dict) else None,
+                ),
             )
         except FileNotFoundError:
             error_status, error_message = 404, "未找到该租户的 Skill 候选"
@@ -497,6 +531,8 @@ def register_mission_routes(
                     "skill_binding": safe_binding,
                     "stage_request_id": stage_request_id,
                     "execution_request_id": execution_request_id,
+                    "validation_request_id": action.get("validation_request_id"),
+                    "promotion_request_id": action.get("promotion_request_id"),
                     "evidence_ref": safe_evidence_ref,
                 })
                 if len(reviews) >= max(1, min(limit, 500)):

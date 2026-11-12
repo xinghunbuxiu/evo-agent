@@ -125,6 +125,12 @@ class _ReplayRuntime:
                 "stage_request_id": "33333333-3333-4333-8333-333333333333",
                 "execution_request_id": "44444444-4444-4444-8444-444444444444",
             })
+        validation_callback = kwargs.get("on_validation_request_bound")
+        if callable(validation_callback):
+            validation_callback({"validation_request_id": "55555555-5555-4555-8555-555555555555"})
+        promotion_callback = kwargs.get("on_promotion_request_bound")
+        if callable(promotion_callback):
+            promotion_callback({"promotion_request_id": "66666666-6666-4666-8666-666666666666"})
         if self.error:
             raise self.error
         return self.result
@@ -174,6 +180,8 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(actions[0]["candidate_content_sha256"], "a" * 64)
         self.assertEqual(actions[0]["stage_request_id"], "33333333-3333-4333-8333-333333333333")
         self.assertEqual(actions[0]["execution_request_id"], "44444444-4444-4444-8444-444444444444")
+        self.assertEqual(actions[0]["validation_request_id"], "55555555-5555-4555-8555-555555555555")
+        self.assertEqual(actions[0]["promotion_request_id"], "66666666-6666-4666-8666-666666666666")
         self.assertEqual(actions[0]["operation_result"], response["data"])
 
     def test_same_idempotency_key_returns_cached_operation_without_second_broker_call(self):
@@ -384,6 +392,8 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(item["candidate_binding_status"], "pinned")
         self.assertEqual(item["skill_binding"]["content_sha256"], "a" * 64)
         self.assertEqual(item["execution_request_id"], "44444444-4444-4444-8444-444444444444")
+        self.assertEqual(item["validation_request_id"], "55555555-5555-4555-8555-555555555555")
+        self.assertEqual(item["promotion_request_id"], "66666666-6666-4666-8666-666666666666")
 
         member_app = RouteApp()
         _register(member_app, self.workspace, _ReplayRuntime(), role="member")

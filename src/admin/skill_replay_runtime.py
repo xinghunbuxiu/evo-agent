@@ -179,7 +179,9 @@ class SkillReplayRuntime:
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,
-                         on_candidate_bound: Callable[[dict], None] | None = None) -> dict:
+                         on_candidate_bound: Callable[[dict], None] | None = None,
+                         on_validation_request_bound: Callable[[dict], None] | None = None,
+                         on_promotion_request_bound: Callable[[dict], None] | None = None) -> dict:
         if not isinstance(tenant_id, str) or not _ID_RE.fullmatch(tenant_id):
             raise ValueError("tenant_id is invalid")
         if not isinstance(mission_run, Mapping):
@@ -314,6 +316,12 @@ class SkillReplayRuntime:
                     "trust_level": _VALIDATED_TRUST_LEVEL,
                     "broker_attestation": broker_attestation,
                 }
+                if on_validation_request_bound is not None:
+                    if not callable(on_validation_request_bound):
+                        raise ValueError("on_validation_request_bound must be callable")
+                    on_validation_request_bound({
+                        "validation_request_id": validation_request_id,
+                    })
                 validation_attestation = request_skill_validation(
                     self.validator_socket_path,
                     request=validation_request,
@@ -347,6 +355,19 @@ class SkillReplayRuntime:
                 promotion = {"status": "blocked", "reason": "independent_validation_failed"}
             else:
                 try:
+                    promotion_request_id = _deterministic_request_id("promotion", {
+                        "mission_context": context,
+                        "skill_id": skill.id,
+                        "skill_version": skill.version,
+                        "content_sha256": binding["content_sha256"],
+                        "validation_attestation": validation_attestation,
+                    })
+                    if on_promotion_request_bound is not None:
+                        if not callable(on_promotion_request_bound):
+                            raise ValueError("on_promotion_request_bound must be callable")
+                        on_promotion_request_bound({
+                            "promotion_request_id": promotion_request_id,
+                        })
                     receipt = promote_skill_candidate_via_broker(
                         self.socket_path,
                         self.workspace_id,
@@ -358,13 +379,7 @@ class SkillReplayRuntime:
                         validation_attestation=validation_attestation,
                         public_key=self.broker_public_key,
                         expected_key_id=self.broker_key_id,
-                        request_id=_deterministic_request_id("promotion", {
-                            "mission_context": context,
-                            "skill_id": skill.id,
-                            "skill_version": skill.version,
-                            "content_sha256": binding["content_sha256"],
-                            "validation_attestation": validation_attestation,
-                        }),
+                        request_id=promotion_request_id,
                     )
                     promotion = {
                         "status": "published",
