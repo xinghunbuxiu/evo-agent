@@ -627,5 +627,138 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         stage.assert_not_called()
 
 
+    @patch("admin.skill_replay_runtime.promote_skill_candidate_via_broker")
+    @patch("admin.skill_replay_runtime.verify_validation_response")
+    def test_resume_promotion_reissues_only_exact_original_publication(self, verify_validator, promote):
+        from admin.knowledge_runtime import write_skill_candidate
+        from admin.skill_replay_runtime import _deterministic_request_id
+        from core.skill_replay_contract import build_skill_replay_binding
+
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        skill = self._skill()
+        write_skill_candidate(self.workspace, "tenant-a", skill)
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-1",
+            "node_id": "node-1", "task_id": "task-1",
+        }
+        binding = build_skill_replay_binding(skill, context)
+        stage_id = "11111111-1111-4111-8111-111111111111"
+        execution_id = "22222222-2222-4222-8222-222222222222"
+        validation_id = "33333333-3333-4333-8333-333333333333"
+        validation_attestation = {
+            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "policy_id": "policy-1", "policy_sha256": "a" * 64,
+            "checks_sha256": "b" * 64,
+        }
+        verify_validator.return_value = validation_attestation
+        promotion_id = _deterministic_request_id("promotion", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "validation_attestation": validation_attestation,
+        })
+        runtime.broker_request_status = lambda request_id, mission_context: (
+            {"status": "indeterminate"} if request_id == promotion_id
+            else {"status": "completed", "response": {"receipt": request_id}}
+        )
+        runtime.validator_request_status = lambda request_id, mission_context: {
+            "status": "completed", "response": {"attestation": "original"}
+        }
+        runtime.verify_recovery_responses = lambda **kwargs: {
+            "broker_stage": "verified",
+            "broker_execution": "verified",
+            "execution_succeeded": True,
+            "validator": "verified",
+        }
+        runtime.adapter.execute = lambda *args, **kwargs: self.fail(
+            "promotion recovery must never execute Skill code"
+        )
+        promote.return_value = {
+            "artifact": {"skill_id": skill.id, "skill_version": skill.version},
+            "validation_provenance": {"validation_id": "validation-1"},
+        }
+
+        result = runtime.resume_promotion(
+            tenant_id="tenant-a", mission_run_id="mission-1",
+            node_id="node-1", task_id="task-1", skill_id=skill.id,
+            skill_binding=binding, stage_request_id=stage_id,
+            execution_request_id=execution_id, validation_request_id=validation_id,
+            promotion_request_id=promotion_id,
+        )
+
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(result["promotion_request_id"], promotion_id)
+        self.assertEqual(promote.call_args.kwargs["request_id"], promotion_id)
+        self.assertEqual(promote.call_args.kwargs["validation_attestation"], validation_attestation)
+
+    def test_resume_promotion_rejects_changed_draft_before_status_queries(self):
+        from admin.knowledge_runtime import write_skill_candidate
+        from core.skill_replay_contract import build_skill_replay_binding
+
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        original = self._skill(version="1.0.0")
+        write_skill_candidate(self.workspace, "tenant-a", self._skill(version="1.0.1"))
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-1",
+            "node_id": "node-1", "task_id": "task-1",
+        }
+        original_binding = build_skill_replay_binding(original, context)
+        runtime.broker_request_status = lambda *args, **kwargs: self.fail(
+            "changed candidate must be rejected before contacting Broker"
+        )
+        with self.assertRaisesRegex(PermissionError, "changed after"):
+            runtime.resume_promotion(
+                tenant_id="tenant-a", mission_run_id="mission-1",
+                node_id="node-1", task_id="task-1", skill_id=original.id,
+                skill_binding=original_binding,
+                stage_request_id="11111111-1111-4111-8111-111111111111",
+                execution_request_id="22222222-2222-4222-8222-222222222222",
+                validation_request_id="33333333-3333-4333-8333-333333333333",
+                promotion_request_id="44444444-4444-4444-8444-444444444444",
+            )
+
+    def test_resume_promotion_refuses_already_completed_publication(self):
+        from admin.knowledge_runtime import write_skill_candidate
+        from core.skill_replay_contract import build_skill_replay_binding
+
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        skill = self._skill()
+        write_skill_candidate(self.workspace, "tenant-a", skill)
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-1",
+            "node_id": "node-1", "task_id": "task-1",
+        }
+        runtime.broker_request_status = lambda request_id, mission_context: (
+            {"status": "completed"} if request_id == "44444444-4444-4444-8444-444444444444"
+            else {"status": "completed"}
+        )
+        with self.assertRaisesRegex(ValueError, "already completed"):
+            runtime.resume_promotion(
+                tenant_id="tenant-a", mission_run_id="mission-1",
+                node_id="node-1", task_id="task-1", skill_id=skill.id,
+                skill_binding=build_skill_replay_binding(skill, context),
+                stage_request_id="11111111-1111-4111-8111-111111111111",
+                execution_request_id="22222222-2222-4222-8222-222222222222",
+                validation_request_id="33333333-3333-4333-8333-333333333333",
+                promotion_request_id="44444444-4444-4444-8444-444444444444",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
