@@ -7,9 +7,12 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
+
+
+_SKILL_REPLAY_RECOVERY_LEASE = timedelta(minutes=10)
 
 from fastapi import Request
 
@@ -491,7 +494,33 @@ def register_mission_routes(
             if action.get("status") != "interrupted" or action.get("recovery_status") != "needs_review":
                 return error_response("该操作当前不处于可恢复的人工复核状态", 409)
             if action.get("recovery_attempt_status") == "in_progress":
-                return error_response("该操作已有恢复请求正在执行", 409)
+                attempts = action.get("recovery_attempts")
+                active_attempt_id = action.get("recovery_attempt_id")
+                active_attempt = next((
+                    item for item in reversed(attempts)
+                    if isinstance(item, dict)
+                    and item.get("attempt_id") == active_attempt_id
+                    and item.get("status") == "in_progress"
+                ), None) if isinstance(attempts, list) else None
+                started_at = active_attempt.get("started_at") if isinstance(active_attempt, dict) else None
+                try:
+                    started = datetime.fromisoformat(started_at) if isinstance(started_at, str) else None
+                    if started is None or started.tzinfo is None or started.utcoffset() is None:
+                        raise ValueError("recovery attempt timestamp is missing or timezone-naive")
+                except (TypeError, ValueError):
+                    return error_response("恢复占用记录缺少可信时间戳；需人工检查审计记录", 409)
+                now = datetime.now().astimezone()
+                if now - started <= _SKILL_REPLAY_RECOVERY_LEASE:
+                    return error_response("该操作已有恢复请求正在执行", 409)
+                # A stale lease is not proof of failure. Mark the abandoned
+                # attempt indeterminate, then require the same signed-evidence
+                # checks and create-once Broker request on this new attempt.
+                active_attempt.update({
+                    "status": "indeterminate",
+                    "recovery_reason": "recovery_lease_expired",
+                    "finished_at": now.isoformat(),
+                })
+                action["recovery_attempt_status"] = "indeterminate"
 
             binding = action.get("skill_binding")
             if not isinstance(binding, dict):

@@ -411,6 +411,98 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(saved["recovery_attempts"][-1]["operation"], "resume_promotion_only")
         self.assertEqual(saved["recovery_attempts"][-1]["status"], "completed")
 
+    def test_stale_in_progress_recovery_lease_can_be_retried_with_audit(self):
+        from datetime import datetime, timedelta
+
+        action = {
+            "action_type": "skill_replay",
+            "status": "interrupted",
+            "recovery_status": "needs_review",
+            "recovery_attempt_status": "in_progress",
+            "recovery_attempt_id": "77777777-7777-4777-8777-777777777777",
+            "recovery_attempts": [{
+                "attempt_id": "77777777-7777-4777-8777-777777777777",
+                "operation": "resume_promotion_only",
+                "status": "in_progress",
+                "started_at": (datetime.now().astimezone() - timedelta(hours=1)).isoformat(),
+            }],
+            "task_id": "task-a",
+            "node_id": "node-a",
+            "skill_id": "skill-a",
+            "skill_binding": {
+                "schema_version": "mission.skill-replay-binding.v1",
+                "skill_id": "skill-a", "skill_version": "1.0.0",
+                "content_sha256": "a" * 64, "trust_level": "draft",
+                "mission_context": {
+                    "tenant_id": "tenant-a", "mission_run_id": "run-a",
+                    "node_id": "node-a", "task_id": "task-a",
+                },
+            },
+            "stage_request_id": "33333333-3333-4333-8333-333333333333",
+            "execution_request_id": "44444444-4444-4444-8444-444444444444",
+            "validation_request_id": "55555555-5555-4555-8555-555555555555",
+            "promotion_request_id": "66666666-6666-4666-8666-666666666666",
+        }
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-a"}]}, "actions": [action],
+        }]})
+        runtime = _ReplayRuntime()
+        calls = []
+        runtime.resume_promotion = lambda **kwargs: (
+            calls.append(kwargs) or {
+                "status": "published",
+                "artifact": {"skill_id": "skill-a", "version": "1.0.0"},
+            }
+        )
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        route = "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion"
+        response = asyncio.run(app.routes[("POST", route)](
+            request=_request({"confirm": True}),
+            mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
+        ))
+        self.assertEqual(response["data"]["status"], "reconciled")
+        self.assertEqual(len(calls), 1)
+        saved = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        previous = next(
+            item for item in saved["recovery_attempts"]
+            if item["attempt_id"] == "77777777-7777-4777-8777-777777777777"
+        )
+        self.assertEqual(previous["status"], "indeterminate")
+        self.assertEqual(previous["recovery_reason"], "recovery_lease_expired")
+        self.assertEqual(saved["recovery_attempts"][-1]["status"], "completed")
+
+    def test_in_progress_recovery_with_untrusted_timestamp_fails_closed(self):
+        action = {
+            "action_type": "skill_replay", "status": "interrupted",
+            "recovery_status": "needs_review", "recovery_attempt_status": "in_progress",
+            "recovery_attempt_id": "77777777-7777-4777-8777-777777777777",
+            "recovery_attempts": [{
+                "attempt_id": "77777777-7777-4777-8777-777777777777",
+                "status": "in_progress", "started_at": "not-a-timestamp",
+            }],
+            "task_id": "task-a", "node_id": "node-a", "skill_id": "skill-a",
+        }
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-a"}]}, "actions": [action],
+        }]})
+        runtime = _ReplayRuntime()
+        runtime.resume_promotion = lambda **kwargs: self.fail("untrusted lease must not dispatch")
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        route = "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion"
+        response = asyncio.run(app.routes[("POST", route)](
+            request=_request({"confirm": True}),
+            mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
+        ))
+        self.assertEqual(response["status"], 409)
+        saved = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(saved["recovery_attempt_status"], "in_progress")
+        self.assertEqual(len(saved["recovery_attempts"]), 1)
+
+
     def test_recovery_requires_explicit_confirmation_and_tenant_admin(self):
         runtime = _ReplayRuntime()
         runtime.resume_promotion = lambda **kwargs: self.fail("must not dispatch")
