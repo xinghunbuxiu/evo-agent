@@ -18,13 +18,17 @@ from typing import Callable, Mapping
 
 from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
-from core.sandbox_broker_protocol import SKILL_REPLAY_PROFILE_ID, broker_response_sha256
+from core.sandbox_broker_protocol import (
+    SKILL_REPLAY_PROFILE_ID, broker_response_sha256, verify_broker_response,
+)
 from core.sandbox_broker_transport import (
     promote_skill_candidate_via_broker,
     stage_skill_candidate_via_broker,
     request_broker_replay_status,
 )
-from core.skill_validator import VALIDATION_REQUEST_SCHEMA
+from core.skill_validator import (
+    VALIDATION_REQUEST_SCHEMA, verify_validation_response,
+)
 from core.skill_validator_transport import (
     request_skill_validation,
     request_skill_validator_status,
@@ -203,6 +207,79 @@ class SkillReplayRuntime:
             workspace_id=self.workspace_id, mission_context=dict(mission_context),
             timeout_seconds=3.0,
         )
+
+    def verify_recovery_responses(
+        self, *, mission_context: Mapping[str, str], skill_binding: Mapping,
+        execution_request_id: str, validation_request_id: str | None,
+        broker_outcomes: Mapping[str, Mapping], validator_outcome: Mapping,
+    ) -> dict:
+        """Re-verify cached Broker and Validator receipts without side effects."""
+        context = dict(mission_context)
+        binding = dict(skill_binding)
+        result = {
+            "broker_execution": "not_checked",
+            "validator": "not_checked",
+            "execution_succeeded": None,
+            "validation_id": None,
+            "promotion": "not_checked",
+        }
+        execution_outcome = broker_outcomes.get("execution")
+        broker_envelope = None
+        if isinstance(execution_outcome, Mapping) and execution_outcome.get("status") == "completed":
+            broker_envelope = execution_outcome.get("response")
+            try:
+                if not isinstance(broker_envelope, dict):
+                    raise ValueError("cached Broker response is missing")
+                verified_result = verify_broker_response(
+                    broker_envelope,
+                    public_key=self.broker_public_key,
+                    expected_key_id=self.broker_key_id,
+                    expected_request_id=execution_request_id,
+                    expected_workspace_id=self.workspace_id,
+                    expected_mission_context=context,
+                    expected_profile_id=SKILL_REPLAY_PROFILE_ID,
+                    expected_target=f"{binding['skill_id']}@{binding['skill_version']}",
+                    expected_skill_binding=binding,
+                )
+                result["broker_execution"] = "verified"
+                result["execution_succeeded"] = verified_result.get("execution_succeeded") is True
+            except Exception:
+                result["broker_execution"] = "invalid"
+                broker_envelope = None
+
+        if (
+            isinstance(validator_outcome, Mapping)
+            and validator_outcome.get("status") == "completed"
+            and isinstance(validation_request_id, str)
+            and broker_envelope is not None
+            and result["broker_execution"] == "verified"
+        ):
+            try:
+                expected_identity = {
+                    "workspace_id": self.workspace_id,
+                    "tenant_id": context["tenant_id"],
+                    "mission_run_id": context["mission_run_id"],
+                    "node_id": context["node_id"],
+                    "task_id": context["task_id"],
+                    "broker_request_id": execution_request_id,
+                    "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+                    "skill_id": binding["skill_id"],
+                    "skill_version": binding["skill_version"],
+                    "content_sha256": binding["content_sha256"],
+                    "trust_level": _VALIDATED_TRUST_LEVEL,
+                }
+                attestation = verify_validation_response(
+                    validator_outcome.get("response"),
+                    public_key=self.validator_public_key,
+                    expected_key_id=self.validator_key_id,
+                    expected_request_id=validation_request_id,
+                    expected_identity=expected_identity,
+                )
+                result["validator"] = "verified"
+                result["validation_id"] = attestation.get("validation_id")
+            except Exception:
+                result["validator"] = "invalid"
+        return result
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,

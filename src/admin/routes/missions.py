@@ -516,6 +516,15 @@ def register_mission_routes(
                         if isinstance(evidence_ref.get(key), str)
                     }
                 broker_statuses = {}
+                broker_outcomes = {}
+                validator_outcome = None
+                verified_receipts = {
+                    "broker_execution": "not_checked",
+                    "validator": "not_checked",
+                    "execution_succeeded": None,
+                    "validation_id": None,
+                    "promotion": "not_checked",
+                }
                 validator_status = {"status": "not_recorded"}
                 if binding_status == "pinned" and skill_replay_runtime is not None:
                     context_for_status = {
@@ -537,6 +546,7 @@ def register_mission_routes(
                                 skill_replay_runtime.broker_request_status,
                                 request_id, context_for_status,
                             )
+                            broker_outcomes[label] = outcome
                             broker_statuses[label] = {"status": outcome.get("status")}
                         except Exception as exc:
                             broker_statuses[label] = {"status": "unavailable", "error_type": type(exc).__name__}
@@ -549,15 +559,44 @@ def register_mission_routes(
                                 skill_replay_runtime.validator_request_status,
                                 validation_request_id, context_for_status,
                             )
+                            validator_outcome = outcome
                             validator_status = {"status": outcome.get("status")}
                         except Exception as exc:
                             validator_status = {"status": "unavailable", "error_type": type(exc).__name__}
                     elif skill_replay_runtime is None:
                         validator_status = {"status": "not_configured"}
 
-                # Status lookups are read-only and intentionally do not expose
-                # cached signed payloads here. A status alone is not proof that
-                # the Mission can be marked complete or safely replayed.
+                # A completed status is only a lookup result. Re-verify signed
+                # Broker execution and Validator attestations before trusting it.
+                if binding_status == "pinned" and skill_replay_runtime is not None:
+                    verifier = getattr(skill_replay_runtime, "verify_recovery_responses", None)
+                    if callable(verifier):
+                        try:
+                            verified_receipts = await asyncio.to_thread(
+                                verifier,
+                                mission_context={
+                                    "tenant_id": tenant_id,
+                                    "mission_run_id": mission_run_id,
+                                    "node_id": node_id,
+                                    "task_id": task_id,
+                                },
+                                skill_binding=binding,
+                                execution_request_id=execution_request_id,
+                                validation_request_id=action.get("validation_request_id"),
+                                broker_outcomes=broker_outcomes,
+                                validator_outcome=validator_outcome or {},
+                            )
+                        except Exception as exc:
+                            verified_receipts = {
+                                "broker_execution": "invalid",
+                                "validator": "not_checked",
+                                "execution_succeeded": None,
+                                "validation_id": None,
+                                "promotion": "not_checked",
+                                "verification_error_type": type(exc).__name__,
+                            }
+
+                # Cached signed payloads remain private to the verification path.
                 broker_values = {
                     name: value.get("status") if isinstance(value, dict) else "unavailable"
                     for name, value in broker_statuses.items()
@@ -600,11 +639,35 @@ def register_mission_routes(
                         "automatic_resume": False,
                         "next_step": "skill_remains_draft_no_publication",
                     }
+                elif verified_receipts.get("broker_execution") == "invalid" or verified_receipts.get("validator") == "invalid":
+                    assessment = {
+                        "status": "invalid_signed_evidence",
+                        "automatic_resume": False,
+                        "next_step": "preserve_claim_and_escalate_security_review",
+                    }
+                elif (
+                    verified_receipts.get("broker_execution") == "verified"
+                    and verified_receipts.get("validator") == "verified"
+                ):
+                    assessment = {
+                        "status": "validation_verified_promotion_unverified",
+                        "automatic_resume": False,
+                        "next_step": "verify_promotion_receipt_and_artifact_store_before_manual_reconciliation",
+                    }
+                elif (
+                    verified_receipts.get("broker_execution") == "verified"
+                    and validator_value == "not_configured"
+                ):
+                    assessment = {
+                        "status": "broker_only",
+                        "automatic_resume": False,
+                        "next_step": "skill_remains_draft_no_publication",
+                    }
                 elif all(value == "completed" for value in broker_values.values()) and validator_value == "completed":
                     assessment = {
                         "status": "completed_unverified",
                         "automatic_resume": False,
-                        "next_step": "verify_signed_receipts_and_evidence_before_reconciling_mission",
+                        "next_step": "verify_remaining_stage_and_promotion_receipts_before_manual_reconciliation",
                     }
                 else:
                     assessment = {
@@ -633,6 +696,7 @@ def register_mission_routes(
                     "promotion_request_id": action.get("promotion_request_id"),
                     "broker_status": broker_statuses,
                     "validator_status": validator_status,
+                    "verified_receipts": verified_receipts,
                     "recovery_assessment": assessment,
                     "evidence_ref": safe_evidence_ref,
                 })

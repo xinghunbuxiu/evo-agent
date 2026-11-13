@@ -107,6 +107,15 @@ class _ReplayRuntime:
     def validator_request_status(self, request_id, mission_context):
         return {"status": "indeterminate"}
 
+    def verify_recovery_responses(self, **kwargs):
+        return {
+            "broker_execution": "verified",
+            "validator": "not_checked",
+            "execution_succeeded": True,
+            "validation_id": None,
+            "promotion": "not_checked",
+        }
+
     def replay_candidate(self, **kwargs):
         self.calls.append(kwargs)
         if self.error and isinstance(self.error, (FileNotFoundError, PermissionError, ValueError)):
@@ -406,6 +415,8 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(item["broker_status"]["execution"]["status"], "completed")
         self.assertEqual(item["broker_status"]["promotion"]["status"], "completed")
         self.assertEqual(item["validator_status"]["status"], "indeterminate")
+        self.assertEqual(item["verified_receipts"]["broker_execution"], "verified")
+        self.assertEqual(item["verified_receipts"]["validator"], "not_checked")
         self.assertEqual(item["recovery_assessment"]["status"], "indeterminate")
         self.assertFalse(item["recovery_assessment"]["automatic_resume"])
         self.assertEqual(item["recovery_assessment"]["next_step"], "operator_review_required_no_replay")
