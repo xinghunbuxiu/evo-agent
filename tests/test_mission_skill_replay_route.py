@@ -347,6 +347,88 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(actions[0]["status"], "interrupted")
         self.assertEqual(actions[0]["recovery_status"], "needs_review")
 
+    def test_admin_confirmed_recovery_resumes_only_promotion_and_reconciles_mission(self):
+        action = {
+            "action_type": "skill_replay",
+            "status": "interrupted",
+            "recovery_status": "needs_review",
+            "task_id": "task-a",
+            "node_id": "node-a",
+            "skill_id": "skill-a",
+            "skill_binding": {
+                "schema_version": "mission.skill-replay-binding.v1",
+                "skill_id": "skill-a",
+                "skill_version": "1.0.0",
+                "content_sha256": "a" * 64,
+                "trust_level": "draft",
+                "mission_context": {
+                    "tenant_id": "tenant-a",
+                    "mission_run_id": "run-a",
+                    "node_id": "node-a",
+                    "task_id": "task-a",
+                },
+            },
+            "stage_request_id": "33333333-3333-4333-8333-333333333333",
+            "execution_request_id": "44444444-4444-4444-8444-444444444444",
+            "validation_request_id": "55555555-5555-4555-8555-555555555555",
+            "promotion_request_id": "66666666-6666-4666-8666-666666666666",
+        }
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a",
+            "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-a"}]},
+            "actions": [action],
+        }]})
+        runtime = _ReplayRuntime()
+        calls = []
+        runtime.resume_promotion = lambda **kwargs: (
+            calls.append(kwargs) or {
+                "status": "published",
+                "artifact": {"skill_id": "skill-a", "version": "1.0.0"},
+                "validation_provenance": {"validation_id": "validation-a"},
+            }
+        )
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        route = "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion"
+        handler = app.routes[("POST", route)]
+        response = asyncio.run(handler(
+            request=_request({"confirm": True}),
+            mission_run_id="run-a",
+            skill_id="skill-a",
+            task_id="task-a",
+        ))
+        self.assertEqual(response["data"]["status"], "reconciled")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["promotion_request_id"], action["promotion_request_id"])
+        self.assertEqual(calls[0]["skill_binding"], action["skill_binding"])
+        self.assertEqual(calls[0]["tenant_id"], "tenant-a")
+        saved = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["recovery_status"], "reconciled")
+        self.assertEqual(saved["promotion_status"], "published")
+        self.assertEqual(saved["published_artifact"]["skill_id"], "skill-a")
+        self.assertEqual(saved["recovery_attempts"][-1]["operation"], "resume_promotion_only")
+        self.assertEqual(saved["recovery_attempts"][-1]["status"], "completed")
+
+    def test_recovery_requires_explicit_confirmation_and_tenant_admin(self):
+        runtime = _ReplayRuntime()
+        runtime.resume_promotion = lambda **kwargs: self.fail("must not dispatch")
+        app = RouteApp()
+        _register(app, self.workspace, runtime, role="member")
+        route = "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion"
+        handler = app.routes[("POST", route)]
+        denied = asyncio.run(handler(
+            request=_request({"confirm": True}),
+            mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
+        ))
+        self.assertEqual(denied["status"], 404)
+        bad_confirmation = asyncio.run(handler(
+            request=_request({"confirm": "yes"}),
+            mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
+        ))
+        self.assertEqual(bad_confirmation["status"], 400)
+
     def test_skill_replay_recovery_review_is_tenant_admin_only_and_exposes_pinned_identity(self):
         save_mission_runs(self.workspace, {"items": [
             {
