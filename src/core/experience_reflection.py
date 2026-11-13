@@ -611,24 +611,47 @@ class ExperienceReflectionStore:
             self.experience_store.save(record)
             return record
 
-    def list_reviewed_for_source(self, source_experience_id: str) -> list[dict]:
-        source_id = self._safe_id(source_experience_id, "source_experience_id")
+    def list_reviewed_for_source(self, source_experience_id: str | None = None) -> list[dict]:
+        source_id = (
+            self._safe_id(source_experience_id, "source_experience_id")
+            if source_experience_id is not None and str(source_experience_id).strip()
+            else None
+        )
         with _exclusive_reflection_lock(self.lock_path):
-            source = self._load_source(source_id)
-            current_digest = canonical_experience_digest(source)
             all_reflections = self._load_all_reflections()
-            reflections = [
-                item for item in all_reflections
-                if item.metadata["experience_reflection"]["source_experience_id"] == source_id
-            ]
-            reflections.sort(
-                key=lambda item: item.metadata["experience_reflection"]["revision"]
-            )
-            if any(
-                item.metadata["experience_reflection"]["source_experience_digest"] != current_digest
-                for item in reflections
-            ):
-                raise ValueError("source Experience digest changed; Reflection lineage is stale")
+            if source_id:
+                source = self._load_source(source_id)
+                current_digest = canonical_experience_digest(source)
+                reflections = [
+                    item for item in all_reflections
+                    if item.metadata["experience_reflection"]["source_experience_id"] == source_id
+                ]
+                if any(
+                    item.metadata["experience_reflection"]["source_experience_digest"] != current_digest
+                    for item in reflections
+                ):
+                    raise ValueError("source Experience digest changed; Reflection lineage is stale")
+            else:
+                reflections = all_reflections
+                source_digests = {}
+                source_ids = sorted({
+                    item.metadata["experience_reflection"]["source_experience_id"]
+                    for item in reflections
+                })
+                for current_source_id in source_ids:
+                    source = self._load_source(current_source_id)
+                    source_digests[current_source_id] = canonical_experience_digest(source)
+                if any(
+                    item.metadata["experience_reflection"]["source_experience_digest"]
+                    != source_digests[item.metadata["experience_reflection"]["source_experience_id"]]
+                    for item in reflections
+                ):
+                    raise ValueError("source Experience digest changed; Reflection lineage is stale")
+
+            reflections.sort(key=lambda item: (
+                item.metadata["experience_reflection"]["source_experience_id"],
+                item.metadata["experience_reflection"]["revision"],
+            ))
             decisions = self._load_all_decisions()
             reflection_by_id = {item.id: item for item in all_reflections}
             by_reflection: dict[str, Experience] = {}
@@ -647,7 +670,7 @@ class ExperienceReflectionStore:
                     raise ValueError("Reflection decision lineage does not match its Reflection")
                 if payload.get("reviewer") == source_payload["author"]:
                     raise ValueError("Reflection author cannot review their own submission")
-                if source_payload["source_experience_id"] != source_id:
+                if source_id and source_payload["source_experience_id"] != source_id:
                     continue
                 if reflection_id in by_reflection:
                     raise ValueError("Reflection has multiple terminal decisions")

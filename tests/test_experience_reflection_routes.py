@@ -139,6 +139,16 @@ class ExperienceReflectionRouteTests(unittest.TestCase):
         ))
         self.assertEqual(accepted["data"]["decision"]["metadata"]["experience_reflection_decision"]["decision"], "accepted")
 
+    def test_review_queue_lists_all_tenant_reflections(self):
+        self.submit()
+        handler = self.app.routes[("GET", "/api/tenants/{tenant_id}/experience-reflections")]
+        response = asyncio.run(handler(
+            make_request("GET", "/api/tenants/tenant-a/experience-reflections"),
+            tenant_id="tenant-a",
+        ))
+        self.assertEqual(len(response["data"]["items"]), 1)
+        self.assertEqual(response["data"]["items"][0]["effective_state"], "pending")
+
     def test_member_cannot_decide(self):
         submitted = self.submit()["data"]["reflection"]
         handler = self.app.routes[("POST", "/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/decision")]

@@ -155,6 +155,7 @@ import KnowledgeSkillsCatalog from '../components/KnowledgeSkillsCatalog.vue'
 import KnowledgeExportPanel from '../components/KnowledgeExportPanel.vue'
 import KnowledgeIndexPanel from '../components/KnowledgeIndexPanel.vue'
 import KnowledgeShardsPanel from '../components/KnowledgeShardsPanel.vue'
+import ExperienceReflectionPanel from '../components/ExperienceReflectionPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
 import {
@@ -171,7 +172,7 @@ import {
   type KnowledgeShardInventory,
 } from '../api/knowledge'
 
-type KnowledgeSection = 'overview' | 'index' | 'shards' | 'skills' | 'export'
+type KnowledgeSection = 'overview' | 'index' | 'shards' | 'skills' | 'reflections' | 'export'
 
 const route = useRoute()
 const router = useRouter()
@@ -222,6 +223,7 @@ const sectionMeta = computed(() => {
     index: { title: '索引与容器', description: 'Git 知识仓索引扫描、容器就绪状态与租户绑定信息。' },
     shards: { title: '分布式知识仓', description: '查看按知识场景分库的 Gitee 编号仓库、容量和分片状态。' },
     skills: { title: '技能目录', description: '本地技能、自治产出与信任级别；可查看单条技能详情。' },
+    reflections: { title: '经验复盘审核', description: '查看租户 Experience 的 Reflection 提交，保留独立审核决定与证据来源。' },
     export: { title: '同步与导出', description: '推送技能到 Git、导出经验摘要与成长报告。' },
   }
   return map[activeSection.value]
@@ -232,12 +234,13 @@ const subNavItems = computed<WorkspaceSubNavItem[]>(() => ([
   { key: 'index', title: '索引', badge: String(repoIndexSummary.value?.total_entries ?? 0), active: activeSection.value === 'index' },
   { key: 'shards', title: '分布式仓库', badge: String(shardInventory.value?.total ?? 0), active: activeSection.value === 'shards' },
   { key: 'skills', title: '技能', badge: String(stats.value.verified), active: activeSection.value === 'skills' },
+  { key: 'reflections', title: '复盘审核', active: activeSection.value === 'reflections' },
   { key: 'export', title: '导出', active: activeSection.value === 'export' },
 ]))
 
 const normalizeSection = (value: unknown): KnowledgeSection => {
   const section = String(value || '').trim()
-  if (section === 'index' || section === 'shards' || section === 'skills' || section === 'export') return section
+  if (section === 'index' || section === 'shards' || section === 'skills' || section === 'reflections' || section === 'export') return section
   return 'overview'
 }
 

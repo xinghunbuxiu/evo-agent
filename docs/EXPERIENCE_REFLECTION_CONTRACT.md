@@ -1,6 +1,6 @@
 # Experience Reflection Contract
 
-Status: contract, tenant-bound append-only persistence, and authenticated submit/list/decision APIs are implemented. Review-queue UI and accepted-Reflection-to-Recipe generation are not implemented.
+Status: contract, tenant-bound append-only persistence, authenticated submit/list/decision APIs, and a tenant-scoped review queue UI are implemented. Accepted-Reflection-to-Recipe generation is not implemented.
 
 ## 1. Purpose and boundary
 
@@ -124,7 +124,7 @@ No Reflection state, confidence score, Recipe draft or worker-reported success c
 
 1. [x] Add the append-only Reflection record validator and tenant-bound persistence adapter on top of ExperienceStore.
 2. [x] Add tenant-authorized submit/list/decision routes with idempotency and source-digest verification.
-3. Add review-queue UI and audit trail.
+3. [x] Add review-queue UI and audit trail.
 4. Connect accepted revisions to Recipe Skill draft generation only.
 5. Add a separately authorized Recipe-to-executable synthesis workflow and retain the existing Broker/Validator/publishing gates.
 

@@ -1,4 +1,4 @@
-import { get, post } from './request'
+import { get, post, request } from './request'
 import type { GitKnowledgeConfig, KnowledgeContainer } from './git'
 import type { KnowledgeLayerAdvice } from './evolution'
 
@@ -158,4 +158,66 @@ export function exportTenantReport(tenantId: string) {
     repo: string
     file_path: string
   }>(`/api/tenants/${encodeURIComponent(tenantId)}/git-knowledge/export/report`, {})
+}
+
+
+export interface ExperienceReflectionRecord {
+  id: string
+  metadata?: {
+    experience_reflection?: {
+      tenant_id?: string
+      source_experience_id?: string
+      source_experience_digest?: string
+      revision?: number
+      parent_reflection_id?: string | null
+      state?: string
+      author?: string
+      created_at?: string
+      findings?: Record<string, unknown>
+      source_evidence_refs?: string[]
+    }
+  }
+}
+
+export interface ExperienceReflectionDecision {
+  decision_id: string
+  reflection_id: string
+  decision: 'accepted' | 'rejected'
+  reviewer: string
+  decision_at: string
+  reason?: string | null
+}
+
+export interface ExperienceReflectionQueueItem {
+  reflection: ExperienceReflectionRecord
+  decision: ExperienceReflectionDecision | null
+  effective_state: 'pending' | 'accepted' | 'rejected'
+}
+
+export interface ExperienceReflectionQueuePayload {
+  tenant_id: string
+  source_experience_id: string | null
+  items: ExperienceReflectionQueueItem[]
+}
+
+export function getExperienceReflections(tenantId: string) {
+  return get<ExperienceReflectionQueuePayload>(
+    `/api/tenants/${encodeURIComponent(tenantId)}/experience-reflections`
+  )
+}
+
+export function decideExperienceReflection(
+  tenantId: string,
+  reflectionId: string,
+  decision: 'accepted' | 'rejected',
+  reason?: string,
+) {
+  return request<{ tenant_id: string; decision: Record<string, unknown> }>(
+    `/api/tenants/${encodeURIComponent(tenantId)}/experience-reflections/${encodeURIComponent(reflectionId)}/decision`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ decision, ...(reason ? { reason } : {}) }),
+    },
+  )
 }

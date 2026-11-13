@@ -38,7 +38,7 @@ def register_experience_reflection_routes(
     error_response,
 ) -> None:
     @app.get("/api/tenants/{tenant_id}/experience-reflections")
-    async def list_experience_reflections(request: Request, tenant_id: str, source_experience_id: str):
+    async def list_experience_reflections(request: Request, tenant_id: str, source_experience_id: str | None = None):
         user = get_session_user(request)
         if not user:
             return error_response("未登录", 401)
@@ -46,9 +46,7 @@ def register_experience_reflection_routes(
             return error_response("无权访问该租户", 403)
         if tenant_role(user, tenant_id) not in {"tenant_admin", "member", "viewer"}:
             return error_response("当前用户没有读取 Reflection 的租户权限", 403)
-        source_id = str(source_experience_id or "").strip()
-        if not source_id:
-            return error_response("必须指定 source_experience_id", 400)
+        source_id = str(source_experience_id or "").strip() or None
         try:
             items = ExperienceReflectionStore(workspace, tenant_id).list_reviewed_for_source(source_id)
         except ValueError as exc:
