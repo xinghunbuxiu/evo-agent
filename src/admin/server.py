@@ -93,6 +93,7 @@ from admin.runtime_state import (
     normalize_child_agent_runtime as _normalize_child_agent_runtime,
     normalize_child_members_runtime as _normalize_child_members_runtime,
     normalize_feedback_monitor_runtime as _normalize_feedback_monitor_runtime,
+    resolve_member_for_mission as _resolve_member_for_mission,
     normalize_parent_profile_runtime as _normalize_parent_profile_runtime,
     save_autonomy_runtime as _save_autonomy_runtime,
     save_learning_tasks as _save_learning_tasks,
@@ -2230,44 +2231,6 @@ def create_app() -> FastAPI:
             "next_action": next_action,
             "current_focus": current_focus,
         }
-
-    def _resolve_member_for_mission(mission_run: dict, members: list[dict]) -> dict | None:
-        if not isinstance(mission_run, dict):
-            return None
-        context = mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
-        runtime_route = mission_run.get("runtime_route", {}) if isinstance(mission_run.get("runtime_route"), dict) else {}
-        explicit_member_id = str(
-            context.get("member_id")
-            or context.get("child_member_id")
-            or context.get("target_member_id")
-            or ""
-        ).strip()
-        if explicit_member_id:
-            matched = next(
-                (item for item in members if isinstance(item, dict) and str(item.get("member_id") or "").strip() == explicit_member_id),
-                None,
-            )
-            if isinstance(matched, dict):
-                return matched
-        role_hint = str(
-            (mission_run.get("work_type", {}) if isinstance(mission_run.get("work_type"), dict) else {}).get("work_type_id")
-            or runtime_route.get("primary_worker_id")
-            or context.get("runtime_primary_worker_id")
-            or ""
-        ).strip()
-        if role_hint:
-            matched = next(
-                (
-                    item for item in members
-                    if isinstance(item, dict)
-                    and str(item.get("status") or "active").strip() != "archived"
-                    and str(item.get("primary_role") or "").strip() == role_hint
-                ),
-                None,
-            )
-            if isinstance(matched, dict):
-                return matched
-        return None
 
     def _sync_autonomy_runtime_from_missions(*, workspace: Path, mission_runs: list[dict]) -> list[dict]:
         if not isinstance(mission_runs, list) or not mission_runs:

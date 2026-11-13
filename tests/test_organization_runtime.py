@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes, sync_worker_catalog
-from admin.runtime_state import normalize_child_member_runtime
+from admin.runtime_state import normalize_child_member_runtime, resolve_member_for_mission
 
 
 class OrganizationRegistryTests(unittest.TestCase):
@@ -22,6 +22,41 @@ class OrganizationRegistryTests(unittest.TestCase):
             worker_id="android-a", role_id="android-dev",
             profile={"model": "configured-model", "skills": ["android-build"]},
         )
+
+    def test_mission_resolves_employee_from_owned_execution_worker(self):
+        android = normalize_child_member_runtime({
+            "member_id": "employee_android",
+            "name": "Android 工程师",
+            "instance_runtime": {"organization_worker_ids": ["android-a", "android-b"]},
+        })
+        ios = normalize_child_member_runtime({
+            "member_id": "employee_ios",
+            "name": "iOS 工程师",
+            "instance_runtime": {"organization_worker_ids": ["ios-a"]},
+        })
+        mission = {"actions": [
+            {"organization_worker_id": "android-a"},
+            {"worker_claim": {"worker_id": "android-b"}},
+        ]}
+        self.assertEqual(
+            resolve_member_for_mission(mission, [android, ios])["member_id"],
+            "employee_android",
+        )
+
+    def test_mission_with_workers_from_multiple_employees_is_not_misattributed(self):
+        android = normalize_child_member_runtime({
+            "member_id": "employee_android",
+            "instance_runtime": {"organization_worker_ids": ["android-a"]},
+        })
+        ios = normalize_child_member_runtime({
+            "member_id": "employee_ios",
+            "instance_runtime": {"organization_worker_ids": ["ios-a"]},
+        })
+        mission = {"actions": [
+            {"organization_worker_id": "android-a"},
+            {"organization_worker_id": "ios-a"},
+        ]}
+        self.assertIsNone(resolve_member_for_mission(mission, [android, ios]))
 
     def test_employee_profile_preserves_execution_worker_links(self):
         employee = normalize_child_member_runtime({
