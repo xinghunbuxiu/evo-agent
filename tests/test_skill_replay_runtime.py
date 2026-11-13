@@ -275,6 +275,55 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["validator"], "verified")
         self.assertEqual(result["broker_promotion"], "verified")
 
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_recovery_resumes_only_indeterminate_stage_with_original_identity(self, stage):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        skill = self._skill()
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-1",
+            "node_id": "node-1", "task_id": "task-1",
+        }
+        request_id = "11111111-1111-4111-8111-111111111111"
+        runtime.broker_request_status = lambda _request_id, _context: (
+            {"status": "indeterminate"} if not stage.called
+            else {"status": "completed", "response": {"request_id": request_id}}
+        )
+
+        result = runtime._ensure_stage_receipt(
+            skill=skill, mission_context=context, stage_request_id=request_id,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        stage.assert_called_once_with(
+            runtime.socket_path,
+            runtime.workspace_id,
+            tenant_id="tenant-a",
+            mission_context=context,
+            skill_id="skill-demo",
+            skill_version="1.0.0",
+            code=skill.code,
+            public_key=runtime.broker_public_key,
+            expected_key_id=runtime.broker_key_id,
+            request_id=request_id,
+        )
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_recovery_does_not_resume_unknown_stage_status(self, stage):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        with patch.object(
+            runtime, "broker_request_status", return_value={"status": "corrupt"},
+        ):
+            with self.assertRaisesRegex(SkillReplayOutcomeIndeterminate, "operator review"):
+                runtime._ensure_stage_receipt(
+                    skill=self._skill(),
+                    mission_context={
+                        "tenant_id": "tenant-a", "mission_run_id": "mission-1",
+                        "node_id": "node-1", "task_id": "task-1",
+                    },
+                    stage_request_id="11111111-1111-4111-8111-111111111111",
+                )
+        stage.assert_not_called()
+
     def test_missing_configuration_keeps_replay_disabled(self):
         self.assertIsNone(create_skill_replay_runtime(workspace=self.workspace, environ={}))
 

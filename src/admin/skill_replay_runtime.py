@@ -421,6 +421,44 @@ class SkillReplayRuntime:
                 result["broker_promotion"] = "invalid"
         return result
 
+    def _ensure_stage_receipt(
+        self, *, skill: Skill, mission_context: Mapping[str, str],
+        stage_request_id: str,
+    ) -> dict:
+        """Recover only the create-once Stage receipt for the exact pinned candidate.
+
+        Stage never executes code. Re-submitting the deterministic original
+        request is safe because Broker binds the request digest and the
+        Artifact Store accepts only byte-identical immutable candidate content.
+        Execution and later phases are deliberately not retried here.
+        """
+        outcome = self.broker_request_status(stage_request_id, mission_context)
+        status = outcome.get("status") if isinstance(outcome, Mapping) else None
+        if status == "completed":
+            return dict(outcome)
+        if status not in {"indeterminate", "not_found"}:
+            raise SkillReplayOutcomeIndeterminate(
+                "Broker Stage outcome cannot be safely resumed; operator review is required"
+            )
+        stage_skill_candidate_via_broker(
+            self.socket_path,
+            self.workspace_id,
+            tenant_id=mission_context["tenant_id"],
+            mission_context=dict(mission_context),
+            skill_id=skill.id,
+            skill_version=skill.version,
+            code=skill.code,
+            public_key=self.broker_public_key,
+            expected_key_id=self.broker_key_id,
+            request_id=stage_request_id,
+        )
+        recovered = self.broker_request_status(stage_request_id, mission_context)
+        if not isinstance(recovered, Mapping) or recovered.get("status") != "completed":
+            raise SkillReplayOutcomeIndeterminate(
+                "Broker Stage receipt remains unresolved after exact-request recovery"
+            )
+        return dict(recovered)
+
     def resume_promotion(
         self, *, tenant_id: str, mission_run_id: str, node_id: str, task_id: str,
         skill_id: str, skill_binding: Mapping, stage_request_id: str,
@@ -480,7 +518,10 @@ class SkillReplayRuntime:
         if current_binding != binding:
             raise PermissionError("Draft Skill candidate changed after the original Replay")
 
-        stage_outcome = self.broker_request_status(stage_request_id, context)
+        stage_outcome = self._ensure_stage_receipt(
+            skill=skill, mission_context=context,
+            stage_request_id=stage_request_id,
+        )
         execution_outcome = self.broker_request_status(execution_request_id, context)
         promotion_outcome = self.broker_request_status(promotion_request_id, context)
         promotion_status = promotion_outcome.get("status")
