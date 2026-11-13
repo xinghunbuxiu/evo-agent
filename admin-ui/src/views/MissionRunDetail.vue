@@ -178,12 +178,18 @@ const replayCurrentSkill = async (payload: { skillId: string; nodeId: string }) 
   replayBusyKey.value = `${nodeId}:${skillId}`
   message.value = ''
   try {
-    await replayMissionSkill(
+    const response = await replayMissionSkill(
       current.mission_run_id,
       skillId,
       nodeId,
       crypto.randomUUID(),
     )
+    if (!response.success) {
+      success.value = false
+      message.value = response.message || 'Broker 回放请求未成功；请核对 Mission 动作链状态。'
+      await loadMissionRun()
+      return
+    }
     success.value = true
     message.value = 'Broker 隔离回放已完成；已刷新 Mission 动作链以读取签名证据、独立验证和发布状态。'
     await loadMissionRun()
