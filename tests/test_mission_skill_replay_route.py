@@ -408,7 +408,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(saved["recovery_status"], "reconciled")
         self.assertEqual(saved["promotion_status"], "published")
         self.assertEqual(saved["published_artifact"]["skill_id"], "skill-a")
-        self.assertEqual(saved["recovery_attempts"][-1]["operation"], "resume_promotion_only")
+        self.assertEqual(saved["recovery_attempts"][-1]["operation"], "recover_stage_then_resume_promotion")
         self.assertEqual(saved["recovery_attempts"][-1]["status"], "completed")
 
     def test_stale_in_progress_recovery_lease_can_be_retried_with_audit(self):
@@ -422,7 +422,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             "recovery_attempt_id": "77777777-7777-4777-8777-777777777777",
             "recovery_attempts": [{
                 "attempt_id": "77777777-7777-4777-8777-777777777777",
-                "operation": "resume_promotion_only",
+                "operation": "recover_stage_then_resume_promotion",
                 "status": "in_progress",
                 "started_at": (datetime.now().astimezone() - timedelta(hours=1)).isoformat(),
             }],
@@ -485,7 +485,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             "recovery_attempt_id": attempt_id,
             "recovery_attempts": [{
                 "attempt_id": attempt_id,
-                "operation": "resume_promotion_only",
+                "operation": "recover_stage_then_resume_promotion",
                 "status": "in_progress",
                 "started_at": (datetime.now().astimezone() - timedelta(minutes=2)).isoformat(),
             }],

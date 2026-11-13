@@ -455,7 +455,7 @@ def register_mission_routes(
         except Exception:
             return error_response("请求 JSON 无效", 400)
         if not isinstance(data, dict) or data != {"confirm": True}:
-            return error_response("必须明确确认仅恢复 Artifact Store 发布：confirm=true", 400)
+            return error_response("必须明确确认恢复原 Stage 凭证并在原执行/验收证据通过复核后继续发布；不会重新执行 Skill：confirm=true", 400)
 
         attempt_id = str(uuid.uuid4())
         with exclusive_mission_claim_lock(workspace):
@@ -540,7 +540,7 @@ def register_mission_routes(
                 return error_response("原始 Broker/Validator 请求身份不完整，拒绝恢复", 409)
             attempt = {
                 "attempt_id": attempt_id,
-                "operation": "resume_promotion_only",
+                "operation": "recover_stage_then_resume_promotion",
                 "status": "in_progress",
                 "started_at": datetime.now().astimezone().isoformat(),
             }
@@ -597,7 +597,7 @@ def register_mission_routes(
                         })
                     current_run["updated_at"] = datetime.now().astimezone().isoformat()
                     save_mission_runs(workspace, current_state)
-            return error_response(f"仅发布恢复未能确认: {type(exc).__name__}", 502)
+            return error_response(f"Skill Replay 恢复未能确认: {type(exc).__name__}", 502)
 
         with exclusive_mission_claim_lock(workspace):
             current_state = load_mission_runs_strict(workspace)
@@ -624,7 +624,7 @@ def register_mission_routes(
                 "recovery_attempt_status": "completed",
                 "promotion_status": "published",
                 "published_artifact": recovered.get("artifact"),
-                "completion_message": "原 Broker 执行与 Validator 证据已复核；仅恢复 Artifact Store 发布，未重新执行 Skill",
+                "completion_message": "原 Broker Stage/执行与 Validator 证据已复核；Stage 凭证缺失时仅按原请求恢复；未重新执行 Skill；随后恢复 Artifact Store 发布",
                 "completed_at": datetime.now().astimezone().isoformat(),
             })
             current_attempts = current_action.get("recovery_attempts", [])
@@ -633,7 +633,7 @@ def register_mission_routes(
                     "operation": (
                         "reconcile_existing_publication"
                         if recovered.get("reconciled_existing_publication") is True
-                        else "resume_promotion_only"
+                        else "recover_stage_then_resume_promotion"
                     ),
                     "status": "completed",
                     "finished_at": datetime.now().astimezone().isoformat(),
