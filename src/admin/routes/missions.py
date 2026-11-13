@@ -586,6 +586,7 @@ def register_mission_routes(
                                 },
                                 skill_binding=binding,
                                 execution_request_id=execution_request_id,
+                                stage_request_id=stage_request_id,
                                 validation_request_id=action.get("validation_request_id"),
                                 promotion_request_id=action.get("promotion_request_id"),
                                 broker_outcomes=broker_outcomes,
@@ -618,7 +619,7 @@ def register_mission_routes(
                         "next_step": "operator_review_required",
                     }
                 elif any(verified_receipts.get(key) == "invalid" for key in (
-                    "broker_execution", "validator", "broker_promotion",
+                    "broker_stage", "broker_execution", "validator", "broker_promotion",
                 )):
                     assessment = {
                         "status": "invalid_signed_evidence",
@@ -660,6 +661,7 @@ def register_mission_routes(
                     }
                 elif (
                     validator_value == "not_configured"
+                    and verified_receipts.get("broker_stage") == "verified"
                     and verified_receipts.get("broker_execution") == "verified"
                 ):
                     assessment = {
@@ -668,7 +670,8 @@ def register_mission_routes(
                         "next_step": "skill_remains_draft_no_publication",
                     }
                 elif (
-                    verified_receipts.get("broker_execution") == "verified"
+                    verified_receipts.get("broker_stage") == "verified"
+                    and verified_receipts.get("broker_execution") == "verified"
                     and verified_receipts.get("validator") == "verified"
                     and verified_receipts.get("broker_promotion") == "verified"
                 ):

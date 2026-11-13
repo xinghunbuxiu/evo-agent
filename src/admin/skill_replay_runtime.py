@@ -21,6 +21,8 @@ from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
 from core.sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
+    SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
     broker_response_sha256,
@@ -242,17 +244,73 @@ class SkillReplayRuntime:
         execution_request_id: str, validation_request_id: str | None,
         broker_outcomes: Mapping[str, Mapping], validator_outcome: Mapping,
         promotion_request_id: str | None = None,
+        stage_request_id: str | None = None,
     ) -> dict:
         """Re-verify cached Broker and Validator receipts without side effects."""
         context = dict(mission_context)
         binding = dict(skill_binding)
         result = {
+            "broker_stage": "not_checked",
             "broker_execution": "not_checked",
             "validator": "not_checked",
             "execution_succeeded": None,
             "validation_id": None,
             "broker_promotion": "not_checked",
         }
+        stage_outcome = broker_outcomes.get("stage")
+        if isinstance(stage_outcome, Mapping) and stage_outcome.get("status") == "completed":
+            try:
+                if (
+                    not isinstance(stage_request_id, str)
+                    or not re.fullmatch(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                        stage_request_id,
+                    )
+                ):
+                    raise ValueError("cached Broker stage request identity is missing or invalid")
+                stage_envelope = stage_outcome.get("response")
+                expected_stage_payload = {
+                    "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+                    "request_id": stage_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "candidate_artifact": {
+                        "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+                        "tenant_id": context["tenant_id"],
+                        "skill_id": binding["skill_id"],
+                        "skill_version": binding["skill_version"],
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": "draft",
+                    },
+                }
+                if (
+                    not isinstance(stage_envelope, dict)
+                    or set(stage_envelope) != set(expected_stage_payload) | {"signature"}
+                    or any(stage_envelope.get(key) != value for key, value in expected_stage_payload.items())
+                ):
+                    raise ValueError("cached Broker stage receipt does not match the pinned candidate")
+                stage_signature = stage_envelope.get("signature")
+                if (
+                    not isinstance(stage_signature, dict)
+                    or set(stage_signature) != {"algorithm", "key_id", "value"}
+                    or stage_signature.get("algorithm") != "ed25519"
+                    or stage_signature.get("key_id") != self.broker_key_id
+                    or not isinstance(stage_signature.get("value"), str)
+                ):
+                    raise ValueError("cached Broker stage signature metadata is invalid")
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                signed_stage_payload = json.dumps(
+                    expected_stage_payload, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False,
+                ).encode("utf-8")
+                Ed25519PublicKey.from_public_bytes(self.broker_public_key).verify(
+                    base64.b64decode(stage_signature["value"], validate=True),
+                    signed_stage_payload,
+                )
+                result["broker_stage"] = "verified"
+            except Exception:
+                result["broker_stage"] = "invalid"
+
         execution_outcome = broker_outcomes.get("execution")
         broker_envelope = None
         if isinstance(execution_outcome, Mapping) and execution_outcome.get("status") == "completed":
