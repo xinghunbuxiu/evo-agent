@@ -1,11 +1,13 @@
 """Cross-component Mission -> Broker -> Validator -> Artifact Store integration."""
 import hashlib
 import json
+import os
+import socket
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -15,15 +17,13 @@ from admin.knowledge_runtime import write_skill_candidate
 from admin.skill_replay_runtime import SkillReplayRuntime
 from core import Skill, SkillTrustLevel
 from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
-from core.sandbox_broker_protocol import (
-    SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
-    SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
-    SKILL_REPLAY_OUTPUT_SCHEMA,
-)
+from core.sandbox_broker_protocol import SKILL_REPLAY_OUTPUT_SCHEMA
+from core.sandbox_broker_transport import serve_listener
 from core.sandbox_runner import RunnerProcessOutput
 from core.skill_artifact_store import SkillArtifactStore
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
-from core.skill_validator import SkillValidatorService, verify_validation_response
+from core.skill_validator import SkillValidatorService
+from core.skill_validator_transport import serve_validator_listener
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
@@ -135,47 +135,53 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 broker_public_key=broker_public_key,
                 broker_key_id=broker_key_id,
             )
+            broker_socket_path = root / "broker.sock"
+            validator_socket_path = root / "validator.sock"
             runtime = SkillReplayRuntime(
                 workspace=workspace,
-                socket_path="/run/test-broker.sock",
+                socket_path=str(broker_socket_path),
                 workspace_id=workspace_id,
                 broker_public_key=broker_public_key,
                 broker_key_id=broker_key_id,
                 evidence_store=evidence_store,
-                validator_socket_path="/run/test-validator.sock",
+                validator_socket_path=str(validator_socket_path),
                 validator_public_key=validator_public_key,
                 validator_key_id=validator_key_id,
             )
 
-            def broker_dispatch(_socket_path, request, *, timeout_seconds):
-                self.assertGreater(timeout_seconds, 0)
-                schema = request.get("schema_version")
-                if schema == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
-                    return broker.stage_skill_candidate(request)
-                if schema == SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
-                    return broker.promote_skill_candidate(request)
-                return broker.handle_request(request)
-
-            def validate_request(
-                _socket, *, request, validator_public_key, expected_key_id,
-                expected_identity, **_kwargs,
-            ):
-                response = validator.validate(request)
-                return verify_validation_response(
-                    response,
-                    public_key=validator_public_key,
-                    expected_key_id=expected_key_id,
-                    expected_request_id=request["request_id"],
-                    expected_identity=expected_identity,
-                )
-
-            with patch(
-                "core.sandbox_broker_transport.request_broker",
-                side_effect=broker_dispatch,
-            ), patch(
-                "admin.skill_replay_runtime.request_skill_validation",
-                side_effect=validate_request,
-            ):
+            broker_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            broker_listener.bind(str(broker_socket_path))
+            broker_listener.listen(8)
+            validator_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            validator_listener.bind(str(validator_socket_path))
+            validator_listener.listen(8)
+            broker_stop = threading.Event()
+            validator_stop = threading.Event()
+            broker_thread = threading.Thread(
+                target=serve_listener,
+                kwargs={
+                    "listener": broker_listener,
+                    "service": broker,
+                    "allowed_uids": [os.getuid()],
+                    "stop_event": broker_stop,
+                    "max_workers": 2,
+                },
+                daemon=True,
+            )
+            validator_thread = threading.Thread(
+                target=serve_validator_listener,
+                kwargs={
+                    "listener": validator_listener,
+                    "service": validator,
+                    "allowed_uids": [os.getuid()],
+                    "stop_event": validator_stop,
+                    "max_workers": 2,
+                },
+                daemon=True,
+            )
+            broker_thread.start()
+            validator_thread.start()
+            try:
                 operation = runtime.replay_candidate(
                     tenant_id=tenant_id,
                     mission_run={
@@ -187,6 +193,17 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     task_id=mission_context["task_id"],
                     skill_id=skill.id,
                 )
+            finally:
+                broker_stop.set()
+                validator_stop.set()
+                broker_thread.join(timeout=3)
+                validator_thread.join(timeout=3)
+                broker_listener.close()
+                validator_listener.close()
+                broker_socket_path.unlink(missing_ok=True)
+                validator_socket_path.unlink(missing_ok=True)
+            self.assertFalse(broker_thread.is_alive())
+            self.assertFalse(validator_thread.is_alive())
 
             self.assertEqual(operation["replay"]["result"]["execution_succeeded"], True)
             self.assertEqual(operation["replay"]["experience"]["execution_status"], "succeeded")
