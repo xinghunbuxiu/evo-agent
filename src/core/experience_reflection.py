@@ -474,8 +474,8 @@ class ExperienceReflectionStore:
                 raise ValueError("Reflection decision ID does not match its Experience projection")
             if payload["decision"] == "rejected":
                 _clean_string(payload.get("reason"), "reason")
-            elif payload.get("reason") not in {None, ""}:
-                raise ValueError("accepted Reflection decision cannot contain a rejection reason")
+            elif payload.get("reason") is not None and not isinstance(payload.get("reason"), str):
+                raise ValueError("accepted Reflection decision note must be a string")
             previous = found.get(experience.id)
             if previous is not None and _canonical_json(previous.to_dict()) != _canonical_json(experience.to_dict()):
                 raise ValueError("Reflection decision ID has conflicting persisted content")
@@ -533,8 +533,6 @@ class ExperienceReflectionStore:
         note = str(reason or "").strip() or None
         if outcome == "rejected" and not note:
             raise ValueError("rejected Reflection decision requires a reason")
-        if outcome == "accepted" and note:
-            raise ValueError("accepted Reflection decision cannot contain a rejection reason")
 
         with _exclusive_reflection_lock(self.lock_path):
             reflections = self._load_all_reflections()

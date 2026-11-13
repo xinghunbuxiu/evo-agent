@@ -54,7 +54,7 @@ The `metadata.experience_reflection` object must contain:
 | `decision_at` | Stored on the separate immutable decision record |
 | `source_evidence_refs` | References to evidence already associated with the source Experience or its Mission lineage |
 | `findings` | Structured interpretation, not a replacement for source facts |
-| `decision_reason` | Stored on the separate immutable decision record as `reason` |
+| `decision_reason` | Stored on the separate immutable decision record as `reason`; required for rejection and optional for acceptance |
 | `idempotency_key` | Tenant-scoped key for safe request retries |
 
 The `findings` object should contain:
