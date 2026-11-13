@@ -49,14 +49,14 @@ class ExperienceReflectionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "require a parent"):
             build_pending_reflection(
                 self.make_source(), tenant_id="tenant-a", author="actor",
-                findings={}, revision=2, idempotency_key="request-2",
+                findings={"observed_outcome": "Observed"}, revision=2, idempotency_key="request-2",
             )
 
     def test_builder_rejects_empty_evidence_reference(self):
         with self.assertRaisesRegex(ValueError, "source_evidence_refs"):
             build_pending_reflection(
                 self.make_source(), tenant_id="tenant-a", author="actor",
-                findings={}, source_evidence_refs=[" "], idempotency_key="request-3",
+                findings={"observed_outcome": "Observed"}, source_evidence_refs=[" "], idempotency_key="request-3",
             )
 
     def test_builder_rejects_empty_findings(self):
