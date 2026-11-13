@@ -2365,14 +2365,14 @@ def create_app() -> FastAPI:
                     next_action=next_action,
                     current_focus=current_focus,
                 )
-                    sync_state[member_id] = signature
-                    mission_run["member_reflection_sync"] = sync_state
-                    mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
-                    if len(member_groups) == 1:
-                        mission_run["member_reflection_sync_signature"] = signature
-                        mission_run["member_growth_event_signature"] = signature
-                        mission_run["member_reflection_member_id"] = member_id
-                    changed = True
+                sync_state[member_id] = signature
+                mission_run["member_reflection_sync"] = sync_state
+                mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
+                if len(member_groups) == 1:
+                    mission_run["member_reflection_sync_signature"] = signature
+                    mission_run["member_growth_event_signature"] = signature
+                    mission_run["member_reflection_member_id"] = member_id
+                changed = True
     
         if changed:
             runtime["relationship_center"] = relationship_center
