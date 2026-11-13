@@ -138,9 +138,15 @@ class OrganizationRegistry:
         role_id: str,
         profile: dict[str, Any],
         created_from_worker_id: str | None = None,
+        owner_tenant_id: str | None = None,
+        owner_member_id: str | None = None,
     ) -> dict[str, Any]:
         worker_id = _validate_id(worker_id, "worker_id")
         role_id = _validate_id(role_id, "role_id")
+        owner_tenant_id = _validate_id(owner_tenant_id, "owner_tenant_id") if owner_tenant_id else None
+        owner_member_id = _validate_id(owner_member_id, "owner_member_id") if owner_member_id else None
+        if bool(owner_tenant_id) != bool(owner_member_id):
+            raise ValueError("Worker owner tenant and member ids must be provided together")
         roles = self._read(self.roles_path)
         if role_id not in roles or roles[role_id].get("status") != "active":
             raise ValueError(f"Active role required: {role_id}")
@@ -159,6 +165,8 @@ class OrganizationRegistry:
                 "profile": self._clone_safe_profile(profile),
                 "status": "available",
                 "created_from_worker_id": created_from_worker_id,
+                "owner_tenant_id": owner_tenant_id,
+                "owner_member_id": owner_member_id,
                 "active_task_ids": [],
                 "released_task_ids": [],
                 "task_leases": {},
@@ -192,6 +200,8 @@ class OrganizationRegistry:
                 "profile": self._clone_safe_profile(source.get("profile", {})),
                 "status": "available",
                 "created_from_worker_id": source_worker_id,
+                "owner_tenant_id": source.get("owner_tenant_id"),
+                "owner_member_id": source.get("owner_member_id"),
                 "active_task_ids": [],
                 "released_task_ids": [],
                 "task_leases": {},
@@ -202,6 +212,35 @@ class OrganizationRegistry:
             workers[new_worker_id] = clone
             self._write(self.workers_path, workers)
             return clone
+
+    def bind_worker_owner(
+        self, *, worker_id: str, owner_tenant_id: str, owner_member_id: str
+    ) -> dict[str, Any]:
+        """Bind an execution worker to one tenant-owned employee profile.
+
+        The binding is immutable once established; clones inherit it while keeping
+        independent task leases and runtime state.
+        """
+        worker_id = _validate_id(worker_id, "worker_id")
+        owner_tenant_id = _validate_id(owner_tenant_id, "owner_tenant_id")
+        owner_member_id = _validate_id(owner_member_id, "owner_member_id")
+        with _exclusive_worker_lock(self.root / ".workers.lock"):
+            workers = self._read(self.workers_path)
+            worker = workers.get(worker_id)
+            if worker is None:
+                raise KeyError(f"Worker not found: {worker_id}")
+            current_tenant = str(worker.get("owner_tenant_id") or "").strip()
+            current_member = str(worker.get("owner_member_id") or "").strip()
+            if (current_tenant or current_member) and (
+                current_tenant != owner_tenant_id or current_member != owner_member_id
+            ):
+                raise ValueError("Worker is already bound to a different employee")
+            worker["owner_tenant_id"] = owner_tenant_id
+            worker["owner_member_id"] = owner_member_id
+            worker["updated_at"] = _now()
+            workers[worker_id] = worker
+            self._write(self.workers_path, workers)
+            return worker
 
     def get_worker(self, worker_id: str) -> dict[str, Any] | None:
         return self._read(self.workers_path).get(_validate_id(worker_id, "worker_id"))

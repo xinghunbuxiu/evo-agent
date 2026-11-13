@@ -22,6 +22,30 @@ class OrganizationRegistryTests(unittest.TestCase):
             profile={"model": "configured-model", "skills": ["android-build"]},
         )
 
+    def test_worker_owner_binding_is_immutable_and_cloned_to_execution_instances(self):
+        bound = self.registry.bind_worker_owner(
+            worker_id="android-a",
+            owner_tenant_id="tenant-a",
+            owner_member_id="employee_android",
+        )
+        self.assertEqual(bound["owner_tenant_id"], "tenant-a")
+        self.assertEqual(bound["owner_member_id"], "employee_android")
+        self.registry.bind_worker_owner(
+            worker_id="android-a",
+            owner_tenant_id="tenant-a",
+            owner_member_id="employee_android",
+        )
+        with self.assertRaises(ValueError):
+            self.registry.bind_worker_owner(
+                worker_id="android-a",
+                owner_tenant_id="tenant-b",
+                owner_member_id="employee_android",
+            )
+        clone = self.registry.clone_worker(source_worker_id="android-a", new_worker_id="android-b")
+        self.assertEqual(clone["owner_tenant_id"], "tenant-a")
+        self.assertEqual(clone["owner_member_id"], "employee_android")
+        self.assertEqual(clone["active_task_ids"], [])
+
     def test_clone_is_independent_and_does_not_copy_active_tasks(self):
         self.registry.set_worker_status(worker_id="android-a", status="busy", active_task_ids=["task-1"])
         clone = self.registry.clone_worker(source_worker_id="android-a", new_worker_id="android-b")
