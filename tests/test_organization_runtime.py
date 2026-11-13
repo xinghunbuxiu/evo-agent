@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes, sync_worker_catalog
+from admin.runtime_state import normalize_child_member_runtime
 
 
 class OrganizationRegistryTests(unittest.TestCase):
@@ -20,6 +21,20 @@ class OrganizationRegistryTests(unittest.TestCase):
         self.registry.create_worker(
             worker_id="android-a", role_id="android-dev",
             profile={"model": "configured-model", "skills": ["android-build"]},
+        )
+
+    def test_employee_profile_preserves_execution_worker_links(self):
+        employee = normalize_child_member_runtime({
+            "tenant_id": "tenant-a",
+            "member_id": "employee_android",
+            "name": "Android 工程师",
+            "instance_runtime": {
+                "organization_worker_ids": ["android-a", "android-b"],
+            },
+        })
+        self.assertEqual(
+            employee["instance_runtime"]["organization_worker_ids"],
+            ["android-a", "android-b"],
         )
 
     def test_worker_owner_binding_is_immutable_and_cloned_to_execution_instances(self):
