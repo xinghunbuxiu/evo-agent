@@ -858,7 +858,7 @@ def create_mission_execution_bindings(
             else []
         )
         dependency_history = list(previous_dependency_decisions)
-        node_status_by_id: dict[str, str] = {}
+        node_statuses_by_id: dict[str, list[str]] = {}
         for item in refreshed_actions:
             if not isinstance(item, dict):
                 continue
@@ -868,15 +868,20 @@ def create_mission_execution_bindings(
                 continue
             item_node_id = str(item.get("node_id") or "").strip()
             if item_node_id:
-                node_status_by_id[item_node_id] = str(item.get("status") or "").strip()
+                node_statuses_by_id.setdefault(item_node_id, []).append(
+                    str(item.get("status") or "").strip()
+                )
 
+        # A Mission node may fan out to several queue tasks. It is complete only
+        # when every task action completed successfully; a single success must not
+        # overwrite a sibling failure, cancellation, or still-running task.
         completed_node_ids = sorted(
-            node_id for node_id, node_status in node_status_by_id.items()
-            if node_status in {"completed", "improved"}
+            node_id for node_id, statuses in node_statuses_by_id.items()
+            if statuses and all(status in {"completed", "improved"} for status in statuses)
         )
         failed_node_ids = sorted(
-            node_id for node_id, node_status in node_status_by_id.items()
-            if node_status in {"failed", "verification_failed", "regressed"}
+            node_id for node_id, statuses in node_statuses_by_id.items()
+            if any(status in {"failed", "verification_failed", "regressed", "cancelled"} for status in statuses)
         )
         completed_node_set = set(completed_node_ids)
         failed_node_set = set(failed_node_ids)

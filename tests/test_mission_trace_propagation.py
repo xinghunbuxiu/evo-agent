@@ -352,6 +352,105 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertTrue(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["required"])
         self.assertFalse(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["automatic_dispatch"])
 
+    def _refresh_dependency_for_task_statuses(self, task_statuses):
+        tasks = {
+            task_id: SimpleNamespace(
+                id=task_id,
+                type="analyze",
+                status=SimpleNamespace(value=status),
+                result={"summary": f"{task_id} {status}"},
+                error=f"{task_id} failed" if status == "failed" else None,
+                payload={},
+                completed_at="2026-11-13T10:00:00+00:00",
+                tenant_id="tenant-a",
+            )
+            for task_id, status in task_statuses
+        }
+        task_queue = SimpleNamespace(get_task=lambda task_id: tasks.get(task_id))
+        resume = mock.Mock(return_value={
+            "actions": [{
+                "node_id": "node-b", "action_type": "task_submitted",
+                "status": "submitted", "task_id": "task-node-b", "task_type": "execute",
+            }],
+            "submitted_task_ids": ["task-node-b"],
+            "counts": {"submitted": 1, "needs_learning": 0, "needs_input": 0, "planned_only": 0},
+        })
+        bindings = self._execution_bindings(resume)
+        actions = [{
+            "node_id": "node-a", "action_type": "task_submitted", "status": "submitted",
+            "task_id": task_id, "task_type": "analyze", "decision_trace": [],
+        } for task_id, _ in task_statuses]
+        actions.append({
+            "node_id": "node-b", "action_type": "dependency_blocked", "status": "blocked",
+            "depends_on": ["node-a"], "dependency_state": "waiting", "decision_trace": [],
+        })
+        mission_run = {
+            "mission_run_id": "run-multi-task", "tenant_id": "tenant-a",
+            "goal": "multi-task dependency test", "context": {}, "runtime_route": {},
+            "work_type": {}, "work_type_summary": {},
+            "submitted_task_ids": [task_id for task_id, _ in task_statuses],
+            "plan": {"nodes": [
+                {"id": "node-a", "depends_on": [], "role_reflection_context": {}},
+                {"id": "node-b", "depends_on": ["node-a"], "role_reflection_context": {}},
+            ]},
+            "actions": actions,
+        }
+        refreshed = bindings["refresh_mission_run"](
+            workspace=Path("."), task_queue=task_queue,
+            tenant_manager=SimpleNamespace(get_knowledge_policy=lambda tenant_id: {}),
+            mission_run=mission_run,
+            build_mission_next_cycle_plan=lambda run, current_actions: {
+                "status": "pending", "next_steps": [], "focus_points": [],
+            },
+            build_mission_growth_timeline=lambda current_actions: [],
+        )
+        return refreshed, resume
+
+    def test_mixed_success_and_failure_tasks_do_not_release_dependent_node(self):
+        refreshed, resume = self._refresh_dependency_for_task_statuses([
+            ("task-node-a-failed", "failed"),
+            ("task-node-a-success", "success"),
+        ])
+
+        resume.assert_not_called()
+        self.assertEqual(refreshed["dependency_runtime"]["failed_node_ids"], ["node-a"])
+        dependent = next(
+            item for item in refreshed["actions"]
+            if item.get("node_id") == "node-b" and item.get("action_type") == "dependency_blocked"
+        )
+        self.assertEqual(dependent["dependency_state"], "failed")
+        self.assertTrue(dependent["replan_required"])
+
+    def test_completed_task_does_not_release_dependent_while_sibling_is_running(self):
+        refreshed, resume = self._refresh_dependency_for_task_statuses([
+            ("task-node-a-running", "running"),
+            ("task-node-a-success", "success"),
+        ])
+
+        resume.assert_not_called()
+        self.assertNotIn("node-a", refreshed["dependency_runtime"]["completed_node_ids"])
+        dependent = next(
+            item for item in refreshed["actions"]
+            if item.get("node_id") == "node-b" and item.get("action_type") == "dependency_blocked"
+        )
+        self.assertEqual(dependent["dependency_state"], "waiting")
+        self.assertEqual(dependent["dependency_blockers"], ["node-a"])
+
+    def test_cancelled_prerequisite_marks_dependents_for_replanning(self):
+        refreshed, resume = self._refresh_dependency_for_task_statuses([
+            ("task-node-a-cancelled", "cancelled"),
+        ])
+
+        resume.assert_not_called()
+        self.assertEqual(refreshed["dependency_runtime"]["failed_node_ids"], ["node-a"])
+        dependent = next(
+            item for item in refreshed["actions"]
+            if item.get("node_id") == "node-b" and item.get("action_type") == "dependency_blocked"
+        )
+        self.assertEqual(dependent["dependency_state"], "failed")
+        self.assertEqual(dependent["replan_reason_code"], "dependency_failed")
+        self.assertTrue(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["required"])
+
     def test_follow_up_context_preserves_run_lineage_without_mutating_source(self):
         source_context = {
             "autonomy_cycle": 1,
