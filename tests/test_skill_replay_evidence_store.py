@@ -1,10 +1,13 @@
 """Tests for signed Skill Replay evidence persistence and Experience linkage."""
 import base64
 import json
+import os
+import stat
 import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -20,6 +23,19 @@ from core.skill_replay_evidence_store import SkillReplayEvidenceError, SkillRepl
 
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+
+def _fail_directory_fsync(real_fsync, directory):
+    target = Path(directory).stat()
+
+    def fail(fd):
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            raise OSError("simulated directory fsync failure")
+        return real_fsync(fd)
+
+    return fail
 
 
 class SkillReplayEvidenceStoreTests(unittest.TestCase):
@@ -169,6 +185,54 @@ class SkillReplayEvidenceStoreTests(unittest.TestCase):
                 changed, tenant_id="tenant-a", workspace_id="workspace-a",
                 mission_context=self.context, skill_binding=self.binding,
             )
+
+
+
+
+    def test_tenant_directory_creation_fails_closed_when_parent_fsync_fails(self):
+        attested = self._attested()
+        with patch(
+            "core.skill_replay_evidence_store.os.fsync",
+            side_effect=_fail_directory_fsync(os.fsync, self.root),
+        ):
+            with self.assertRaisesRegex(SkillReplayEvidenceError, "directory durability"):
+                self.store.record(
+                    attested, tenant_id="tenant-a", workspace_id="workspace-a",
+                    mission_context=self.context, skill_binding=self.binding,
+                )
+        tenant_dir = self.root / "tenant-a"
+        self.assertTrue(tenant_dir.is_dir())
+        self.assertEqual(list(tenant_dir.glob("*.json")), [])
+
+    def test_identical_evidence_retry_reconfirms_directory_durability(self):
+        attested = self._attested()
+        self.store.record(
+            attested, tenant_id="tenant-a", workspace_id="workspace-a",
+            mission_context=self.context, skill_binding=self.binding,
+        )
+        tenant_dir = self.root / "tenant-a"
+        with patch(
+            "core.skill_replay_evidence_store.os.fsync",
+            side_effect=_fail_directory_fsync(os.fsync, tenant_dir),
+        ):
+            with self.assertRaisesRegex(SkillReplayEvidenceError, "directory durability"):
+                self.store.record(
+                    attested, tenant_id="tenant-a", workspace_id="workspace-a",
+                    mission_context=self.context, skill_binding=self.binding,
+                )
+
+    def test_atomic_create_collision_reconfirms_directory_durability(self):
+        tenant_dir = self.root / "tenant-a"
+        tenant_dir.mkdir(mode=0o700)
+        path = tenant_dir / "evidence.json"
+        payload = b'{"immutable":true}'
+        self.store._atomic_create(path, payload)
+        with patch(
+            "core.skill_replay_evidence_store.os.fsync",
+            side_effect=_fail_directory_fsync(os.fsync, tenant_dir),
+        ):
+            with self.assertRaisesRegex(SkillReplayEvidenceError, "directory durability"):
+                self.store._atomic_create(path, payload)
 
 
 if __name__ == "__main__":

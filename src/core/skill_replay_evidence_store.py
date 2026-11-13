@@ -56,6 +56,21 @@ def _private_directory(path: Path) -> Path:
     return path
 
 
+def _fsync_directory(path: Path) -> None:
+    """Confirm directory-entry durability before accepting evidence writes."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise SkillReplayEvidenceError(
+            "evidence directory durability could not be confirmed"
+        ) from exc
+
+
 class SkillReplayEvidenceStore:
     """Create-once signed evidence store; never treats worker-supplied flags as proof."""
 
@@ -73,20 +88,29 @@ class SkillReplayEvidenceStore:
     def _tenant_dir(self, tenant_id: str, *, create: bool) -> Path:
         tenant = _identity(tenant_id, "tenant_id")
         path = self.root / tenant
-        if path.exists() or path.is_symlink():
+        if not (path.exists() or path.is_symlink()) and create:
             try:
-                info = path.lstat()
+                path.mkdir(mode=0o700)
+            except FileExistsError:
+                # Another Broker worker may have created the tenant directory.
+                pass
             except OSError as exc:
-                raise SkillReplayEvidenceError("tenant evidence directory is unavailable") from exc
-            if (
-                not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
-                or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077
-            ):
-                raise SkillReplayEvidenceError("tenant evidence directory is unsafe")
-        elif create:
-            path.mkdir(mode=0o700)
-        else:
+                raise SkillReplayEvidenceError("tenant evidence directory could not be created") from exc
+        if not (path.exists() or path.is_symlink()):
             raise SkillReplayEvidenceError("tenant evidence directory is unavailable")
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise SkillReplayEvidenceError("tenant evidence directory is unavailable") from exc
+        if (
+            not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077
+        ):
+            raise SkillReplayEvidenceError("tenant evidence directory is unsafe")
+        # Reconfirm the parent entry on every access. This also recovers a
+        # retry after a prior process created the directory but could not
+        # confirm its directory-entry durability.
+        _fsync_directory(self.root)
         return path
 
     def _path(self, tenant_id: str, evidence_id: str, *, create: bool) -> Path:
@@ -136,19 +160,23 @@ class SkillReplayEvidenceStore:
             except FileExistsError:
                 if SkillReplayEvidenceStore._read_private(path) != payload:
                     raise SkillReplayEvidenceError("evidence ID already exists with different signed content")
-                return
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-            if SkillReplayEvidenceStore._read_private(path) != payload:
-                raise SkillReplayEvidenceError("evidence readback verification failed")
+        except SkillReplayEvidenceError:
+            raise
+        except OSError as exc:
+            raise SkillReplayEvidenceError("evidence could not be atomically published") from exc
         finally:
             try:
                 temp_path.unlink()
             except FileNotFoundError:
                 pass
+            except OSError as exc:
+                raise SkillReplayEvidenceError("temporary evidence file cleanup failed") from exc
+
+        # The create-once link and temporary-file removal are one durable
+        # directory update. Identical concurrent retries must also confirm it.
+        _fsync_directory(path.parent)
+        if SkillReplayEvidenceStore._read_private(path) != payload:
+            raise SkillReplayEvidenceError("evidence readback verification failed")
 
     def _verify_envelope(self, envelope, *, workspace_id, mission_context, skill_binding):
         if not isinstance(envelope, dict):
@@ -209,6 +237,9 @@ class SkillReplayEvidenceStore:
         evidence_id = _identity(envelope.get("request_id"), "evidence_id", _UUID_RE)
         path = self._path(tenant, evidence_id, create=True)
         if path.exists() or path.is_symlink():
+            # A prior publisher may have linked the file but failed before
+            # confirming directory durability. Never accept that retry early.
+            _fsync_directory(path.parent)
             existing = self.load_verified(tenant_id=tenant, evidence_id=evidence_id)
             if existing["broker_attestation"] != envelope:
                 raise SkillReplayEvidenceError("evidence ID already exists with different signed content")
