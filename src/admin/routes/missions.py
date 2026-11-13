@@ -597,7 +597,7 @@ def register_mission_routes(
                                 "validator": "not_checked",
                                 "execution_succeeded": None,
                                 "validation_id": None,
-                                "promotion": "not_checked",
+                                "broker_promotion": "not_checked",
                                 "verification_error_type": type(exc).__name__,
                             }
 
@@ -617,7 +617,9 @@ def register_mission_routes(
                         "automatic_resume": False,
                         "next_step": "operator_review_required",
                     }
-                elif verified_receipts.get("broker_execution") == "invalid" or verified_receipts.get("validator") == "invalid":
+                elif any(verified_receipts.get(key) == "invalid" for key in (
+                    "broker_execution", "validator", "broker_promotion",
+                )):
                     assessment = {
                         "status": "invalid_signed_evidence",
                         "automatic_resume": False,
