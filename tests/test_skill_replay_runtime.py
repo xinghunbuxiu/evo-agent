@@ -66,6 +66,87 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             version=version,
         )
 
+    @patch("admin.skill_replay_runtime.verify_validation_response")
+    @patch("admin.skill_replay_runtime.verify_broker_response")
+    def test_recovery_review_reverifies_broker_and_validator_signed_receipts(
+        self, verify_broker, verify_validator,
+    ):
+        environ = dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        })
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-a",
+            "node_id": "node-a", "task_id": "task-a",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "draft",
+            "mission_context": context,
+        }
+        broker_envelope = {"signed": "broker-envelope"}
+        verify_broker.return_value = {"execution_succeeded": True}
+        verify_validator.return_value = {"validation_id": "validation-a"}
+        result = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            execution_request_id="11111111-1111-4111-8111-111111111111",
+            validation_request_id="22222222-2222-4222-8222-222222222222",
+            broker_outcomes={
+                "execution": {"status": "completed", "response": broker_envelope},
+            },
+            validator_outcome={
+                "status": "completed", "response": {"signed": "validator-envelope"},
+            },
+        )
+        self.assertEqual(result["broker_execution"], "verified")
+        self.assertEqual(result["validator"], "verified")
+        self.assertEqual(result["validation_id"], "validation-a")
+        expected_identity = verify_validator.call_args.kwargs["expected_identity"]
+        self.assertEqual(expected_identity["broker_attestation_sha256"], broker_response_sha256(broker_envelope))
+        self.assertEqual(expected_identity["content_sha256"], "a" * 64)
+        self.assertEqual(expected_identity["mission_run_id"], "mission-a")
+
+    @patch("admin.skill_replay_runtime.verify_validation_response")
+    @patch("admin.skill_replay_runtime.verify_broker_response")
+    def test_recovery_review_rejects_invalid_broker_receipt_before_validator(
+        self, verify_broker, verify_validator,
+    ):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        }))
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-a",
+            "node_id": "node-a", "task_id": "task-a",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "draft",
+            "mission_context": context,
+        }
+        verify_broker.side_effect = ValueError("bad signature")
+        result = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            execution_request_id="11111111-1111-4111-8111-111111111111",
+            validation_request_id="22222222-2222-4222-8222-222222222222",
+            broker_outcomes={
+                "execution": {"status": "completed", "response": {"tampered": True}},
+            },
+            validator_outcome={
+                "status": "completed", "response": {"signed": "validator-envelope"},
+            },
+        )
+        self.assertEqual(result["broker_execution"], "invalid")
+        self.assertEqual(result["validator"], "not_checked")
+        verify_validator.assert_not_called()
+
     def test_missing_configuration_keeps_replay_disabled(self):
         self.assertIsNone(create_skill_replay_runtime(workspace=self.workspace, environ={}))
 
