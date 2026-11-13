@@ -546,7 +546,10 @@ def create_mission_delivery_skill_candidate(
         existing_candidate = load_local_skill_payload(workspace, tenant_id, skill.id)
         if existing_candidate is not None and any(
             existing_candidate.get(field) != skill.to_dict().get(field)
-            for field in ("id", "version", "code", "parameters", "trust_level")
+            for field in (
+                "id", "name", "domain", "capability_type", "description",
+                "version", "code", "parameters", "trust_level", "source",
+            )
         ):
             raise ValueError("executable Skill candidate ID already exists with different immutable content")
         skill_info = write_skill_candidate(workspace, tenant_id, skill)

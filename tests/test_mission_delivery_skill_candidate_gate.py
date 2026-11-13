@@ -86,6 +86,48 @@ class MissionDeliverySkillCandidateGateTests(unittest.TestCase):
             self.assertEqual(saved["parameters"]["mission_node_id"], "promote_knowledge")
             self.assertEqual(saved["parameters"]["candidate_origin_task_id"], "reconstruct-a")
 
+            retry = knowledge_runtime.create_mission_delivery_skill_candidate(
+                workspace=Path(tmp),
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "mission-a",
+                    "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": []}]},
+                },
+                analyze_snapshot={"task_id": "analyze-a", "summary": "validated input"},
+                reconstruct_snapshot={
+                    "task_id": "reconstruct-a",
+                    "evaluation_verdict": "pass",
+                    "evaluation_score": 1.0,
+                    "evaluation_metrics": {"components": 3, "has_target_dir": True},
+                    "skill_candidate": candidate,
+                },
+                safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                build_snapshot_signature=lambda snapshot: {},
+                record_growth_event=lambda *args, **kwargs: None,
+            )
+            self.assertEqual(retry["skill_id"], "skill_delivery_exec_v1")
+            conflicting_candidate = {**candidate, "description": "different immutable description"}
+            with self.assertRaisesRegex(ValueError, "different immutable content"):
+                knowledge_runtime.create_mission_delivery_skill_candidate(
+                    workspace=Path(tmp),
+                    tenant_id="tenant-a",
+                    mission_run={
+                        "mission_run_id": "mission-a",
+                        "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": []}]},
+                    },
+                    analyze_snapshot={"task_id": "analyze-a", "summary": "validated input"},
+                    reconstruct_snapshot={
+                        "task_id": "reconstruct-a",
+                        "evaluation_verdict": "pass",
+                        "evaluation_score": 1.0,
+                        "evaluation_metrics": {"components": 3, "has_target_dir": True},
+                        "skill_candidate": conflicting_candidate,
+                    },
+                    safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                    build_snapshot_signature=lambda snapshot: {},
+                    record_growth_event=lambda *args, **kwargs: None,
+                )
+
     def test_invalid_executable_candidate_is_rejected_instead_of_becoming_a_recipe(self):
         candidate = {
             "id": "skill_delivery_invalid",
