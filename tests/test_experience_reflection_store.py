@@ -175,6 +175,34 @@ class ExperienceReflectionStoreTests(unittest.TestCase):
                 idempotency_key="review-after-source-change",
             )
 
+    def test_listing_one_source_ignores_decisions_for_other_sources(self):
+        first = self.append()
+        other_source = Experience(
+            id="source-exp-2",
+            domain="ios",
+            task_type="analysis",
+            input_summary="other source",
+            output_summary="other result",
+            quality_score=0.7,
+            metadata={"evidence_ids": ["evidence-2"]},
+        )
+        self.tenant_store.save(other_source)
+        second = self.store.append(
+            other_source.id,
+            author="tenant-member-2",
+            findings={"observed_outcome": "Other source observation"},
+            source_evidence_refs=["evidence-2"],
+            idempotency_key="request-other-source",
+        )
+        self.store.decide(
+            second.id,
+            reviewer="tenant-admin-2",
+            decision="accepted",
+            idempotency_key="review-other-source",
+        )
+        listed = self.store.list_reviewed_for_source(self.source.id)
+        self.assertEqual([item["reflection"]["id"] for item in listed], [first.id])
+
     def test_decision_requires_reason_for_rejection(self):
         reflection = self.append()
         with self.assertRaisesRegex(ValueError, "requires a reason"):

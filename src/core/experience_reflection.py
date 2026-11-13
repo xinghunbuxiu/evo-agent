@@ -542,9 +542,6 @@ class ExperienceReflectionStore:
             if target is None:
                 raise ValueError("Reflection does not exist in this tenant")
             source_payload = target.metadata["experience_reflection"]
-            current_source = self._load_source(source_payload["source_experience_id"])
-            if canonical_experience_digest(current_source) != source_payload["source_experience_digest"]:
-                raise ValueError("source Experience digest changed; Reflection cannot be reviewed")
             if source_payload["author"] == actor:
                 raise ValueError("Reflection author cannot review their own submission")
             decisions = self._load_all_decisions()
@@ -573,6 +570,10 @@ class ExperienceReflectionStore:
                 else:
                     self.experience_store.save(existing)
                 return existing
+
+            current_source = self._load_source(source_payload["source_experience_id"])
+            if canonical_experience_digest(current_source) != source_payload["source_experience_digest"]:
+                raise ValueError("source Experience digest changed; Reflection cannot be reviewed")
 
             if any(
                 item.metadata["experience_reflection_decision"]["reflection_id"] == target_id
@@ -617,8 +618,9 @@ class ExperienceReflectionStore:
         with _exclusive_reflection_lock(self.lock_path):
             source = self._load_source(source_id)
             current_digest = canonical_experience_digest(source)
+            all_reflections = self._load_all_reflections()
             reflections = [
-                item for item in self._load_all_reflections()
+                item for item in all_reflections
                 if item.metadata["experience_reflection"]["source_experience_id"] == source_id
             ]
             reflections.sort(
@@ -630,7 +632,7 @@ class ExperienceReflectionStore:
             ):
                 raise ValueError("source Experience digest changed; Reflection lineage is stale")
             decisions = self._load_all_decisions()
-            reflection_by_id = {item.id: item for item in reflections}
+            reflection_by_id = {item.id: item for item in all_reflections}
             by_reflection: dict[str, Experience] = {}
             for decision in decisions:
                 payload = decision.metadata["experience_reflection_decision"]
@@ -647,6 +649,8 @@ class ExperienceReflectionStore:
                     raise ValueError("Reflection decision lineage does not match its Reflection")
                 if payload.get("reviewer") == source_payload["author"]:
                     raise ValueError("Reflection author cannot review their own submission")
+                if source_payload["source_experience_id"] != source_id:
+                    continue
                 if reflection_id in by_reflection:
                     raise ValueError("Reflection has multiple terminal decisions")
                 by_reflection[reflection_id] = decision
