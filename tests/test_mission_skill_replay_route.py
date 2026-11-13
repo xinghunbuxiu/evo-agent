@@ -473,6 +473,48 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(previous["recovery_reason"], "recovery_lease_expired")
         self.assertEqual(saved["recovery_attempts"][-1]["status"], "completed")
 
+    def test_active_recovery_lease_blocks_concurrent_resume(self):
+        from datetime import datetime, timedelta
+
+        attempt_id = "77777777-7777-4777-8777-777777777777"
+        action = {
+            "action_type": "skill_replay",
+            "status": "interrupted",
+            "recovery_status": "needs_review",
+            "recovery_attempt_status": "in_progress",
+            "recovery_attempt_id": attempt_id,
+            "recovery_attempts": [{
+                "attempt_id": attempt_id,
+                "operation": "resume_promotion_only",
+                "status": "in_progress",
+                "started_at": (datetime.now().astimezone() - timedelta(minutes=2)).isoformat(),
+            }],
+            "task_id": "task-a",
+            "node_id": "node-a",
+            "skill_id": "skill-a",
+        }
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-a"}]}, "actions": [action],
+        }]})
+        runtime = _ReplayRuntime()
+        runtime.resume_promotion = lambda **kwargs: self.fail(
+            "an unexpired recovery lease must prevent a concurrent promotion"
+        )
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        route = "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion"
+        response = asyncio.run(app.routes[("POST", route)](
+            request=_request({"confirm": True}),
+            mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
+        ))
+        self.assertEqual(response["status"], 409)
+        saved = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(saved["recovery_attempt_status"], "in_progress")
+        self.assertEqual(saved["recovery_attempt_id"], attempt_id)
+        self.assertEqual(len(saved["recovery_attempts"]), 1)
+        self.assertEqual(saved["recovery_attempts"][0]["status"], "in_progress")
+
     def test_in_progress_recovery_with_untrusted_timestamp_fails_closed(self):
         action = {
             "action_type": "skill_replay", "status": "interrupted",
