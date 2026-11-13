@@ -905,3 +905,5 @@ def register_mission_routes(
             return error
         return success_response({
             "source_mission_run_id": mission_run_id,
+            "continued_mission_run": latest,
+        }, "已基于上一轮结果启动下一轮 Mission")
