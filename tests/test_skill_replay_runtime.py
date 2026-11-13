@@ -804,5 +804,90 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["promotion_request_id"], promotion_id)
 
 
+
+    def test_recovery_review_verifies_signed_stage_receipt_and_rejects_tampering(self):
+        from core.sandbox_broker_protocol import (
+            SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+            SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+        )
+
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        context = {
+            "tenant_id": "tenant-a",
+            "mission_run_id": "mission-a",
+            "node_id": "node-a",
+            "task_id": "task-a",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a",
+            "skill_version": "1.0.0",
+            "content_sha256": "a" * 64,
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        stage_request_id = "11111111-1111-4111-8111-111111111111"
+        payload = {
+            "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+            "request_id": stage_request_id,
+            "workspace_id": "workspace-a",
+            "mission_context": context,
+            "candidate_artifact": {
+                "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+                "tenant_id": "tenant-a",
+                "skill_id": "skill-a",
+                "skill_version": "1.0.0",
+                "content_sha256": "a" * 64,
+                "trust_level": "draft",
+            },
+        }
+        signed = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        response = {
+            **payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "broker-test-key",
+                "value": base64.b64encode(
+                    self.broker_private_key.sign(signed)
+                ).decode("ascii"),
+            },
+        }
+
+        verified = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            stage_request_id=stage_request_id,
+            execution_request_id="22222222-2222-4222-8222-222222222222",
+            validation_request_id=None,
+            broker_outcomes={
+                "stage": {"status": "completed", "response": response},
+            },
+            validator_outcome={},
+        )
+        self.assertEqual(verified["broker_stage"], "verified")
+
+        tampered = {
+            **response,
+            "signature": {
+                **response["signature"],
+                "value": base64.b64encode(b"\x00" * 64).decode("ascii"),
+            },
+        }
+        rejected = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            stage_request_id=stage_request_id,
+            execution_request_id="22222222-2222-4222-8222-222222222222",
+            validation_request_id=None,
+            broker_outcomes={
+                "stage": {"status": "completed", "response": tampered},
+            },
+            validator_outcome={},
+        )
+        self.assertEqual(rejected["broker_stage"], "invalid")
+
 if __name__ == "__main__":
     unittest.main()
