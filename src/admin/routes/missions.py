@@ -436,6 +436,180 @@ def register_mission_routes(
             pass
         return error_response(error_message, error_status)
 
+    @app.post("/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion")
+    async def resume_mission_skill_promotion(
+        request: Request, mission_run_id: str, skill_id: str, task_id: str,
+    ):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if skill_replay_runtime is None or not callable(
+            getattr(skill_replay_runtime, "resume_promotion", None)
+        ):
+            return error_response("Skill Replay 恢复服务尚未配置", 503)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict) or data != {"confirm": True}:
+            return error_response("必须明确确认仅恢复 Artifact Store 发布：confirm=true", 400)
+
+        attempt_id = str(uuid.uuid4())
+        with exclusive_mission_claim_lock(workspace):
+            try:
+                state = load_mission_runs_strict(workspace)
+            except (OSError, UnicodeError, ValueError):
+                return error_response("Mission 恢复记录不可读取", 500)
+            mission_run = next((
+                item for item in state["items"]
+                if isinstance(item, dict)
+                and str(item.get("mission_run_id") or "") == mission_run_id
+            ), None)
+            if not isinstance(mission_run, dict):
+                return error_response("未找到对应的 Mission run", 404)
+            tenant_id = str(mission_run.get("tenant_id") or "")
+            if not authorize_tenant(user, tenant_id):
+                return error_response("无权访问该租户", 403)
+            if tenant_role(user, tenant_id) != "tenant_admin":
+                return error_response("仅租户管理员可以确认 Skill Replay 恢复", 403)
+            actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
+            action = next((
+                item for item in actions
+                if isinstance(item, dict)
+                and item.get("action_type") == "skill_replay"
+                and item.get("task_id") == task_id
+                and item.get("skill_id") == skill_id
+            ), None)
+            if not isinstance(action, dict):
+                return error_response("未找到对应的 Skill Replay 操作", 404)
+            if action.get("recovery_status") == "reconciled" and action.get("promotion_status") == "published":
+                return success_response({
+                    "status": "already_reconciled",
+                    "artifact": action.get("published_artifact"),
+                    "task_id": task_id,
+                }, "该 Skill Artifact 已完成恢复")
+            if action.get("status") != "interrupted" or action.get("recovery_status") != "needs_review":
+                return error_response("该操作当前不处于可恢复的人工复核状态", 409)
+            if action.get("recovery_attempt_status") == "in_progress":
+                return error_response("该操作已有恢复请求正在执行", 409)
+
+            binding = action.get("skill_binding")
+            if not isinstance(binding, dict):
+                return error_response("缺少已固定的 Skill 候选身份", 409)
+            request_fields = (
+                "stage_request_id", "execution_request_id",
+                "validation_request_id", "promotion_request_id",
+            )
+            request_ids = {name: action.get(name) for name in request_fields}
+            if any(
+                not isinstance(value, str) or not re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    value,
+                )
+                for value in request_ids.values()
+            ):
+                return error_response("原始 Broker/Validator 请求身份不完整，拒绝恢复", 409)
+            attempt = {
+                "attempt_id": attempt_id,
+                "operation": "resume_promotion_only",
+                "status": "in_progress",
+                "started_at": datetime.now().astimezone().isoformat(),
+            }
+            attempts = action.get("recovery_attempts")
+            if not isinstance(attempts, list):
+                attempts = []
+            attempts.append(attempt)
+            action["recovery_attempts"] = attempts[-50:]
+            action["recovery_attempt_status"] = "in_progress"
+            action["recovery_attempt_id"] = attempt_id
+            mission_run["actions"] = actions
+            mission_run["updated_at"] = datetime.now().astimezone().isoformat()
+            save_mission_runs(workspace, state)
+
+        try:
+            recovered = await asyncio.to_thread(
+                skill_replay_runtime.resume_promotion,
+                tenant_id=tenant_id,
+                mission_run_id=mission_run_id,
+                node_id=str(action.get("node_id") or ""),
+                task_id=task_id,
+                skill_id=skill_id,
+                skill_binding=binding,
+                **request_ids,
+            )
+            if not isinstance(recovered, dict) or recovered.get("status") != "published":
+                raise RuntimeError("promotion recovery did not return a verified published artifact")
+        except Exception as exc:
+            with exclusive_mission_claim_lock(workspace):
+                current_state = load_mission_runs_strict(workspace)
+                current_run = next((
+                    item for item in current_state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                current_action = next((
+                    item for item in (current_run.get("actions") if isinstance(current_run, dict) and isinstance(current_run.get("actions"), list) else [])
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if isinstance(current_action, dict) and current_action.get("recovery_attempt_id") == attempt_id:
+                    current_action["recovery_attempt_status"] = "indeterminate"
+                    current_action["recovery_status"] = "needs_review"
+                    current_attempts = current_action.get("recovery_attempts", [])
+                    if current_attempts and current_attempts[-1].get("attempt_id") == attempt_id:
+                        current_attempts[-1].update({
+                            "status": "indeterminate",
+                            "error_type": type(exc).__name__,
+                            "finished_at": datetime.now().astimezone().isoformat(),
+                        })
+                    current_run["updated_at"] = datetime.now().astimezone().isoformat()
+                    save_mission_runs(workspace, current_state)
+            return error_response(f"仅发布恢复未能确认: {type(exc).__name__}", 502)
+
+        with exclusive_mission_claim_lock(workspace):
+            current_state = load_mission_runs_strict(workspace)
+            current_run = next((
+                item for item in current_state["items"]
+                if isinstance(item, dict)
+                and str(item.get("mission_run_id") or "") == mission_run_id
+                and item.get("tenant_id") == tenant_id
+            ), None)
+            current_action = next((
+                item for item in (current_run.get("actions") if isinstance(current_run, dict) and isinstance(current_run.get("actions"), list) else [])
+                if isinstance(item, dict) and item.get("task_id") == task_id
+            ), None)
+            if (
+                not isinstance(current_action, dict)
+                or current_action.get("recovery_attempt_id") != attempt_id
+                or current_action.get("promotion_request_id") != request_ids["promotion_request_id"]
+                or current_action.get("skill_binding") != binding
+            ):
+                return error_response("恢复结果已产生，但 Mission 身份在回写前发生变化；保留人工复核", 409)
+            current_action.update({
+                "status": "completed",
+                "recovery_status": "reconciled",
+                "recovery_attempt_status": "completed",
+                "promotion_status": "published",
+                "published_artifact": recovered.get("artifact"),
+                "completion_message": "原 Broker 执行与 Validator 证据已复核；仅恢复 Artifact Store 发布，未重新执行 Skill",
+                "completed_at": datetime.now().astimezone().isoformat(),
+            })
+            current_attempts = current_action.get("recovery_attempts", [])
+            if current_attempts and current_attempts[-1].get("attempt_id") == attempt_id:
+                current_attempts[-1].update({
+                    "status": "completed",
+                    "finished_at": datetime.now().astimezone().isoformat(),
+                    "artifact": recovered.get("artifact"),
+                })
+            current_run["updated_at"] = datetime.now().astimezone().isoformat()
+            save_mission_runs(workspace, current_state)
+        return success_response({
+            "status": "reconciled",
+            "task_id": task_id,
+            "artifact": recovered.get("artifact"),
+            "validation_provenance": recovered.get("validation_provenance"),
+        }, "Skill Artifact 发布已恢复并回写 Mission；未重新执行 Skill")
+
     @app.get("/api/missions/skill-replays/recovery-review")
     async def list_skill_replay_recovery_review(request: Request, tenant_id: str | None = None, limit: int = 100):
         user = get_session_user(request)
