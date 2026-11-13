@@ -483,11 +483,8 @@ class SkillReplayRuntime:
         stage_outcome = self.broker_request_status(stage_request_id, context)
         execution_outcome = self.broker_request_status(execution_request_id, context)
         promotion_outcome = self.broker_request_status(promotion_request_id, context)
-        # A completed immutable publication is never retried. Reject it before
-        # contacting Validator; its signed receipt must be reconciled separately.
-        if promotion_outcome.get("status") == "completed":
-            raise ValueError("promotion is already completed; reconcile its signed receipt instead")
-        if promotion_outcome.get("status") not in {"indeterminate", "not_found"}:
+        promotion_status = promotion_outcome.get("status")
+        if promotion_status not in {"completed", "indeterminate", "not_found"}:
             raise ValueError("promotion status is not eligible for controlled recovery")
         validator_outcome = self.validator_request_status(validation_request_id, context)
 
@@ -547,24 +544,35 @@ class SkillReplayRuntime:
         if expected_promotion_id != promotion_request_id:
             raise PermissionError("promotion request ID does not match the original signed Validator attestation")
 
-        receipt = promote_skill_candidate_via_broker(
-            self.socket_path,
-            self.workspace_id,
-            mission_context=context,
-            skill_id=skill.id,
-            skill_version=skill.version,
-            content_sha256=binding["content_sha256"],
-            trust_level=_VALIDATED_TRUST_LEVEL,
-            validation_attestation=validation_attestation,
-            public_key=self.broker_public_key,
-            expected_key_id=self.broker_key_id,
-            request_id=promotion_request_id,
-        )
+        if promotion_status == "completed":
+            # A crash may occur after Broker has durably published and signed
+            # the receipt but before Mission state is written back. Reconcile
+            # only after every original receipt (including promotion) verifies.
+            if verified.get("broker_promotion") != "verified":
+                raise PermissionError("completed Broker promotion receipt did not verify")
+            receipt = promotion_outcome.get("response")
+            if not isinstance(receipt, dict) or not isinstance(receipt.get("artifact"), dict):
+                raise ValueError("completed Broker promotion receipt is missing its artifact identity")
+        else:
+            receipt = promote_skill_candidate_via_broker(
+                self.socket_path,
+                self.workspace_id,
+                mission_context=context,
+                skill_id=skill.id,
+                skill_version=skill.version,
+                content_sha256=binding["content_sha256"],
+                trust_level=_VALIDATED_TRUST_LEVEL,
+                validation_attestation=validation_attestation,
+                public_key=self.broker_public_key,
+                expected_key_id=self.broker_key_id,
+                request_id=promotion_request_id,
+            )
         return {
             "status": "published",
             "artifact": receipt["artifact"],
             "validation_provenance": receipt.get("validation_provenance"),
             "promotion_request_id": promotion_request_id,
+            "reconciled_existing_publication": promotion_status == "completed",
         }
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,

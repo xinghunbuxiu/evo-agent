@@ -728,8 +728,9 @@ class SkillReplayRuntimeTests(unittest.TestCase):
                 promotion_request_id="44444444-4444-4444-8444-444444444444",
             )
 
-    def test_resume_promotion_refuses_already_completed_publication(self):
+    def test_resume_promotion_reconciles_completed_publication_without_republishing(self):
         from admin.knowledge_runtime import write_skill_candidate
+        from admin.skill_replay_runtime import _deterministic_request_id
         from core.skill_replay_contract import build_skill_replay_binding
 
         environ = dict(self.environ, **{
@@ -744,23 +745,63 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             "tenant_id": "tenant-a", "mission_run_id": "mission-1",
             "node_id": "node-1", "task_id": "task-1",
         }
+        binding = build_skill_replay_binding(skill, context)
+        validation_attestation = {
+            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "policy_id": "policy-1", "policy_sha256": "a" * 64,
+            "checks_sha256": "b" * 64,
+        }
+        promotion_id = _deterministic_request_id("promotion", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "validation_attestation": validation_attestation,
+        })
+        artifact = {
+            "tenant_id": "tenant-a", "skill_id": skill.id,
+            "skill_version": skill.version, "content_sha256": binding["content_sha256"],
+            "trust_level": "verified",
+        }
+        provenance = {"validation_id": "validation-1"}
+        promotion_receipt = {
+            "artifact": artifact, "validation_provenance": provenance,
+        }
+        stage_id = "11111111-1111-4111-8111-111111111111"
+        execution_id = "22222222-2222-4222-8222-222222222222"
+        validation_id = "33333333-3333-4333-8333-333333333333"
         runtime.broker_request_status = lambda request_id, mission_context: (
-            {"status": "completed"} if request_id == "44444444-4444-4444-8444-444444444444"
-            else {"status": "completed"}
+            {"status": "completed", "response": promotion_receipt}
+            if request_id == promotion_id else {"status": "completed", "response": {"receipt": request_id}}
         )
-        runtime.validator_request_status = lambda *args, **kwargs: self.fail(
-            "completed publication must be rejected before Validator status lookup"
-        )
-        with self.assertRaisesRegex(ValueError, "already completed"):
-            runtime.resume_promotion(
+        runtime.validator_request_status = lambda request_id, mission_context: {
+            "status": "completed", "response": {"attestation": "original"}
+        }
+        runtime.verify_recovery_responses = lambda **kwargs: {
+            "broker_stage": "verified", "broker_execution": "verified",
+            "execution_succeeded": True, "validator": "verified",
+            "broker_promotion": "verified",
+        }
+        with patch(
+            "admin.skill_replay_runtime.verify_validation_response",
+            return_value=validation_attestation,
+        ), patch(
+            "admin.skill_replay_runtime.promote_skill_candidate_via_broker",
+            side_effect=AssertionError("completed publication must not be issued again"),
+        ):
+            result = runtime.resume_promotion(
                 tenant_id="tenant-a", mission_run_id="mission-1",
                 node_id="node-1", task_id="task-1", skill_id=skill.id,
-                skill_binding=build_skill_replay_binding(skill, context),
-                stage_request_id="11111111-1111-4111-8111-111111111111",
-                execution_request_id="22222222-2222-4222-8222-222222222222",
-                validation_request_id="33333333-3333-4333-8333-333333333333",
-                promotion_request_id="44444444-4444-4444-8444-444444444444",
+                skill_binding=binding, stage_request_id=stage_id,
+                execution_request_id=execution_id, validation_request_id=validation_id,
+                promotion_request_id=promotion_id,
             )
+
+        self.assertEqual(result["status"], "published")
+        self.assertTrue(result["reconciled_existing_publication"])
+        self.assertEqual(result["artifact"], artifact)
+        self.assertEqual(result["validation_provenance"], provenance)
+        self.assertEqual(result["promotion_request_id"], promotion_id)
 
 
 if __name__ == "__main__":
