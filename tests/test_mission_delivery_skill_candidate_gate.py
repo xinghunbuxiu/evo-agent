@@ -52,7 +52,7 @@ class MissionDeliverySkillCandidateGateTests(unittest.TestCase):
             "name": "Delivery executable",
             "domain": "python",
             "description": "Validated executable candidate",
-            "code": "def run(context):\\n    return {'success': True}\\n",
+            "code": "def run(context):\n    return {'success': True}\n",
             "execution_contract": {"kind": "python_run_context", "replay_eligible": True},
             "version": "1.0.0",
         }
