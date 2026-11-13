@@ -563,11 +563,11 @@ def register_mission_routes(
                             validator_status = {"status": outcome.get("status")}
                         except Exception as exc:
                             validator_status = {"status": "unavailable", "error_type": type(exc).__name__}
-                    elif skill_replay_runtime is not None and not (
-                        skill_replay_runtime.validator_socket_path
-                        and skill_replay_runtime.validator_public_key
-                        and skill_replay_runtime.validator_key_id
-                    ):
+                    elif skill_replay_runtime is not None and not all((
+                        getattr(skill_replay_runtime, "validator_socket_path", None),
+                        getattr(skill_replay_runtime, "validator_public_key", None),
+                        getattr(skill_replay_runtime, "validator_key_id", None),
+                    )):
                         validator_status = {"status": "not_configured"}
 
                 # A completed status is only a lookup result. Re-verify signed
@@ -606,12 +606,21 @@ def register_mission_routes(
                     for name, value in broker_statuses.items()
                 }
                 validator_value = validator_status.get("status")
-                observed_statuses = [*broker_values.values(), validator_value]
+                observed_statuses = [
+                    value for name, value in broker_values.items()
+                    if not (name == "promotion" and validator_value == "not_configured" and value == "not_recorded")
+                ] + [validator_value]
                 if binding_status != "pinned":
                     assessment = {
                         "status": "invalid_or_missing_binding",
                         "automatic_resume": False,
                         "next_step": "operator_review_required",
+                    }
+                elif verified_receipts.get("broker_execution") == "invalid" or verified_receipts.get("validator") == "invalid":
+                    assessment = {
+                        "status": "invalid_signed_evidence",
+                        "automatic_resume": False,
+                        "next_step": "preserve_claim_and_escalate_security_review",
                     }
                 elif skill_replay_runtime is None or "unavailable" in observed_statuses:
                     assessment = {
@@ -637,22 +646,22 @@ def register_mission_routes(
                         "automatic_resume": False,
                         "next_step": "operator_review_required",
                     }
-                elif validator_value == "not_configured":
+                elif (
+                    validator_value == "not_configured"
+                    and verified_receipts.get("broker_execution") == "verified"
+                ):
                     assessment = {
                         "status": "broker_only",
                         "automatic_resume": False,
                         "next_step": "skill_remains_draft_no_publication",
                     }
-                elif verified_receipts.get("broker_execution") == "invalid" or verified_receipts.get("validator") == "invalid":
+                elif verified_receipts.get("validator") == "verified":
                     assessment = {
                         "status": "invalid_signed_evidence",
                         "automatic_resume": False,
                         "next_step": "preserve_claim_and_escalate_security_review",
                     }
-                elif (
-                    verified_receipts.get("broker_execution") == "verified"
-                    and verified_receipts.get("validator") == "verified"
-                ):
+                elif verified_receipts.get("validator") == "verified":
                     assessment = {
                         "status": "validation_verified_promotion_unverified",
                         "automatic_resume": False,
@@ -666,15 +675,6 @@ def register_mission_routes(
                         "status": "broker_execution_failed",
                         "automatic_resume": False,
                         "next_step": "retain_failed_execution_evidence_and_review_candidate",
-                    }
-                elif (
-                    verified_receipts.get("broker_execution") == "verified"
-                    and validator_value == "not_configured"
-                ):
-                    assessment = {
-                        "status": "broker_only",
-                        "automatic_resume": False,
-                        "next_step": "skill_remains_draft_no_publication",
                     }
                 elif all(value == "completed" for value in broker_values.values()) and validator_value == "completed":
                     assessment = {
