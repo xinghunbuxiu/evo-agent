@@ -2296,84 +2296,84 @@ def create_app() -> FastAPI:
                     continue
                 if signature and signature == str(sync_state.get(member_id) or "").strip():
                     continue
-            _append_member_reflection_message(
-                relationship_center,
-                member_id=member_id,
-                content=str(reflection.get("content") or "").strip(),
-                mission_run_id=str(mission_run.get("mission_run_id") or ""),
-                signature=signature,
-            )
-            growth_state = member.get("growth_state", {}) if isinstance(member.get("growth_state"), dict) else {}
-            training_plan = member.get("training_plan", {}) if isinstance(member.get("training_plan"), dict) else {}
-            current_jobs = member.get("current_jobs", []) if isinstance(member.get("current_jobs"), list) else []
-            next_action = str(reflection.get("next_action") or "").strip()
-            current_focus = str(reflection.get("current_focus") or "").strip()
-            stage_from = str(training_plan.get("stage") or "").strip() or "profile_initialized"
-            stage_to = _member_training_stage_from_mission_status(mission_run.get("status"))
-            member["growth_state"] = {
-                **growth_state,
-                "current_focus": current_focus or growth_state.get("current_focus"),
-                "next_goal": next_action or growth_state.get("next_goal"),
-                "last_reflection_at": datetime.now().isoformat(),
-            }
-            member["training_plan"] = {
-                **training_plan,
-                "stage": stage_to,
-                "next_action": next_action or training_plan.get("next_action"),
-                "review_after": (datetime.now() + timedelta(hours=24)).isoformat(),
-            }
-            updated_jobs: list[dict] = []
-            matched_job = False
-            role_hint = str(member.get("primary_role") or "").strip()
-            for job in current_jobs:
-                if not isinstance(job, dict):
-                    continue
-                if str(job.get("job_id") or "").strip() == role_hint:
-                    matched_job = True
-                    updated_jobs.append({
-                        **job,
-                        "status": mission_run.get("status") or job.get("status"),
-                        "target_outcome": next_action or job.get("target_outcome"),
-                    })
-                else:
-                    updated_jobs.append(job)
-            if matched_job:
-                member["current_jobs"] = updated_jobs
-            if (
-                signature != str(mission_run.get("member_growth_event_signature") or "").strip()
-                or stage_from != stage_to
-            ):
-                _record_member_growth_event(
-                    workspace,
-                    runtime_tenant_id,
+                _append_member_reflection_message(
+                    relationship_center,
+                    member_id=member_id,
+                    content=str(reflection.get("content") or "").strip(),
+                    mission_run_id=str(mission_run.get("mission_run_id") or ""),
+                    signature=signature,
+                )
+                growth_state = member.get("growth_state", {}) if isinstance(member.get("growth_state"), dict) else {}
+                training_plan = member.get("training_plan", {}) if isinstance(member.get("training_plan"), dict) else {}
+                current_jobs = member.get("current_jobs", []) if isinstance(member.get("current_jobs"), list) else []
+                next_action = str(reflection.get("next_action") or "").strip()
+                current_focus = str(reflection.get("current_focus") or "").strip()
+                stage_from = str(training_plan.get("stage") or "").strip() or "profile_initialized"
+                stage_to = _member_training_stage_from_mission_status(mission_run.get("status"))
+                member["growth_state"] = {
+                    **growth_state,
+                    "current_focus": current_focus or growth_state.get("current_focus"),
+                    "next_goal": next_action or growth_state.get("next_goal"),
+                    "last_reflection_at": datetime.now().isoformat(),
+                }
+                member["training_plan"] = {
+                    **training_plan,
+                    "stage": stage_to,
+                    "next_action": next_action or training_plan.get("next_action"),
+                    "review_after": (datetime.now() + timedelta(hours=24)).isoformat(),
+                }
+                updated_jobs: list[dict] = []
+                matched_job = False
+                role_hint = str(member.get("primary_role") or "").strip()
+                for job in current_jobs:
+                    if not isinstance(job, dict):
+                        continue
+                    if str(job.get("job_id") or "").strip() == role_hint:
+                        matched_job = True
+                        updated_jobs.append({
+                            **job,
+                            "status": mission_run.get("status") or job.get("status"),
+                            "target_outcome": next_action or job.get("target_outcome"),
+                        })
+                    else:
+                        updated_jobs.append(job)
+                if matched_job:
+                    member["current_jobs"] = updated_jobs
+                if (
+                    signature != str(mission_run.get("member_growth_event_signature") or "").strip()
+                    or stage_from != stage_to
+                ):
+                    _record_member_growth_event(
+                        workspace,
+                        runtime_tenant_id,
+                        member=member,
+                        mission_run=mission_run,
+                        stage_from=stage_from,
+                        stage_to=stage_to,
+                        summary=str(reflection.get("content") or "").strip(),
+                        signature=signature,
+                        next_action=next_action,
+                        current_focus=current_focus,
+                    )
+                _append_trainer_growth_comment(
+                    relationship_center,
                     member=member,
                     mission_run=mission_run,
+                    signature=signature,
                     stage_from=stage_from,
                     stage_to=stage_to,
-                    summary=str(reflection.get("content") or "").strip(),
-                    signature=signature,
                     next_action=next_action,
                     current_focus=current_focus,
                 )
-            _append_trainer_growth_comment(
-                relationship_center,
-                member=member,
-                mission_run=mission_run,
-                signature=signature,
-                stage_from=stage_from,
-                stage_to=stage_to,
-                next_action=next_action,
-                current_focus=current_focus,
-            )
-                sync_state[member_id] = signature
-                mission_run["member_reflection_sync"] = sync_state
-                mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
-                if len(member_groups) == 1:
-                    mission_run["member_reflection_sync_signature"] = signature
-                    mission_run["member_growth_event_signature"] = signature
-                    mission_run["member_reflection_member_id"] = member_id
-                changed = True
-
+                    sync_state[member_id] = signature
+                    mission_run["member_reflection_sync"] = sync_state
+                    mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
+                    if len(member_groups) == 1:
+                        mission_run["member_reflection_sync_signature"] = signature
+                        mission_run["member_growth_event_signature"] = signature
+                        mission_run["member_reflection_member_id"] = member_id
+                    changed = True
+    
         if changed:
             runtime["relationship_center"] = relationship_center
             runtime["child_members"] = {
