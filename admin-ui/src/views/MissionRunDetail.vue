@@ -170,6 +170,11 @@ const replayCurrentSkill = async (payload: { skillId: string; nodeId: string }) 
   const nodeId = String(payload.nodeId || '').trim()
   if (!current || !skillId || !nodeId || replayBusyKey.value) return
 
+  const confirmed = window.confirm(
+    `将 ${skillId} 提交到隔离 Broker 执行。执行成功后还会请求独立 Validator；只有签名验收通过才可能发布不可变 Artifact。是否继续？`
+  )
+  if (!confirmed) return
+
   replayBusyKey.value = `${nodeId}:${skillId}`
   message.value = ''
   try {

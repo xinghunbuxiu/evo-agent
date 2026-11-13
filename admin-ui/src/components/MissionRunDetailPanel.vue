@@ -70,7 +70,7 @@
       </div>
       <div
         v-for="action in run.actions"
-        :key="`${run.mission_run_id}-${action.node_id}-${action.action_type}`"
+        :key="`${run.mission_run_id}-${action.task_id || action.node_id}-${action.action_type}`"
         class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600"
       >
         <div class="flex items-start justify-between gap-3">
