@@ -647,6 +647,15 @@ def register_mission_routes(
                         "next_step": "operator_review_required",
                     }
                 elif (
+                    verified_receipts.get("broker_execution") == "verified"
+                    and verified_receipts.get("execution_succeeded") is False
+                ):
+                    assessment = {
+                        "status": "broker_execution_failed",
+                        "automatic_resume": False,
+                        "next_step": "retain_failed_execution_evidence_and_review_candidate",
+                    }
+                elif (
                     validator_value == "not_configured"
                     and verified_receipts.get("broker_execution") == "verified"
                 ):
@@ -660,15 +669,6 @@ def register_mission_routes(
                         "status": "validation_verified_promotion_unverified",
                         "automatic_resume": False,
                         "next_step": "verify_promotion_receipt_and_artifact_store_before_manual_reconciliation",
-                    }
-                elif (
-                    verified_receipts.get("broker_execution") == "verified"
-                    and verified_receipts.get("execution_succeeded") is False
-                ):
-                    assessment = {
-                        "status": "broker_execution_failed",
-                        "automatic_resume": False,
-                        "next_step": "retain_failed_execution_evidence_and_review_candidate",
                     }
                 elif all(value == "completed" for value in broker_values.values()) and validator_value == "completed":
                     assessment = {
