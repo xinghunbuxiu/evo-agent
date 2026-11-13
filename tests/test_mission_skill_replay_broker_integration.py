@@ -23,7 +23,8 @@ from core.sandbox_broker_protocol import (
 from core.sandbox_runner import RunnerProcessOutput
 from core.skill_artifact_store import SkillArtifactStore
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
-from core.skill_validator import SkillValidatorService
+from core.skill_validator import SkillValidatorService, verify_validation_response
+from core.sandbox_broker_protocol import broker_response_sha256
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
@@ -156,12 +157,25 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     return broker.promote_skill_candidate(request)
                 return broker.handle_request(request)
 
+            def validate_request(
+                _socket, *, request, validator_public_key, expected_key_id,
+                expected_identity, **_kwargs,
+            ):
+                response = validator.validate(request)
+                return verify_validation_response(
+                    response,
+                    public_key=validator_public_key,
+                    expected_key_id=expected_key_id,
+                    expected_request_id=request["request_id"],
+                    expected_identity=expected_identity,
+                )
+
             with patch(
                 "core.sandbox_broker_transport.request_broker",
                 side_effect=broker_dispatch,
             ), patch(
                 "admin.skill_replay_runtime.request_skill_validation",
-                side_effect=lambda _socket, *, request, **_kwargs: validator.validate(request),
+                side_effect=validate_request,
             ):
                 operation = runtime.replay_candidate(
                     tenant_id=tenant_id,
