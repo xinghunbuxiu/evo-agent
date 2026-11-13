@@ -81,19 +81,34 @@ def _recv_exact(
     return b"".join(chunks)
 
 
-def _recv_frame(connection: socket.socket, limit: int) -> bytes:
-    deadline = time.monotonic() + 5.0
+def _recv_frame(
+    connection: socket.socket, limit: int, *, deadline: float | None = None,
+) -> bytes:
+    if deadline is None:
+        deadline = time.monotonic() + 5.0
     size = _FRAME.unpack(_recv_exact(connection, _FRAME.size, deadline=deadline))[0]
     if size < 1 or size > limit:
         raise BrokerTransportError("frame length is outside the allowed range")
     return _recv_exact(connection, size, deadline=deadline)
 
 
-def _send_frame(connection: socket.socket, payload: bytes, limit: int) -> None:
+def _send_frame(
+    connection: socket.socket, payload: bytes, limit: int, *,
+    deadline: float | None = None,
+) -> None:
     if not payload or len(payload) > limit:
         raise BrokerTransportError("response frame exceeds the allowed size")
-    connection.settimeout(5.0)
-    connection.sendall(_FRAME.pack(len(payload)) + payload)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BrokerTransportError("request frame send deadline exceeded")
+        connection.settimeout(remaining)
+    else:
+        connection.settimeout(5.0)
+    try:
+        connection.sendall(_FRAME.pack(len(payload)) + payload)
+    except socket.timeout as exc:
+        raise BrokerTransportError("request frame send deadline exceeded") from exc
 
 
 def _peer_uid(connection: socket.socket) -> int:
@@ -478,11 +493,14 @@ def request_broker(
         raise BrokerTransportError("request exceeds the maximum frame size")
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        deadline = time.monotonic() + timeout_seconds
         connection.settimeout(timeout_seconds)
         try:
             connection.connect(socket_path)
-            _send_frame(connection, payload, MAX_REQUEST_BYTES)
-            response_bytes = _recv_frame(connection, MAX_RESPONSE_BYTES)
+            _send_frame(connection, payload, MAX_REQUEST_BYTES, deadline=deadline)
+            response_bytes = _recv_frame(
+                connection, MAX_RESPONSE_BYTES, deadline=deadline,
+            )
         except OSError as exc:
             raise BrokerTransportError("could not complete broker socket exchange") from exc
     try:

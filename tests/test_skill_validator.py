@@ -424,7 +424,7 @@ class SkillValidatorTests(unittest.TestCase):
         thread = threading.Thread(target=stall_peer, daemon=True)
         thread.start()
         try:
-            with self.assertRaisesRegex(SkillValidatorTransportError, "socket exchange"):
+            with self.assertRaisesRegex(SkillValidatorTransportError, "receive deadline exceeded"):
                 request_skill_validation(
                     str(socket_path),
                     request=self.request,

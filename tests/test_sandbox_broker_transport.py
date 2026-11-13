@@ -342,7 +342,7 @@ class SandboxBrokerTransportTests(unittest.TestCase):
         thread = threading.Thread(target=stall_peer, daemon=True)
         thread.start()
         try:
-            with self.assertRaisesRegex(BrokerTransportError, "socket exchange"):
+            with self.assertRaisesRegex(BrokerTransportError, "receive deadline exceeded"):
                 request_broker(str(socket_path), self.request, timeout_seconds=0.05)
         finally:
             release.set()

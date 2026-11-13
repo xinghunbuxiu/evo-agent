@@ -30,15 +30,23 @@ def _allowed_uids(values: Iterable[int]) -> frozenset[int]:
     return frozenset(entries)
 
 
-def _recv_exact(connection: socket.socket, size: int) -> bytes:
-    deadline = time.monotonic() + 10.0
+def _recv_exact(
+    connection: socket.socket, size: int, *, deadline: float | None = None,
+) -> bytes:
+    if deadline is None:
+        deadline = time.monotonic() + 10.0
     chunks = []
     remaining = size
     while remaining:
-        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        remaining_time = deadline - time.monotonic()
+        if remaining_time <= 0:
+            raise SkillValidatorTransportError("Validator socket receive deadline exceeded")
+        connection.settimeout(remaining_time)
         try:
             chunk = connection.recv(remaining)
-        except (OSError, socket.timeout) as exc:
+        except socket.timeout as exc:
+            raise SkillValidatorTransportError("Validator socket receive deadline exceeded") from exc
+        except OSError as exc:
             raise SkillValidatorTransportError("Validator socket receive failed") from exc
         if not chunk:
             raise SkillValidatorTransportError("Validator connection closed during frame")
@@ -47,18 +55,34 @@ def _recv_exact(connection: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _recv_frame(connection: socket.socket, limit: int) -> bytes:
-    size = _FRAME.unpack(_recv_exact(connection, _FRAME.size))[0]
+def _recv_frame(
+    connection: socket.socket, limit: int, *, deadline: float | None = None,
+) -> bytes:
+    if deadline is None:
+        deadline = time.monotonic() + 10.0
+    size = _FRAME.unpack(_recv_exact(connection, _FRAME.size, deadline=deadline))[0]
     if size < 1 or size > limit:
         raise SkillValidatorTransportError("Validator frame length is outside the allowed range")
-    return _recv_exact(connection, size)
+    return _recv_exact(connection, size, deadline=deadline)
 
 
-def _send_frame(connection: socket.socket, payload: bytes, limit: int) -> None:
+def _send_frame(
+    connection: socket.socket, payload: bytes, limit: int, *,
+    deadline: float | None = None,
+) -> None:
     if not payload or len(payload) > limit:
         raise SkillValidatorTransportError("Validator response exceeds the frame limit")
-    connection.settimeout(10.0)
-    connection.sendall(_FRAME.pack(len(payload)) + payload)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SkillValidatorTransportError("Validator socket send deadline exceeded")
+        connection.settimeout(remaining)
+    else:
+        connection.settimeout(10.0)
+    try:
+        connection.sendall(_FRAME.pack(len(payload)) + payload)
+    except socket.timeout as exc:
+        raise SkillValidatorTransportError("Validator socket send deadline exceeded") from exc
 
 
 def _peer_uid(connection: socket.socket) -> int:
@@ -152,11 +176,17 @@ def request_skill_validation(
     if not payload or len(payload) > MAX_VALIDATOR_REQUEST_BYTES:
         raise SkillValidatorTransportError("Validator request exceeds the frame limit")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        deadline = time.monotonic() + timeout_seconds
         connection.settimeout(timeout_seconds)
         try:
             connection.connect(socket_path)
-            connection.sendall(_FRAME.pack(len(payload)) + payload)
-            response_bytes = _recv_frame(connection, MAX_VALIDATOR_RESPONSE_BYTES)
+            _send_frame(
+                connection, payload, MAX_VALIDATOR_REQUEST_BYTES,
+                deadline=deadline,
+            )
+            response_bytes = _recv_frame(
+                connection, MAX_VALIDATOR_RESPONSE_BYTES, deadline=deadline,
+            )
         except OSError as exc:
             raise SkillValidatorTransportError("could not complete Validator socket exchange") from exc
     try:
@@ -191,11 +221,17 @@ def request_skill_validator_status(
     except (TypeError,ValueError,UnicodeError) as exc:
         raise ValueError("Validator status request is not strict JSON") from exc
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+        deadline = time.monotonic() + timeout_seconds
         connection.settimeout(timeout_seconds)
         try:
             connection.connect(socket_path)
-            connection.sendall(_FRAME.pack(len(payload))+payload)
-            response_bytes=_recv_frame(connection,MAX_VALIDATOR_RESPONSE_BYTES)
+            _send_frame(
+                connection, payload, MAX_VALIDATOR_REQUEST_BYTES,
+                deadline=deadline,
+            )
+            response_bytes = _recv_frame(
+                connection, MAX_VALIDATOR_RESPONSE_BYTES, deadline=deadline,
+            )
         except OSError as exc:
             raise SkillValidatorTransportError("could not complete Validator status query") from exc
     try: response=json.loads(response_bytes.decode("utf-8"))
