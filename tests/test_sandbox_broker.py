@@ -238,7 +238,32 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "trust_level": "verified",
             "validation_attestation": attestation,
         }
+        original_load = artifact_store.load_for_binding
+        readback_calls = 0
+
+        def fail_first_publication_readback(binding):
+            nonlocal readback_calls
+            readback_calls += 1
+            # First call loads the staged candidate. Second call is the
+            # post-publication readback, which fails after the immutable file
+            # has been created. A retry must reconcile the exact create-once
+            # artifact and then return a signed receipt.
+            if readback_calls == 2:
+                raise RuntimeError("simulated transient artifact readback failure")
+            return original_load(binding)
+
+        artifact_store.load_for_binding = fail_first_publication_readback
+        with self.assertRaisesRegex(
+            BrokerRequestRejected, "independent Validator attestation was rejected"
+        ):
+            service.promote_skill_candidate(request)
+        self.assertEqual(readback_calls, 2)
+
+        # Generic Broker requests remain fail-closed on indeterminate claims;
+        # only the promotion path opts into exact-digest resume.
+        artifact_store.load_for_binding = original_load
         response = service.promote_skill_candidate(request)
+        self.assertEqual(readback_calls, 2)
         self.assertEqual(response["artifact"]["trust_level"], "verified")
         self.assertEqual(response["validation_provenance"]["broker_request_id"], "00000000-0000-4000-8000-000000000001")
         self.assertEqual(response["validation_provenance"]["checks_sha256"], "c" * 64)
@@ -726,6 +751,15 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.store.claim(self.request_id, self.request)
         with self.assertRaisesRegex(BrokerRequestRejected, "indeterminate"):
             self.store.claim(self.request_id, self.request)
+        # Resumption is opt-in and cannot change the original request digest.
+        self.assertIsNone(self.store.claim(
+            self.request_id, self.request, allow_indeterminate_resume=True,
+        ))
+        changed = dict(self.request, timeout_seconds=self.request["timeout_seconds"] + 1)
+        with self.assertRaisesRegex(BrokerRequestRejected, "different request digest"):
+            self.store.claim(
+                self.request_id, changed, allow_indeterminate_resume=True,
+            )
 
     def test_same_request_id_with_different_digest_is_rejected(self):
         self.store.claim(self.request_id, self.request)

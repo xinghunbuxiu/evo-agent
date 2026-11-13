@@ -119,12 +119,17 @@ class BrokerReplayStore:
     def _digest(request: dict) -> str:
         return hashlib.sha256(_canonical_json(request)).hexdigest()
 
-    def claim(self, request_id: str, request: dict) -> dict | None:
-        """Claim a new request, or return its exact cached response.
+    def claim(
+        self, request_id: str, request: dict, *,
+        allow_indeterminate_resume: bool = False,
+    ) -> dict | None:
+        """Claim a request or return its exact cached response.
 
-        Same ID + different payload is rejected. Same ID + no completed
-        response is indeterminate and must not be retried as a new execution.
+        Incomplete requests remain indeterminate by default. A caller may
+        explicitly resume only an operation whose side effects are independently
+        create-once/idempotent; the request digest must still match exactly.
         """
+
         digest = self._digest(request)
         connection = self._connect()
         try:
@@ -140,6 +145,8 @@ class BrokerReplayStore:
                         "request_id was reused with a different request digest"
                     )
                 if existing[1] is None:
+                    if allow_indeterminate_resume:
+                        return None
                     raise BrokerRequestRejected(
                         "request_id is indeterminate; operator review is required"
                     )
@@ -594,7 +601,9 @@ class SandboxBrokerService:
         if getattr(candidate, "trust_level", None) != "draft":
             raise BrokerRequestRejected("only staged draft Skills can be promoted")
 
-        cached_response = self.replay_store.claim(request_id, request)
+        cached_response = self.replay_store.claim(
+            request_id, request, allow_indeterminate_resume=True,
+        )
         if cached_response is not None:
             return cached_response
         promoted = SimpleNamespace(
