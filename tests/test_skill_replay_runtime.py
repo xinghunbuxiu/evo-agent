@@ -748,9 +748,9 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             {"status": "completed"} if request_id == "44444444-4444-4444-8444-444444444444"
             else {"status": "completed"}
         )
-        runtime.validator_request_status = lambda request_id, mission_context: {
-            "status": "completed", "response": {"attestation": "unused"}
-        }
+        runtime.validator_request_status = lambda *args, **kwargs: self.fail(
+            "completed publication must be rejected before Validator status lookup"
+        )
         with self.assertRaisesRegex(ValueError, "already completed"):
             runtime.resume_promotion(
                 tenant_id="tenant-a", mission_run_id="mission-1",

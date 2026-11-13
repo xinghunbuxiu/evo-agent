@@ -483,11 +483,13 @@ class SkillReplayRuntime:
         stage_outcome = self.broker_request_status(stage_request_id, context)
         execution_outcome = self.broker_request_status(execution_request_id, context)
         promotion_outcome = self.broker_request_status(promotion_request_id, context)
-        validator_outcome = self.validator_request_status(validation_request_id, context)
+        # A completed immutable publication is never retried. Reject it before
+        # contacting Validator; its signed receipt must be reconciled separately.
         if promotion_outcome.get("status") == "completed":
             raise ValueError("promotion is already completed; reconcile its signed receipt instead")
         if promotion_outcome.get("status") not in {"indeterminate", "not_found"}:
             raise ValueError("promotion status is not eligible for controlled recovery")
+        validator_outcome = self.validator_request_status(validation_request_id, context)
 
         broker_outcomes = {
             "stage": stage_outcome,
