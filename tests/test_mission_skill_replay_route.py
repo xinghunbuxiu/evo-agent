@@ -113,7 +113,7 @@ class _ReplayRuntime:
             "validator": "not_checked",
             "execution_succeeded": True,
             "validation_id": None,
-            "promotion": "not_checked",
+            "broker_promotion": "not_checked",
         }
 
     def replay_candidate(self, **kwargs):
