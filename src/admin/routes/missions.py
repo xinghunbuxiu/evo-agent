@@ -540,7 +540,7 @@ def register_mission_routes(
                 return error_response("原始 Broker/Validator 请求身份不完整，拒绝恢复", 409)
             attempt = {
                 "attempt_id": attempt_id,
-                "operation": "recover_stage_then_resume_promotion",
+                "operation": "verify_or_recover_stage_then_resume_promotion",
                 "status": "in_progress",
                 "started_at": datetime.now().astimezone().isoformat(),
             }
@@ -633,7 +633,7 @@ def register_mission_routes(
                     "operation": (
                         "reconcile_existing_publication"
                         if recovered.get("reconciled_existing_publication") is True
-                        else "recover_stage_then_resume_promotion"
+                        else "verify_or_recover_stage_then_resume_promotion"
                     ),
                     "status": "completed",
                     "finished_at": datetime.now().astimezone().isoformat(),

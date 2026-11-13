@@ -465,12 +465,13 @@ class SkillReplayRuntime:
         execution_request_id: str, validation_request_id: str,
         promotion_request_id: str,
     ) -> dict:
-        """Resume only the immutable publication step after signed evidence review.
+        """Verify or recover the immutable Stage receipt, then resume publication.
 
-        This method never stages or executes Skill code. It re-loads the tenant's
-        exact Draft candidate, re-fetches Broker and Validator receipts, verifies
-        their signatures and lineage, and reissues only the deterministic
-        create-once promotion request.
+        This method never executes Skill code. It re-loads the tenant's exact
+        Draft candidate, conditionally reissues only the original create-once
+        Stage request, re-fetches Broker and Validator receipts, verifies their
+        signatures and lineage, and then resumes deterministic publication.
+        An uncertain Execution or Validation outcome remains fail-closed.
         """
         context = {
             "tenant_id": tenant_id,
