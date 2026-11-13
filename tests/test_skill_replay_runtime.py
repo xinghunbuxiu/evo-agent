@@ -1,4 +1,6 @@
 """Regression tests for the opt-in Mission-to-Broker Skill Replay runtime."""
+import base64
+import json
 import os
 import sys
 import tempfile
@@ -11,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from core import Skill, SkillTrustLevel
-from core.sandbox_broker_protocol import broker_response_sha256
+from core.sandbox_broker_protocol import (
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    broker_response_sha256,
+)
 from admin.skill_replay_runtime import (
     SkillReplayOutcomeIndeterminate,
     SkillReplayRuntimeConfigurationError,
@@ -30,10 +36,12 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.evidence_root.mkdir(mode=0o700)
         self.key_path = self.root / "broker.pub"
         key = Ed25519PrivateKey.generate()
+        self.broker_private_key = key
         self.key_path.write_bytes(key.public_key().public_bytes_raw())
         self.key_path.chmod(0o400)
         self.validator_key_path = self.root / "validator.pub"
         validator_key = Ed25519PrivateKey.generate()
+        self.validator_private_key = validator_key
         self.validator_key_path.write_bytes(validator_key.public_key().public_bytes_raw())
         self.validator_key_path.chmod(0o400)
         self.environ = {
@@ -185,6 +193,87 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertFalse(result["execution_succeeded"])
         self.assertEqual(result["validator"], "invalid")
         verify_validator.assert_not_called()
+
+    @patch("admin.skill_replay_runtime.verify_validation_response")
+    @patch("admin.skill_replay_runtime.verify_broker_response")
+    def test_recovery_review_verifies_signed_promotion_receipt(
+        self, verify_broker, verify_validator,
+    ):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        }))
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-a",
+            "node_id": "node-a", "task_id": "task-a",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "draft",
+            "mission_context": context,
+        }
+        broker_envelope = {"signed": "broker-envelope"}
+        validation_attestation = {
+            "validation_id": "validation-a",
+            "validator_id": "validator-a",
+            "policy_id": "policy-a",
+            "policy_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
+        }
+        verify_broker.return_value = {"execution_succeeded": True}
+        verify_validator.return_value = validation_attestation
+        provenance = {
+            "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
+            **validation_attestation,
+            "broker_request_id": "11111111-1111-4111-8111-111111111111",
+            "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+        }
+        payload = {
+            "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+            "request_id": "33333333-3333-4333-8333-333333333333",
+            "workspace_id": "workspace-a",
+            "mission_context": context,
+            "artifact": {
+                "schema_version": "mission.skill-artifact.v2",
+                "tenant_id": "tenant-a",
+                "skill_id": "skill-a",
+                "skill_version": "1.0.0",
+                "content_sha256": "a" * 64,
+                "trust_level": "verified",
+            },
+            "validation_provenance": provenance,
+        }
+        signed = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        response = {
+            **payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "broker-test-key",
+                "value": base64.b64encode(self.broker_private_key.sign(signed)).decode("ascii"),
+            },
+        }
+        result = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            execution_request_id="11111111-1111-4111-8111-111111111111",
+            validation_request_id="22222222-2222-4222-8222-222222222222",
+            promotion_request_id="33333333-3333-4333-8333-333333333333",
+            broker_outcomes={
+                "execution": {"status": "completed", "response": broker_envelope},
+                "promotion": {"status": "completed", "response": response},
+            },
+            validator_outcome={
+                "status": "completed", "response": {"signed": "validator-envelope"},
+            },
+        )
+        self.assertEqual(result["broker_execution"], "verified")
+        self.assertEqual(result["validator"], "verified")
+        self.assertEqual(result["broker_promotion"], "verified")
 
     def test_missing_configuration_keeps_replay_disabled(self):
         self.assertIsNone(create_skill_replay_runtime(workspace=self.workspace, environ={}))
