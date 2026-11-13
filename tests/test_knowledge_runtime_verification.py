@@ -87,6 +87,14 @@ class SkillReplayVerificationTests(unittest.TestCase):
             )
             self.assertEqual(groups, [])
 
+    def test_reflection_records_are_never_auto_drafted_as_skills(self):
+        self.assertTrue(
+            knowledge_runtime.should_skip_auto_skill_task_type("experience_reflection")
+        )
+        self.assertTrue(
+            knowledge_runtime.should_skip_auto_skill_task_type("EXPERIENCE_REFLECTION")
+        )
+
     def test_mission_delivery_clusters_require_explicit_pass_verdict(self):
         from core import Experience, ExperienceStore
 
