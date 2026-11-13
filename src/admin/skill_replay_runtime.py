@@ -7,6 +7,7 @@ the separately managed Sandbox Broker.
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import logging
 import os
@@ -19,7 +20,11 @@ from typing import Callable, Mapping
 from core import Skill
 from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
 from core.sandbox_broker_protocol import (
-    SKILL_REPLAY_PROFILE_ID, broker_response_sha256, verify_broker_response,
+    SKILL_REPLAY_PROFILE_ID,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    broker_response_sha256,
+    verify_broker_response,
 )
 from core.sandbox_broker_transport import (
     promote_skill_candidate_via_broker,
@@ -208,10 +213,35 @@ class SkillReplayRuntime:
             timeout_seconds=3.0,
         )
 
+    def _verify_broker_signed_receipt(self, response: Mapping, expected_payload: Mapping) -> None:
+        """Verify a signed Broker receipt against an exact canonical payload."""
+        if not isinstance(response, dict) or set(response) != set(expected_payload) | {"signature"}:
+            raise ValueError("Broker receipt has unsupported or missing fields")
+        if any(response.get(key) != value for key, value in expected_payload.items()):
+            raise ValueError("Broker receipt identity or artifact binding does not match")
+        signature = response.get("signature")
+        if (
+            not isinstance(signature, dict)
+            or set(signature) != {"algorithm", "key_id", "value"}
+            or signature.get("algorithm") != "ed25519"
+            or signature.get("key_id") != self.broker_key_id
+            or not isinstance(signature.get("value"), str)
+        ):
+            raise ValueError("Broker receipt signature metadata is invalid")
+        signed = json.dumps(
+            dict(expected_payload), sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(self.broker_public_key).verify(
+            base64.b64decode(signature["value"], validate=True), signed,
+        )
+
     def verify_recovery_responses(
         self, *, mission_context: Mapping[str, str], skill_binding: Mapping,
         execution_request_id: str, validation_request_id: str | None,
         broker_outcomes: Mapping[str, Mapping], validator_outcome: Mapping,
+        promotion_request_id: str | None = None,
     ) -> dict:
         """Re-verify cached Broker and Validator receipts without side effects."""
         context = dict(mission_context)
@@ -221,7 +251,7 @@ class SkillReplayRuntime:
             "validator": "not_checked",
             "execution_succeeded": None,
             "validation_id": None,
-            "promotion": "not_checked",
+            "broker_promotion": "not_checked",
         }
         execution_outcome = broker_outcomes.get("execution")
         broker_envelope = None
@@ -247,6 +277,7 @@ class SkillReplayRuntime:
                 result["broker_execution"] = "invalid"
                 broker_envelope = None
 
+        validation_attestation = None
         if (
             isinstance(validator_outcome, Mapping)
             and validator_outcome.get("status") == "completed"
@@ -284,10 +315,52 @@ class SkillReplayRuntime:
                     expected_request_id=validation_request_id,
                     expected_identity=expected_identity,
                 )
+                validation_attestation = attestation
                 result["validator"] = "verified"
                 result["validation_id"] = attestation.get("validation_id")
             except Exception:
                 result["validator"] = "invalid"
+
+        promotion_outcome = broker_outcomes.get("promotion")
+        if (
+            isinstance(promotion_outcome, Mapping)
+            and promotion_outcome.get("status") == "completed"
+            and result["validator"] == "verified"
+            and isinstance(validation_attestation, Mapping)
+            and isinstance(promotion_request_id, str)
+        ):
+            try:
+                provenance = {
+                    "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
+                    "validation_id": validation_attestation["validation_id"],
+                    "validator_id": validation_attestation["validator_id"],
+                    "policy_id": validation_attestation["policy_id"],
+                    "policy_sha256": validation_attestation["policy_sha256"],
+                    "checks_sha256": validation_attestation["checks_sha256"],
+                    "broker_request_id": execution_request_id,
+                    "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+                }
+                expected_payload = {
+                    "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+                    "request_id": promotion_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "artifact": {
+                        "schema_version": "mission.skill-artifact.v2",
+                        "tenant_id": context["tenant_id"],
+                        "skill_id": binding["skill_id"],
+                        "skill_version": binding["skill_version"],
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": _VALIDATED_TRUST_LEVEL,
+                    },
+                    "validation_provenance": provenance,
+                }
+                self._verify_broker_signed_receipt(
+                    promotion_outcome.get("response"), expected_payload,
+                )
+                result["broker_promotion"] = "verified"
+            except Exception:
+                result["broker_promotion"] = "invalid"
         return result
 
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
