@@ -422,7 +422,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             request=_request({"confirm": True}),
             mission_run_id="run-a", skill_id="skill-a", task_id="task-a",
         ))
-        self.assertEqual(denied["status"], 404)
+        self.assertEqual(denied["status"], 403)
         bad_confirmation = asyncio.run(handler(
             request=_request({"confirm": "yes"}),
             mission_run_id="run-a", skill_id="skill-a", task_id="task-a",

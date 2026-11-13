@@ -556,7 +556,11 @@ def register_mission_routes(
                     current_action["recovery_attempt_status"] = "indeterminate"
                     current_action["recovery_status"] = "needs_review"
                     current_attempts = current_action.get("recovery_attempts", [])
-                    if current_attempts and current_attempts[-1].get("attempt_id") == attempt_id:
+                    if (
+                        current_attempts
+                        and isinstance(current_attempts[-1], dict)
+                        and current_attempts[-1].get("attempt_id") == attempt_id
+                    ):
                         current_attempts[-1].update({
                             "status": "indeterminate",
                             "error_type": type(exc).__name__,
