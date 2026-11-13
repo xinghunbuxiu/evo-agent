@@ -858,6 +858,29 @@ def create_mission_execution_bindings(
             else []
         )
         dependency_history = list(previous_dependency_decisions)
+        # A later task submission is a new execution attempt for the same node.
+        # Retain the earlier dispatch-denied action for audit, but supersede its
+        # blocking effect so a successful retry can satisfy downstream dependencies.
+        latest_task_action_indexes_by_node: dict[str, int] = {}
+        for action_index, item in enumerate(refreshed_actions):
+            if not isinstance(item, dict) or item.get("action_type") != "task_submitted":
+                continue
+            item_node_id = str(item.get("node_id") or "").strip()
+            if item_node_id and str(item.get("task_id") or "").strip():
+                latest_task_action_indexes_by_node[item_node_id] = action_index
+        for action_index, item in enumerate(refreshed_actions):
+            if not isinstance(item, dict) or item.get("action_type") != "dispatch_denied":
+                continue
+            item_node_id = str(item.get("node_id") or "").strip()
+            retry_index = latest_task_action_indexes_by_node.get(item_node_id, -1)
+            if item.get("status") == "blocked" and retry_index > action_index:
+                retry_action = refreshed_actions[retry_index]
+                item["status"] = "superseded"
+                item["replan_required"] = False
+                item.pop("replan_reason_code", None)
+                item["superseded_by_task_id"] = str(retry_action.get("task_id") or "")
+                item["detail"] = "后续重新派发的任务已取代此前拒绝记录；保留历史审计但不再阻塞依赖"
+
         node_statuses_by_id: dict[str, list[str]] = {}
         for item in refreshed_actions:
             if not isinstance(item, dict):
