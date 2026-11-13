@@ -78,6 +78,41 @@
           <div class="text-xs text-slate-500">{{ action.action_type }} / {{ action.status }}</div>
         </div>
         <div class="mt-2">{{ action.detail || '--' }}</div>
+        <div
+          v-if="action.promotion?.skill_candidate"
+          class="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-3"
+        >
+          <div class="text-xs font-semibold text-slate-800">Skill 候选：{{ action.promotion.skill_candidate.name || action.promotion.skill_candidate.skill_id }}</div>
+          <div class="mt-1 text-xs text-slate-500">
+            {{ action.promotion.skill_candidate.domain || 'unknown domain' }}
+            · {{ action.promotion.skill_candidate.trust_level || 'draft' }}
+          </div>
+          <template v-if="action.promotion.skill_candidate.replay_eligible === true && action.promotion.skill_candidate.skill_id">
+            <div class="mt-2 text-xs text-teal-700">符合 python run(context) 执行契约，可提交独立 Broker 沙箱回放。</div>
+            <button
+              type="button"
+              class="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="replayBusyKey === replayKey(action)"
+              @click="$emit('replay-skill', {
+                skillId: action.promotion.skill_candidate.skill_id,
+                nodeId: action.node_id,
+              })"
+            >
+              {{ replayBusyKey === replayKey(action) ? 'Broker 回放中…' : '提交 Broker 隔离回放' }}
+            </button>
+          </template>
+          <div v-else class="mt-2 text-xs text-amber-700">
+            此候选是自然语言 Recipe 或不满足执行契约的草稿，禁止交给 Broker 执行。
+            <span v-if="action.promotion.skill_candidate.replay_reason">原因：{{ action.promotion.skill_candidate.replay_reason }}</span>
+          </div>
+        </div>
+        <div v-if="action.action_type === 'skill_replay'" class="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+          <div>Broker 执行：{{ action.execution_succeeded === true ? '成功' : action.execution_succeeded === false ? '失败' : '待核验' }}</div>
+          <div v-if="action.validation_status">独立验证：{{ action.validation_status }}</div>
+          <div v-if="action.promotion_status">Artifact 发布：{{ action.promotion_status }}</div>
+          <div v-if="action.evidence_id" class="mt-1 break-all">Evidence：{{ action.evidence_id }}</div>
+          <div v-if="action.experience_id" class="mt-1 break-all">Experience：{{ action.experience_id }}</div>
+        </div>
         <details v-if="action.decision_trace?.length" class="mt-2 rounded-lg border border-indigo-100 bg-white px-3 py-2">
           <summary class="cursor-pointer text-xs font-medium text-indigo-700">规划决策追踪（{{ action.decision_trace.length }}）</summary>
           <div class="mt-2 space-y-2">
@@ -197,20 +232,27 @@ const props = withDefaults(defineProps<{
   section?: MissionDetailSection
   continueDisabled?: boolean
   showContinueButton?: boolean
+  replayBusyKey?: string
 }>(), {
   section: 'overview',
   continueDisabled: false,
   showContinueButton: true,
+  replayBusyKey: '',
 })
 
 defineEmits<{
   continue: []
+  'replay-skill': [payload: { skillId: string; nodeId: string }]
 }>()
 
 const showOverview = computed(() => props.section === 'overview')
 const showActions = computed(() => props.section === 'actions')
 const showGrowth = computed(() => props.section === 'growth')
 const showPlan = computed(() => props.section === 'plan')
+
+const replayKey = (action: MissionRun['actions'][number]) => (
+  `${action.node_id}:${action.promotion?.skill_candidate?.skill_id || ''}`
+)
 
 const formatTimestamp = (value?: string) => {
   if (!value) return '--'

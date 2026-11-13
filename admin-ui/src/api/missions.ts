@@ -142,6 +142,24 @@ export interface MissionRunAction {
     quality_score?: number
     recorded_at?: string
   }
+  promotion?: {
+    experience_id?: string
+    skill_candidate?: {
+      skill_id?: string
+      name?: string
+      domain?: string
+      trust_level?: string
+      replay_eligible?: boolean
+      replay_status?: string
+      replay_reason?: string
+    }
+  }
+  skill_id?: string
+  validation_status?: string
+  promotion_status?: string
+  evidence_id?: string
+  experience_id?: string
+  execution_succeeded?: boolean
   task_result?: {
     validation_outcome?: string
     message?: string

@@ -47,8 +47,10 @@
       :run="missionRun"
       :section="activeSection"
       :continue-disabled="continuing"
-      :show-continue-button="true"
+       :show-continue-button="true"
+      :replay-busy-key="replayBusyKey"
       @continue="continueCurrentMission"
+      @replay-skill="replayCurrentSkill"
     />
 
     <div v-else class="rounded-2xl border border-rose-200 bg-white p-8 text-center text-sm text-rose-600">
@@ -63,7 +65,7 @@ import { useRoute, useRouter } from 'vue-router'
 import MissionRunDetailPanel from '../components/MissionRunDetailPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
-import { continueMission, getMissionRun, type MissionRun } from '../api/missions'
+import { continueMission, getMissionRun, replayMissionSkill, type MissionRun } from '../api/missions'
 
 type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
 
@@ -73,6 +75,7 @@ const activeSection = ref<MissionDetailSection>('overview')
 const missionRun = ref<MissionRun | null>(null)
 const loading = ref(false)
 const continuing = ref(false)
+const replayBusyKey = ref('')
 const message = ref('')
 const success = ref(false)
 let refreshTimer: number | null = null
@@ -158,6 +161,35 @@ const loadMissionRun = async () => {
     missionRun.value = null
   } finally {
     loading.value = false
+  }
+}
+
+const replayCurrentSkill = async (payload: { skillId: string; nodeId: string }) => {
+  const current = missionRun.value
+  const skillId = String(payload.skillId || '').trim()
+  const nodeId = String(payload.nodeId || '').trim()
+  if (!current || !skillId || !nodeId || replayBusyKey.value) return
+
+  replayBusyKey.value = `${nodeId}:${skillId}`
+  message.value = ''
+  try {
+    await replayMissionSkill(
+      current.mission_run_id,
+      skillId,
+      nodeId,
+      crypto.randomUUID(),
+    )
+    success.value = true
+    message.value = 'Broker 隔离回放已完成；已刷新 Mission 动作链以读取签名证据、独立验证和发布状态。'
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error
+      ? error.message
+      : 'Broker 回放结果不确定；请先刷新 Mission 动作链核对状态，不要直接重复执行。'
+    await loadMissionRun()
+  } finally {
+    replayBusyKey.value = ''
   }
 }
 
