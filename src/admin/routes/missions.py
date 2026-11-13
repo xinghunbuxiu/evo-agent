@@ -563,7 +563,11 @@ def register_mission_routes(
                             validator_status = {"status": outcome.get("status")}
                         except Exception as exc:
                             validator_status = {"status": "unavailable", "error_type": type(exc).__name__}
-                    elif skill_replay_runtime is None:
+                    elif skill_replay_runtime is not None and not (
+                        skill_replay_runtime.validator_socket_path
+                        and skill_replay_runtime.validator_public_key
+                        and skill_replay_runtime.validator_key_id
+                    ):
                         validator_status = {"status": "not_configured"}
 
                 # A completed status is only a lookup result. Re-verify signed
@@ -653,6 +657,15 @@ def register_mission_routes(
                         "status": "validation_verified_promotion_unverified",
                         "automatic_resume": False,
                         "next_step": "verify_promotion_receipt_and_artifact_store_before_manual_reconciliation",
+                    }
+                elif (
+                    verified_receipts.get("broker_execution") == "verified"
+                    and verified_receipts.get("execution_succeeded") is False
+                ):
+                    assessment = {
+                        "status": "broker_execution_failed",
+                        "automatic_resume": False,
+                        "next_step": "retain_failed_execution_evidence_and_review_candidate",
                     }
                 elif (
                     verified_receipts.get("broker_execution") == "verified"
