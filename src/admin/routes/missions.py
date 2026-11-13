@@ -657,12 +657,6 @@ def register_mission_routes(
                     }
                 elif verified_receipts.get("validator") == "verified":
                     assessment = {
-                        "status": "invalid_signed_evidence",
-                        "automatic_resume": False,
-                        "next_step": "preserve_claim_and_escalate_security_review",
-                    }
-                elif verified_receipts.get("validator") == "verified":
-                    assessment = {
                         "status": "validation_verified_promotion_unverified",
                         "automatic_resume": False,
                         "next_step": "verify_promotion_receipt_and_artifact_store_before_manual_reconciliation",
@@ -898,5 +892,3 @@ def register_mission_routes(
             return error
         return success_response({
             "source_mission_run_id": mission_run_id,
-            "continued_mission_run": latest,
-        }, "已基于上一轮结果启动下一轮 Mission")
