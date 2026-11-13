@@ -24,7 +24,6 @@ from core.sandbox_runner import RunnerProcessOutput
 from core.skill_artifact_store import SkillArtifactStore
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_validator import SkillValidatorService, verify_validation_response
-from core.sandbox_broker_protocol import broker_response_sha256
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
@@ -53,7 +52,7 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 "task_id": "task-replay",
             }
 
-            code = "def run(context):\\n    return {'ok': True}\\n"
+            code = "def run(context):\n    return {'ok': True}\n"
             skill = Skill(
                 id="skill-integration",
                 name="Integration Skill",
