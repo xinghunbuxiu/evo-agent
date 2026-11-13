@@ -94,6 +94,7 @@ from admin.runtime_state import (
     normalize_child_members_runtime as _normalize_child_members_runtime,
     normalize_feedback_monitor_runtime as _normalize_feedback_monitor_runtime,
     resolve_member_for_mission as _resolve_member_for_mission,
+    resolve_members_for_mission as _resolve_members_for_mission,
     normalize_parent_profile_runtime as _normalize_parent_profile_runtime,
     save_autonomy_runtime as _save_autonomy_runtime,
     save_learning_tasks as _save_learning_tasks,
@@ -2179,19 +2180,43 @@ def create_app() -> FastAPI:
         next_cycle_plan = summary.get("next_cycle_plan", {}) if isinstance(summary.get("next_cycle_plan"), dict) else {}
         worker_summary = summary.get("worker_summary", {}) if isinstance(summary.get("worker_summary"), dict) else {}
         role_reflection = worker_summary.get("role_reflection", {}) if isinstance(worker_summary.get("role_reflection"), dict) else {}
-        role_summary = str(role_reflection.get("summary") or "").strip()
-        role_experiment = str(role_reflection.get("next_experiment") or "").strip()
-        focus_points = [
+        scoped_actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+        has_scoped_worker_actions = any(
+            isinstance(action, dict) and str(action.get("organization_worker_id") or
+                ((action.get("worker_claim") or {}).get("worker_id") if isinstance(action.get("worker_claim"), dict) else "") or "").strip()
+            for action in scoped_actions
+        )
+        action_evidence = []
+        for action in scoped_actions:
+            if not isinstance(action, dict):
+                continue
+            result = action.get("task_result", {}) if isinstance(action.get("task_result"), dict) else {}
+            parts = [
+                str(action.get("title") or action.get("task_type") or "").strip(),
+                str(action.get("status") or action.get("execution_status") or "").strip(),
+                str(action.get("detail") or "").strip(),
+                str(result.get("summary") or "").strip(),
+            ]
+            rendered = " / ".join(part[:300] for part in parts if part)
+            if rendered:
+                action_evidence.append(rendered[:900])
+        role_summary = (
+            "；".join(action_evidence[:8])
+            if has_scoped_worker_actions
+            else str(role_reflection.get("summary") or "").strip()
+        )
+        role_experiment = "" if has_scoped_worker_actions else str(role_reflection.get("next_experiment") or "").strip()
+        focus_points = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (next_cycle_plan.get("focus_points", []) if isinstance(next_cycle_plan.get("focus_points"), list) else [])
             if str(item).strip()
         ]
-        next_steps = [
+        next_steps = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (next_cycle_plan.get("next_steps", []) if isinstance(next_cycle_plan.get("next_steps"), list) else [])
             if str(item).strip()
         ]
-        recommended_next_actions = [
+        recommended_next_actions = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (worker_summary.get("recommended_next_actions", []) if isinstance(worker_summary.get("recommended_next_actions"), list) else [])
             if str(item).strip()
@@ -2215,7 +2240,9 @@ def create_app() -> FastAPI:
         signature = hashlib.sha1(
             "|".join([
                 str(mission_run.get("mission_run_id") or ""),
+                str(member.get("member_id") or ""),
                 status,
+                "||".join(action_evidence),
                 role_summary,
                 role_experiment,
                 "||".join(focus_points[:2]),
@@ -2250,18 +2277,25 @@ def create_app() -> FastAPI:
         for mission_run in mission_runs:
             if not isinstance(mission_run, dict):
                 continue
-            member = _resolve_member_for_mission(mission_run, members)
-            if not isinstance(member, dict):
+            member_groups = _resolve_members_for_mission(mission_run, members)
+            if not member_groups:
                 continue
-            reflection = _build_member_reflection_from_mission(mission_run, member)
-            if not isinstance(reflection, dict):
-                continue
-            signature = str(reflection.get("signature") or "").strip()
-            if signature and signature == str(mission_run.get("member_reflection_sync_signature") or "").strip():
-                continue
-            member_id = str(member.get("member_id") or "").strip()
-            if not member_id:
-                continue
+            sync_state = mission_run.get("member_reflection_sync", {})
+            sync_state = dict(sync_state) if isinstance(sync_state, dict) else {}
+            for group in member_groups:
+                member = group.get("member") if isinstance(group, dict) else None
+                if not isinstance(member, dict):
+                    continue
+                scoped_run = {**mission_run, "actions": group.get("actions", [])}
+                reflection = _build_member_reflection_from_mission(scoped_run, member)
+                if not isinstance(reflection, dict):
+                    continue
+                signature = str(reflection.get("signature") or "").strip()
+                member_id = str(member.get("member_id") or "").strip()
+                if not member_id:
+                    continue
+                if signature and signature == str(sync_state.get(member_id) or "").strip():
+                    continue
             _append_member_reflection_message(
                 relationship_center,
                 member_id=member_id,
@@ -2331,11 +2365,14 @@ def create_app() -> FastAPI:
                 next_action=next_action,
                 current_focus=current_focus,
             )
-            mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
-            mission_run["member_reflection_sync_signature"] = signature
-            mission_run["member_growth_event_signature"] = signature
-            mission_run["member_reflection_member_id"] = member_id
-            changed = True
+                sync_state[member_id] = signature
+                mission_run["member_reflection_sync"] = sync_state
+                mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
+                if len(member_groups) == 1:
+                    mission_run["member_reflection_sync_signature"] = signature
+                    mission_run["member_growth_event_signature"] = signature
+                    mission_run["member_reflection_member_id"] = member_id
+                changed = True
 
         if changed:
             runtime["relationship_center"] = relationship_center

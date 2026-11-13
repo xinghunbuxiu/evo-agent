@@ -1064,3 +1064,42 @@ def resolve_member_for_mission(mission_run: dict, members: list[dict]) -> dict |
         if isinstance(matched, dict):
             return matched
     return None
+
+
+def resolve_members_for_mission(mission_run: dict, members: list[dict]) -> list[dict]:
+    """Return per-employee mission action groups without cross-employee attribution."""
+    if not isinstance(mission_run, dict) or not isinstance(members, list):
+        return []
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    groups: dict[str, dict] = {}
+    worker_actions_found = False
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        claim = action.get("worker_claim", {}) if isinstance(action.get("worker_claim"), dict) else {}
+        worker_id = str(action.get("organization_worker_id") or claim.get("worker_id") or "").strip()
+        if not worker_id:
+            continue
+        worker_actions_found = True
+        owners = []
+        for member in members:
+            if not isinstance(member, dict) or str(member.get("status") or "active").strip() == "archived":
+                continue
+            runtime = member.get("instance_runtime", {}) if isinstance(member.get("instance_runtime"), dict) else {}
+            ids = runtime.get("organization_worker_ids", []) if isinstance(runtime.get("organization_worker_ids"), list) else []
+            if worker_id in {str(value).strip() for value in ids if str(value).strip()}:
+                owners.append(member)
+        if len(owners) != 1:
+            continue
+        member = owners[0]
+        member_id = str(member.get("member_id") or "").strip()
+        if not member_id:
+            continue
+        group = groups.setdefault(member_id, {"member": member, "actions": []})
+        group["actions"].append(action)
+    if worker_actions_found:
+        return list(groups.values())
+    member = resolve_member_for_mission(mission_run, members)
+    if not isinstance(member, dict):
+        return []
+    return [{"member": member, "actions": actions}]

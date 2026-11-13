@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core.organization_runtime import OrganizationRegistry, recommend_workforce_for_node, recommend_workforce_for_nodes, sync_worker_catalog
-from admin.runtime_state import normalize_child_member_runtime, resolve_member_for_mission
+from admin.runtime_state import normalize_child_member_runtime, resolve_member_for_mission, resolve_members_for_mission
 
 
 class OrganizationRegistryTests(unittest.TestCase):
@@ -22,6 +22,38 @@ class OrganizationRegistryTests(unittest.TestCase):
             worker_id="android-a", role_id="android-dev",
             profile={"model": "configured-model", "skills": ["android-build"]},
         )
+
+    def test_mission_actions_are_grouped_by_employee_without_cross_attribution(self):
+        android = normalize_child_member_runtime({
+            "member_id": "employee_android",
+            "instance_runtime": {"organization_worker_ids": ["android-a", "android-b"]},
+        })
+        ios = normalize_child_member_runtime({
+            "member_id": "employee_ios",
+            "instance_runtime": {"organization_worker_ids": ["ios-a"]},
+        })
+        mission = {"actions": [
+            {"node_id": "android-node", "organization_worker_id": "android-a"},
+            {"node_id": "android-clone", "worker_claim": {"worker_id": "android-b"}},
+            {"node_id": "ios-node", "organization_worker_id": "ios-a"},
+            {"node_id": "unknown-node", "organization_worker_id": "unowned-worker"},
+        ]}
+        groups = resolve_members_for_mission(mission, [android, ios])
+        by_member = {item["member"]["member_id"]: item["actions"] for item in groups}
+        self.assertEqual(set(by_member), {"employee_android", "employee_ios"})
+        self.assertEqual([item["node_id"] for item in by_member["employee_android"]], ["android-node", "android-clone"])
+        self.assertEqual([item["node_id"] for item in by_member["employee_ios"]], ["ios-node"])
+        self.assertNotIn("unknown-node", [a["node_id"] for actions in by_member.values() for a in actions])
+
+    def test_mission_without_worker_identity_uses_existing_single_member_resolution(self):
+        employee = normalize_child_member_runtime({"member_id": "employee_android"})
+        groups = resolve_members_for_mission(
+            {"context": {"member_id": "employee_android"}, "actions": [{"node_id": "legacy"}]},
+            [employee],
+        )
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["member"]["member_id"], "employee_android")
+        self.assertEqual(groups[0]["actions"][0]["node_id"], "legacy")
 
     def test_mission_resolves_employee_from_owned_execution_worker(self):
         android = normalize_child_member_runtime({
