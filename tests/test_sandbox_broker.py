@@ -192,7 +192,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             "node_id": "node-stage-recovery",
             "task_id": "task-stage-recovery",
         }
-        code = "def run(context):\\n    return {'stable': True}\\n"
+        code = "def run(context):\n    return {'stable': True}\n"
         request = {
             "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
             "request_id": str(uuid.uuid4()),
