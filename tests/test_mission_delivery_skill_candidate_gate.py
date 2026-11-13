@@ -1,4 +1,5 @@
 """Mission delivery Skill candidates require an accepted artifact."""
+import json
 import sys
 import tempfile
 import unittest

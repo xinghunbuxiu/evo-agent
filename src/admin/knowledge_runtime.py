@@ -544,7 +544,10 @@ def create_mission_delivery_skill_candidate(
             primary_worker_id=primary_worker_id,
         )
         existing_candidate = load_local_skill_payload(workspace, tenant_id, skill.id)
-        if existing_candidate is not None and existing_candidate != skill.to_dict():
+        if existing_candidate is not None and any(
+            existing_candidate.get(field) != skill.to_dict().get(field)
+            for field in ("id", "version", "code", "parameters", "trust_level")
+        ):
             raise ValueError("executable Skill candidate ID already exists with different immutable content")
         skill_info = write_skill_candidate(workspace, tenant_id, skill)
         skill_info.update({"replay_status": "eligible", "replay_eligible": True})
@@ -599,7 +602,6 @@ def create_mission_delivery_skill_candidate(
         )
         skill_info = write_skill_candidate(workspace, tenant_id, skill)
 
-    execution_contract = skill.parameters.get("execution_contract", {})
     verified_info = None
     if skill_info.get("replay_eligible") is True:
         # A future executable candidate must supply independently attested replay
