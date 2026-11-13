@@ -2,6 +2,8 @@
 
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -146,6 +148,86 @@ class MissionAutoRepairTests(unittest.TestCase):
             self.assertEqual(child["repair_attempt_number"], 1)
             self.assertEqual(updated_parent["auto_repair_triggered_run_id"], "mission-repair-1")
             self.assertEqual(updated_parent["auto_repair_status"], "triggered")
+
+    def test_concurrent_refreshes_start_only_one_repair_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            save_mission_runs(workspace, {"items": [self._failed_run()]})
+            manager = TenantManager(workspace)
+            manager.set_external_learning_policy(
+                "tenant-a",
+                allow_ai_assist=True,
+                allow_web_research=True,
+                allow_enterprise_sources=True,
+                source_priority=["local_memory", "ai_assist"],
+                validation_required=True,
+                model_provider={
+                    "enabled": True,
+                    "base_url": "https://model.example/v1",
+                    "api_key": "test-only-key",
+                    "model": "test-model",
+                },
+                auto_repair_enabled=True,
+                max_repair_attempts=2,
+            )
+
+            first_child_started = threading.Event()
+            second_refresh_attempting = threading.Event()
+            release_first_child = threading.Event()
+            started = []
+            started_lock = threading.Lock()
+            errors = []
+
+            def start_child(payload, refresh_runs=False):
+                with started_lock:
+                    child_number = len(started) + 1
+                    started.append(payload)
+                if child_number == 1:
+                    first_child_started.set()
+                    release_first_child.wait(timeout=3)
+                return ({
+                    "mission_run_id": f"mission-repair-{child_number}",
+                    "tenant_id": "tenant-a",
+                    "status": "running",
+                    "context": payload["context"],
+                    "actions": [],
+                }, None)
+
+            def run_refresh(second=False):
+                try:
+                    if second:
+                        second_refresh_attempting.set()
+                    return refresh_mission_runs(
+                        workspace=workspace,
+                        task_queue=object(),
+                        tenant_manager=manager,
+                        refresh_runtime_learning_tasks=lambda **kwargs: {},
+                        refresh_mission_run=lambda **kwargs: kwargs["mission_run"],
+                        mission_starter=start_child,
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+                    raise
+
+            first = threading.Thread(target=run_refresh)
+            first.start()
+            self.assertTrue(first_child_started.wait(timeout=2))
+            second = threading.Thread(target=run_refresh, kwargs={"second": True})
+            second.start()
+            self.assertTrue(second_refresh_attempting.wait(timeout=2))
+            time.sleep(0.05)
+            release_first_child.set()
+            first.join(timeout=4)
+            second.join(timeout=4)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(len(started), 1)
+            from admin.mission_runtime import load_mission_runs
+            persisted = load_mission_runs(workspace)
+            parent = next(item for item in persisted["items"] if item["mission_run_id"] == "mission-root")
+            self.assertEqual(parent["auto_repair_triggered_run_id"], "mission-repair-1")
 
     def test_refresh_does_not_auto_repair_without_ai_provider(self):
         with tempfile.TemporaryDirectory() as tmp:

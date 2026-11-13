@@ -67,6 +67,54 @@ def exclusive_mission_claim_lock(workspace: Path):
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+
+
+_MISSION_REFRESH_THREAD_LOCK = threading.RLock()
+_MISSION_REFRESH_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def exclusive_mission_refresh_lock(workspace: Path):
+    """Serialize Mission refresh decisions across threads and processes."""
+    with _MISSION_REFRESH_THREAD_LOCK:
+        depth = getattr(_MISSION_REFRESH_LOCK_STATE, "depth", 0)
+        if depth:
+            _MISSION_REFRESH_LOCK_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                _MISSION_REFRESH_LOCK_STATE.depth -= 1
+            return
+
+        lock_path = workspace / ".admin" / ".mission-refresh.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    _MISSION_REFRESH_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_REFRESH_LOCK_STATE.depth = 0
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    _MISSION_REFRESH_LOCK_STATE.depth = 1
+                    yield
+                finally:
+                    _MISSION_REFRESH_LOCK_STATE.depth = 0
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _write_mission_runs_atomic(workspace: Path, payload: dict) -> None:
     path = mission_runs_file(workspace)
     normalized_items = payload.get("items", []) if isinstance(payload, dict) else []
@@ -738,7 +786,7 @@ def build_mission_session_summary(current_run: dict, all_runs: list[dict]) -> di
     }
 
 
-def refresh_mission_runs(
+def _refresh_mission_runs_unlocked(
     *,
     workspace: Path,
     task_queue,
@@ -862,6 +910,30 @@ def refresh_mission_runs(
             refreshed_items = [item for item in synced if isinstance(item, dict)]
     save_mission_runs(workspace, {"items": refreshed_items})
     return load_mission_runs(workspace)
+
+
+
+def refresh_mission_runs(
+    *,
+    workspace: Path,
+    task_queue,
+    tenant_manager,
+    refresh_runtime_learning_tasks: Callable[..., dict],
+    refresh_mission_run: Callable[..., dict],
+    mission_starter=None,
+    sync_autonomy_runtime_from_missions: Callable[..., list[dict] | None] | None = None,
+) -> dict:
+    """Refresh Mission state under a dedicated lock to prevent duplicate replans."""
+    with exclusive_mission_refresh_lock(workspace):
+        return _refresh_mission_runs_unlocked(
+            workspace=workspace,
+            task_queue=task_queue,
+            tenant_manager=tenant_manager,
+            refresh_runtime_learning_tasks=refresh_runtime_learning_tasks,
+            refresh_mission_run=refresh_mission_run,
+            mission_starter=mission_starter,
+            sync_autonomy_runtime_from_missions=sync_autonomy_runtime_from_missions,
+        )
 
 
 def create_start_mission(
