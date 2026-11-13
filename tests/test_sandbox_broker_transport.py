@@ -325,5 +325,34 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             Path(socket_path).unlink(missing_ok=True)
 
 
+    def test_client_timeout_fails_closed_when_broker_does_not_respond(self):
+        socket_path = Path(self.temp.name) / "broker-stall.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(socket_path))
+        listener.listen(1)
+        accepted = threading.Event()
+        release = threading.Event()
+
+        def stall_peer():
+            connection, _ = listener.accept()
+            with connection:
+                accepted.set()
+                release.wait(timeout=1)
+
+        thread = threading.Thread(target=stall_peer, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(BrokerTransportError, "socket exchange"):
+                request_broker(str(socket_path), self.request, timeout_seconds=0.05)
+        finally:
+            release.set()
+            thread.join(timeout=2)
+            listener.close()
+            socket_path.unlink(missing_ok=True)
+        self.assertTrue(accepted.is_set())
+        self.assertFalse(thread.is_alive())
+
+
+
 if __name__ == "__main__":
     unittest.main()
