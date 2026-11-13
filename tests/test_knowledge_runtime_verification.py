@@ -90,7 +90,7 @@ class SkillReplayVerificationTests(unittest.TestCase):
     def test_reflection_records_are_never_auto_drafted_as_skills(self):
         self.assertTrue(
             knowledge_runtime.should_skip_auto_skill_task_type("experience_reflection")
-            knowledge_runtime.should_skip_auto_skill_task_type("experience_reflection_decision")
+            or knowledge_runtime.should_skip_auto_skill_task_type("experience_reflection_decision")
         )
         self.assertTrue(
             knowledge_runtime.should_skip_auto_skill_task_type("EXPERIENCE_REFLECTION")
