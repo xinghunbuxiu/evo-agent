@@ -421,6 +421,150 @@ class SkillReplayRuntime:
                 result["broker_promotion"] = "invalid"
         return result
 
+    def resume_promotion(
+        self, *, tenant_id: str, mission_run_id: str, node_id: str, task_id: str,
+        skill_id: str, skill_binding: Mapping, stage_request_id: str,
+        execution_request_id: str, validation_request_id: str,
+        promotion_request_id: str,
+    ) -> dict:
+        """Resume only the immutable publication step after signed evidence review.
+
+        This method never stages or executes Skill code. It re-loads the tenant's
+        exact Draft candidate, re-fetches Broker and Validator receipts, verifies
+        their signatures and lineage, and reissues only the deterministic
+        create-once promotion request.
+        """
+        context = {
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+        }
+        for label, value in (
+            ("tenant_id", tenant_id), ("mission_run_id", mission_run_id),
+            ("node_id", node_id), ("task_id", task_id), ("skill_id", skill_id),
+        ):
+            if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+                raise ValueError(f"{label} is invalid")
+        request_ids = (
+            stage_request_id, execution_request_id,
+            validation_request_id, promotion_request_id,
+        )
+        if any(
+            not isinstance(value, str) or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                value,
+            )
+            for value in request_ids
+        ):
+            raise ValueError("recovery request identity is invalid")
+        if not isinstance(skill_binding, Mapping):
+            raise ValueError("pinned Skill binding is missing")
+        binding = dict(skill_binding)
+        if (
+            binding.get("schema_version") != "mission.skill-replay-binding.v1"
+            or binding.get("skill_id") != skill_id
+            or binding.get("trust_level") != "draft"
+            or binding.get("mission_context") != context
+        ):
+            raise PermissionError("pinned Skill binding does not match the Mission identity")
+
+        if not (self.validator_socket_path and self.validator_public_key and self.validator_key_id):
+            raise ValueError("independent Validator is not configured")
+        payload = _load_draft_skill_payload(self.workspace, tenant_id, skill_id)
+        if not isinstance(payload, dict):
+            raise FileNotFoundError("Draft Skill candidate was not found in this tenant")
+        skill = Skill.from_dict(payload)
+        self._validate_executable_contract(skill)
+        current_binding = build_skill_replay_binding(skill, context)
+        if current_binding != binding:
+            raise PermissionError("Draft Skill candidate changed after the original Replay")
+
+        stage_outcome = self.broker_request_status(stage_request_id, context)
+        execution_outcome = self.broker_request_status(execution_request_id, context)
+        promotion_outcome = self.broker_request_status(promotion_request_id, context)
+        validator_outcome = self.validator_request_status(validation_request_id, context)
+        if promotion_outcome.get("status") == "completed":
+            raise ValueError("promotion is already completed; reconcile its signed receipt instead")
+        if promotion_outcome.get("status") not in {"indeterminate", "not_found"}:
+            raise ValueError("promotion status is not eligible for controlled recovery")
+
+        broker_outcomes = {
+            "stage": stage_outcome,
+            "execution": execution_outcome,
+            "promotion": promotion_outcome,
+        }
+        verified = self.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            stage_request_id=stage_request_id,
+            execution_request_id=execution_request_id,
+            validation_request_id=validation_request_id,
+            promotion_request_id=promotion_request_id,
+            broker_outcomes=broker_outcomes,
+            validator_outcome=validator_outcome,
+        )
+        if (
+            verified.get("broker_stage") != "verified"
+            or verified.get("broker_execution") != "verified"
+            or verified.get("execution_succeeded") is not True
+            or verified.get("validator") != "verified"
+        ):
+            raise PermissionError("signed Stage, execution, or Validator evidence did not verify")
+
+        broker_envelope = execution_outcome.get("response")
+        if not isinstance(broker_envelope, dict):
+            raise ValueError("verified Broker execution receipt is missing")
+        expected_identity = {
+            "workspace_id": self.workspace_id,
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+            "broker_request_id": execution_request_id,
+            "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "trust_level": _VALIDATED_TRUST_LEVEL,
+        }
+        validation_attestation = verify_validation_response(
+            validator_outcome.get("response"),
+            public_key=self.validator_public_key,
+            expected_key_id=self.validator_key_id,
+            expected_request_id=validation_request_id,
+            expected_identity=expected_identity,
+        )
+        expected_promotion_id = _deterministic_request_id("promotion", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "validation_attestation": validation_attestation,
+        })
+        if expected_promotion_id != promotion_request_id:
+            raise PermissionError("promotion request ID does not match the original signed Validator attestation")
+
+        receipt = promote_skill_candidate_via_broker(
+            self.socket_path,
+            self.workspace_id,
+            mission_context=context,
+            skill_id=skill.id,
+            skill_version=skill.version,
+            content_sha256=binding["content_sha256"],
+            trust_level=_VALIDATED_TRUST_LEVEL,
+            validation_attestation=validation_attestation,
+            public_key=self.broker_public_key,
+            expected_key_id=self.broker_key_id,
+            request_id=promotion_request_id,
+        )
+        return {
+            "status": "published",
+            "artifact": receipt["artifact"],
+            "validation_provenance": receipt.get("validation_provenance"),
+            "promotion_request_id": promotion_request_id,
+        }
+
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,
                          on_candidate_bound: Callable[[dict], None] | None = None,
