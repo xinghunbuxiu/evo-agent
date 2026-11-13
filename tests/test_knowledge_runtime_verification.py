@@ -95,6 +95,27 @@ class SkillReplayVerificationTests(unittest.TestCase):
             knowledge_runtime.should_skip_auto_skill_task_type("EXPERIENCE_REFLECTION")
         )
 
+    def test_reflection_experience_records_never_enter_stable_skill_groups(self):
+        from core import Experience, ExperienceStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            store = ExperienceStore(workspace, "tenant-a")
+            for index in range(2):
+                store.save(Experience(
+                    id=f"reflection-{index}",
+                    domain="reflection",
+                    task_type="experience_reflection",
+                    input_summary="Reflection",
+                    output_summary="Reviewed observation",
+                    quality_score=1.0,
+                    metadata={"experience_reflection": {"state": "accepted"}},
+                ))
+            self.assertEqual(
+                knowledge_runtime.collect_stable_experience_skill_groups(workspace, "tenant-a"),
+                [],
+            )
+
     def test_mission_delivery_clusters_require_explicit_pass_verdict(self):
         from core import Experience, ExperienceStore
 
