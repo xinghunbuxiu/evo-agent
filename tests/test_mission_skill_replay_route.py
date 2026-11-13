@@ -729,7 +729,8 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             _deterministic_request_id,
         )
 
-        root = self.workspace.parent
+        root = self.workspace / "runtime-fixture"
+        root.mkdir(mode=0o700)
         evidence_root = root / "evidence"
         evidence_root.mkdir(mode=0o700)
         broker_key_path = root / "broker.pub"
