@@ -61,6 +61,8 @@ def build_pending_reflection(
         raise ValueError("source must be an Experience")
     if not isinstance(findings, dict):
         raise ValueError("findings must be an object")
+    if not findings:
+        raise ValueError("findings must not be empty")
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
         raise ValueError("revision must be a positive integer")
     parent = str(parent_reflection_id or "").strip() or None
@@ -136,6 +138,10 @@ def validate_reflection_payload(
         "created_at", "findings", "idempotency_key",
     )
     for field in required:
+        if field == "findings":
+            if not isinstance(payload.get(field), dict) or not payload[field]:
+                raise ValueError("findings must be a non-empty object")
+            continue
         _clean_string(payload.get(field), field)
     if payload["tenant_id"] != expected_tenant_id:
         raise ValueError("reflection tenant mismatch")

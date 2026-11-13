@@ -59,10 +59,17 @@ class ExperienceReflectionContractTests(unittest.TestCase):
                 findings={}, source_evidence_refs=[" "], idempotency_key="request-3",
             )
 
+    def test_builder_rejects_empty_findings(self):
+        with self.assertRaisesRegex(ValueError, "findings must not be empty"):
+            build_pending_reflection(
+                self.make_source(), tenant_id="tenant-a", author="actor",
+                findings={}, idempotency_key="request-empty-findings",
+            )
+
     def test_validator_rejects_cross_tenant_reflection(self):
         reflection = build_pending_reflection(
             self.make_source(), tenant_id="tenant-a", author="actor",
-            findings={}, idempotency_key="request-4",
+            findings={"observed_outcome": "Observed"}, idempotency_key="request-4",
         )
         with self.assertRaisesRegex(ValueError, "tenant mismatch"):
             validate_reflection_payload(
@@ -73,7 +80,7 @@ class ExperienceReflectionContractTests(unittest.TestCase):
     def test_validator_rejects_pending_record_with_decision_provenance(self):
         reflection = build_pending_reflection(
             self.make_source(), tenant_id="tenant-a", author="actor",
-            findings={}, idempotency_key="request-5",
+            findings={"observed_outcome": "Observed"}, idempotency_key="request-5",
         )
         payload = dict(reflection.metadata["experience_reflection"])
         payload["reviewer"] = {"actor": "actor-2"}
@@ -83,7 +90,7 @@ class ExperienceReflectionContractTests(unittest.TestCase):
     def test_validator_requires_rejection_reason_and_reviewer(self):
         reflection = build_pending_reflection(
             self.make_source(), tenant_id="tenant-a", author="actor",
-            findings={}, idempotency_key="request-6",
+            findings={"observed_outcome": "Observed"}, idempotency_key="request-6",
         )
         payload = dict(reflection.metadata["experience_reflection"])
         payload.update({
