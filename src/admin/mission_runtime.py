@@ -583,6 +583,29 @@ def derive_follow_up_context(mission_run: dict) -> dict:
     ]
     preferred_content_mode = str(next_cycle_plan.get("preferred_content_mode") or "").strip()
     feedback_goal_hint = str(next_cycle_plan.get("feedback_goal_hint") or "").strip()
+    # Carry the Mission-owned dependency replan request as structured context;
+    # prose-only goal hints are insufficient for downstream planning/audit.
+    context.pop("dependency_replan", None)
+    raw_dependency_replan = next_cycle_plan.get("dependency_replan")
+    if isinstance(raw_dependency_replan, dict) and raw_dependency_replan.get("required") is True:
+        raw_node_ids = raw_dependency_replan.get("node_ids", [])
+        dependency_node_ids = []
+        if isinstance(raw_node_ids, list):
+            for value in raw_node_ids:
+                node_id = str(value or "").strip()[:80]
+                if node_id and node_id not in dependency_node_ids:
+                    dependency_node_ids.append(node_id)
+                if len(dependency_node_ids) >= 50:
+                    break
+        if dependency_node_ids:
+            context["dependency_replan"] = {
+                "schema_version": "mission.dependency.replan.request.v1",
+                "source_mission_run_id": str(mission_run.get("mission_run_id") or "")[:120],
+                "required": True,
+                "decision_owner": "mission",
+                "node_ids": dependency_node_ids,
+                "automatic_dispatch": False,
+            }
     context["previous_mission_run_id"] = mission_run.get("mission_run_id")
     context["autonomy_session_id"] = (
         mission_run.get("autonomy_session_id")

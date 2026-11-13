@@ -53,6 +53,15 @@ class MissionPlanAiRuntimeTests(unittest.TestCase):
                     "source_path": "src/input.py",
                     "api_key": "must-not-be-sent",
                     "access_token": "must-not-be-sent",
+                    "dependency_replan": {
+                        "schema_version": "untrusted-version",
+                        "source_mission_run_id": "run-previous",
+                        "required": True,
+                        "decision_owner": "attacker",
+                        "node_ids": ["node-a", " node-b ", ""],
+                        "automatic_dispatch": True,
+                        "api_key": "must-not-be-sent",
+                    },
                 },
                 worker_manifest={
                     "worker_id": "python-worker",
@@ -67,6 +76,17 @@ class MissionPlanAiRuntimeTests(unittest.TestCase):
         self.assertNotIn("must-not-be-sent", sent)
         self.assertNotIn("private-secret", sent)
         self.assertIn("python-worker", sent)
+        sent_payload = json.loads(sent)
+        self.assertEqual(sent_payload["task_context"]["dependency_replan"], {
+            "schema_version": "mission.dependency.replan.request.v1",
+            "source_mission_run_id": "run-previous",
+            "required": True,
+            "decision_owner": "mission",
+            "node_ids": ["node-a", "node-b"],
+            "automatic_dispatch": False,
+        })
+        self.assertNotIn("must-not-be-sent", sent)
+        self.assertIn("不是派发授权", complete.call_args.kwargs["messages"][0]["content"])
 
     def test_proposer_rejects_non_json_model_output(self):
         with (

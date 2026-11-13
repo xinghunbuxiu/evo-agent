@@ -512,6 +512,13 @@ class MissionTracePropagationTests(unittest.TestCase):
             "summary": {"next_cycle_plan": {
                 "next_steps": ["inspect failed step", "retry with evidence"],
                 "focus_points": ["dispatch trace"],
+                "dependency_replan": {
+                    "required": True,
+                    "decision_owner": "mission",
+                    "node_ids": ["node-a", "node-b", "node-a"],
+                    "automatic_dispatch": False,
+                    "untrusted_extra": "must-not-leak",
+                },
             }},
         }
 
@@ -523,6 +530,14 @@ class MissionTracePropagationTests(unittest.TestCase):
         self.assertEqual(context["autonomy_cycle"], 2)
         self.assertEqual(context["deliverable_goal"], "inspect failed step；retry with evidence")
         self.assertEqual(context["goal_hint"], "dispatch trace")
+        self.assertEqual(context["dependency_replan"], {
+            "schema_version": "mission.dependency.replan.request.v1",
+            "source_mission_run_id": "run-previous",
+            "required": True,
+            "decision_owner": "mission",
+            "node_ids": ["node-a", "node-b"],
+            "automatic_dispatch": False,
+        })
         self.assertNotIn("previous_mission_run_id", source_context)
         context["nested"]["keep"] = False
         self.assertTrue(source_context["nested"]["keep"])

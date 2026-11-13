@@ -25,7 +25,28 @@ def _safe_task_context(context: dict[str, Any]) -> dict[str, Any]:
         "repair_mode", "repair_attempt_count", "repair_of_mission_run_id",
         "repair_failure_evidence",
     )
-    return {key: context[key] for key in allowed if key in context}
+    safe_context = {key: context[key] for key in allowed if key in context}
+    raw_dependency_replan = context.get("dependency_replan")
+    if isinstance(raw_dependency_replan, dict) and raw_dependency_replan.get("required") is True:
+        raw_node_ids = raw_dependency_replan.get("node_ids", [])
+        node_ids = []
+        if isinstance(raw_node_ids, list):
+            for value in raw_node_ids:
+                node_id = str(value or "").strip()[:80]
+                if node_id and node_id not in node_ids:
+                    node_ids.append(node_id)
+                if len(node_ids) >= 50:
+                    break
+        if node_ids:
+            safe_context["dependency_replan"] = {
+                "schema_version": "mission.dependency.replan.request.v1",
+                "source_mission_run_id": str(raw_dependency_replan.get("source_mission_run_id") or "")[:120],
+                "required": True,
+                "decision_owner": "mission",
+                "node_ids": node_ids,
+                "automatic_dispatch": False,
+            }
+    return safe_context
 
 
 def build_worker_mission_plan_messages(
@@ -53,6 +74,12 @@ def build_worker_mission_plan_messages(
         "不要提出超出 manifest 能力范围的任务，不要要求执行未授权命令、访问密钥或绕过权限。"
         "Mission 主脑会独立审核计划、依赖、权限和验收条件；你的输出不是执行授权。"
     )
+    if payload["task_context"].get("dependency_replan", {}).get("required") is True:
+        system_prompt += (
+            " 当前是 Mission 依赖失败后的重规划轮次。必须逐一重新评估 dependency_replan.node_ids 中的节点，"
+            "结合当前可用证据重新选择修复、替代路径或停止；不得把历史派发失败当作已解决。"
+            "dependency_replan 仅是 Mission 主脑的重规划请求，不是派发授权；任何执行仍须经过 Mission 审核和运行时授权。"
+        )
     if context.get("repair_mode") == "fix_test":
         system_prompt += (
             " 当前是失败修复轮次。必须先分析 repair_failure_evidence 中的失败事实和未通过检查，"
