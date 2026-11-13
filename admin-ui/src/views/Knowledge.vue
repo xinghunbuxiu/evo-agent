@@ -139,6 +139,10 @@
       <KnowledgeSkillsCatalog :tenant-id="tenantId || 'default'" :skills="skills" :loading="loading" />
     </div>
 
+    <div v-show="activeSection === 'reflections'" class="space-y-5">
+      <ExperienceReflectionPanel :tenant-id="tenantId || 'default'" />
+    </div>
+
     <div v-show="activeSection === 'export'" class="space-y-5">
       <KnowledgeExportPanel :tenant-id="tenantId || 'default'" :refresh="loadSkills" />
     </div>
