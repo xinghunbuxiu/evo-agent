@@ -1,6 +1,6 @@
 # Experience Reflection Contract
 
-Status: contract and tenant-bound persistence adapter are implemented. Authenticated submit/list/decision routes and reviewer workflow are not implemented.
+Status: contract, tenant-bound append-only persistence, and authenticated submit/list/decision APIs are implemented. Review-queue UI and accepted-Reflection-to-Recipe generation are not implemented.
 
 ## 1. Purpose and boundary
 
@@ -28,7 +28,7 @@ A signed Broker execution attestation proves what ran in the isolated execution 
 - Use the `reflection` domain and `experience_reflection` task type, with a structured `metadata.experience_reflection` payload. The record's Experience quality score is not an approval signal and must not be used for Skill promotion.
 - Reflection records must be excluded from automatic stable-Experience grouping and automatic Skill drafting.
 - Each revision gets a new immutable record ID. Never reuse a previous revision's ID to update its contents.
-- The persistence adapter currently verifies evidence references against evidence identifiers already embedded in the source Experience metadata. External Mission-lineage lookup and authenticated actor/reviewer authorization remain route-layer work.
+- The persistence adapter currently verifies evidence references against evidence identifiers already embedded in the source Experience metadata. External Mission-lineage lookup remains future work; API actor and reviewer identities are derived from the authenticated session.
 - Once a source Experience has a Reflection chain, changing its canonical digest blocks further revisions rather than silently extending a chain over altered source content.
 - Keep remote archival content-addressed and read-back verified through the existing outbox flow.
 
@@ -47,14 +47,14 @@ The `metadata.experience_reflection` object must contain:
 | `source_experience_digest` | SHA-256 of the exact canonical persisted source payload |
 | `revision` | Positive, monotonically increasing revision number for this source |
 | `parent_reflection_id` | Previous revision ID, null for the first revision |
-| `state` | `pending`, `accepted`, or `rejected` |
+| `state` | Immutable submission state, always `pending`; effective terminal state is derived from a separate decision record |
 | `author` | Authenticated actor that submitted the interpretation |
-| `reviewer` | Authenticated reviewer and decision provenance; absent while pending |
+| `reviewer` | Decision provenance is stored in a separate immutable `reflection_decision` Experience, not written back to this record |
 | `created_at` | Immutable creation timestamp |
-| `decision_at` | Reviewer decision timestamp; absent while pending |
+| `decision_at` | Stored on the separate immutable decision record |
 | `source_evidence_refs` | References to evidence already associated with the source Experience or its Mission lineage |
 | `findings` | Structured interpretation, not a replacement for source facts |
-| `decision_reason` | Required reason for rejection; optional reviewer note for acceptance |
+| `decision_reason` | Stored on the separate immutable decision record as `reason` |
 | `idempotency_key` | Tenant-scoped key for safe request retries |
 
 The `findings` object should contain:
@@ -123,7 +123,7 @@ No Reflection state, confidence score, Recipe draft or worker-reported success c
 ## 7. Implementation sequence
 
 1. [x] Add the append-only Reflection record validator and tenant-bound persistence adapter on top of ExperienceStore.
-2. Add tenant-authorized submit/list/decision routes with idempotency and source-digest verification.
+2. [x] Add tenant-authorized submit/list/decision routes with idempotency and source-digest verification.
 3. Add review-queue UI and audit trail.
 4. Connect accepted revisions to Recipe Skill draft generation only.
 5. Add a separately authorized Recipe-to-executable synthesis workflow and retain the existing Broker/Validator/publishing gates.

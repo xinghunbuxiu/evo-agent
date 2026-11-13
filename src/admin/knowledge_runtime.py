@@ -181,7 +181,7 @@ def maybe_auto_verify_skill_candidate(
 
 def should_skip_auto_skill_task_type(task_type: str) -> bool:
     normalized = str(task_type or "").strip().lower()
-    return normalized in {"growth_event", "replay_validation", "strategy_governance", "role_reflection", "experience_reflection"}
+    return normalized in {"growth_event", "replay_validation", "strategy_governance", "role_reflection", "experience_reflection", "experience_reflection_decision"}
 
 
 def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> list[dict]:

@@ -127,6 +127,89 @@ class ExperienceReflectionStoreTests(unittest.TestCase):
             expected_parent = records[index - 1].id if index else None
             self.assertEqual(payload["parent_reflection_id"], expected_parent)
 
+    def test_decision_is_a_separate_append_only_record(self):
+        reflection = self.append()
+        original = reflection.to_dict()
+        decision = self.store.decide(
+            reflection.id,
+            reviewer="tenant-admin-2",
+            decision="accepted",
+            idempotency_key="review-request-1",
+        )
+        self.assertEqual(decision.domain, "reflection_decision")
+        self.assertEqual(decision.task_type, "experience_reflection_decision")
+        self.assertEqual(reflection.to_dict(), original)
+        listed = self.store.list_reviewed_for_source(self.source.id)
+        self.assertEqual(listed[0]["effective_state"], "accepted")
+        self.assertEqual(listed[0]["reflection"]["id"], reflection.id)
+        self.assertEqual(listed[0]["reflection"]["metadata"]["experience_reflection"]["state"], "pending")
+
+    def test_reflection_author_cannot_review_own_submission(self):
+        reflection = self.append()
+        with self.assertRaisesRegex(ValueError, "cannot review their own"):
+            self.store.decide(
+                reflection.id,
+                reviewer="tenant-member-1",
+                decision="accepted",
+                idempotency_key="review-self",
+            )
+
+    def test_source_digest_change_blocks_review_decision(self):
+        reflection = self.append()
+        changed_source = Experience(
+            id=self.source.id,
+            domain=self.source.domain,
+            task_type=self.source.task_type,
+            input_summary=self.source.input_summary,
+            output_summary="Source changed after Reflection",
+            quality_score=self.source.quality_score,
+            metadata=self.source.metadata,
+            created_at=self.source.created_at,
+        )
+        self.tenant_store.save(changed_source)
+        with self.assertRaisesRegex(ValueError, "source Experience digest changed"):
+            self.store.decide(
+                reflection.id,
+                reviewer="tenant-admin-2",
+                decision="accepted",
+                idempotency_key="review-after-source-change",
+            )
+
+    def test_decision_requires_reason_for_rejection(self):
+        reflection = self.append()
+        with self.assertRaisesRegex(ValueError, "requires a reason"):
+            self.store.decide(
+                reflection.id,
+                reviewer="tenant-admin-2",
+                decision="rejected",
+                idempotency_key="review-reject-no-reason",
+            )
+
+    def test_decision_retry_is_idempotent_and_conflicting_second_decision_is_rejected(self):
+        reflection = self.append()
+        first = self.store.decide(
+            reflection.id,
+            reviewer="tenant-admin-2",
+            decision="rejected",
+            reason="Evidence does not support the conclusion",
+            idempotency_key="review-request-2",
+        )
+        retry = self.store.decide(
+            reflection.id,
+            reviewer="tenant-admin-2",
+            decision="rejected",
+            reason="Evidence does not support the conclusion",
+            idempotency_key="review-request-2",
+        )
+        self.assertEqual(first.id, retry.id)
+        with self.assertRaisesRegex(ValueError, "already received"):
+            self.store.decide(
+                reflection.id,
+                reviewer="tenant-admin-3",
+                decision="accepted",
+                idempotency_key="review-request-3",
+            )
+
     def test_retry_recovers_projection_after_outbox_was_written(self):
         first = self.append()
         projection = self.workspace / ".tenants/tenant-a/experiences/reflection" / f"{first.id}.json"

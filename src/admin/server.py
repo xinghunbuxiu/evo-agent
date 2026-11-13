@@ -146,6 +146,7 @@ from admin.worker_route_runtime import resolve_experience_domain, resolve_work_t
 from admin.routes import (
     register_auth_routes,
     register_evolution_strategy_routes,
+    register_experience_reflection_routes,
     register_catalog_routes,
     register_finance_routes,
     register_git_knowledge_routes,
@@ -2494,6 +2495,16 @@ def create_app() -> FastAPI:
     _prepare_mission_work_type_bundle = _mission_bootstrap["prepare_mission_work_type_bundle"]
     _refresh_mission_runs = _mission_bootstrap["refresh_mission_runs"]
     _start_mission = _mission_bootstrap["start_mission"]
+
+    register_experience_reflection_routes(
+        app,
+        workspace=workspace,
+        get_session_user=_get_session_user,
+        authorize_tenant=_user_can_access_tenant,
+        tenant_role=_tenant_role_for_user,
+        success_response=success_response,
+        error_response=error_response,
+    )
 
     register_mission_routes(
         app,

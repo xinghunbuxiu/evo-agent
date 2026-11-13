@@ -295,7 +295,7 @@ class ExperienceReflectionStore:
             if experience.domain != "reflection" or experience.task_type != "experience_reflection":
                 return
             payload = experience.metadata.get("experience_reflection")
-            validate_reflection_payload(payload, expected_tenant_id=self.tenant_id)
+            validate_reflection_payload(payload, expected_tenant_id=self.tenant_id, require_pending=True)
             if payload.get("reflection_id") != experience.id:
                 raise ValueError("Reflection ID does not match its Experience projection")
             serialized = _canonical_json(experience.to_dict())
@@ -440,6 +440,231 @@ class ExperienceReflectionStore:
             # allocators from selecting the same revision or idempotency key.
             self.experience_store.save(reflection)
             return reflection
+
+    def _load_all_decisions(self) -> list[Experience]:
+        """Read immutable decision records from the tenant projection and outbox."""
+        found: dict[str, Experience] = {}
+
+        def add_experience(data: dict) -> None:
+            try:
+                experience = Experience(**data)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("stored Reflection decision is malformed") from exc
+            if (
+                experience.domain != "reflection_decision"
+                or experience.task_type != "experience_reflection_decision"
+            ):
+                return
+            payload = experience.metadata.get("experience_reflection_decision")
+            if not isinstance(payload, dict):
+                raise ValueError("Reflection decision payload is missing")
+            required = (
+                "schema_version", "decision_id", "tenant_id", "reflection_id",
+                "decision", "reviewer", "decision_at", "idempotency_key",
+            )
+            for field in required:
+                _clean_string(payload.get(field), field)
+            if payload["schema_version"] != "experience-reflection-decision.v1":
+                raise ValueError("Reflection decision schema version is unsupported")
+            if payload["tenant_id"] != self.tenant_id:
+                raise ValueError("Reflection decision tenant mismatch")
+            if payload["decision"] not in {"accepted", "rejected"}:
+                raise ValueError("Reflection decision value is invalid")
+            if payload["decision_id"] != experience.id:
+                raise ValueError("Reflection decision ID does not match its Experience projection")
+            if payload["decision"] == "rejected":
+                _clean_string(payload.get("reason"), "reason")
+            elif payload.get("reason") not in {None, ""}:
+                raise ValueError("accepted Reflection decision cannot contain a rejection reason")
+            previous = found.get(experience.id)
+            if previous is not None and _canonical_json(previous.to_dict()) != _canonical_json(experience.to_dict()):
+                raise ValueError("Reflection decision ID has conflicting persisted content")
+            found[experience.id] = experience
+
+        projection_dir = self.experience_store.exp_dir / "reflection_decision"
+        if projection_dir.is_dir():
+            for path in projection_dir.glob("*.json"):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("Reflection decision projection contains an unsafe entry")
+                try:
+                    add_experience(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Reflection decision projection is unreadable") from exc
+
+        outbox_root = self.experience_store.tenant_root / "experience_outbox"
+        for state in ("pending", "delivered"):
+            directory = outbox_root / state
+            if not directory.is_dir():
+                continue
+            for path in directory.glob("*.json"):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("Reflection decision outbox contains an unsafe entry")
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    if record.get("tenant_id") != self.tenant_id:
+                        raise ValueError("Reflection decision outbox tenant mismatch")
+                    if record.get("domain") != "reflection_decision":
+                        continue
+                    content = record.get("content")
+                    if not isinstance(content, str):
+                        raise ValueError("Reflection decision outbox content is missing")
+                    add_experience(json.loads(content))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Reflection decision outbox record is unreadable") from exc
+        return list(found.values())
+
+    def decide(
+        self,
+        reflection_id: str,
+        *,
+        reviewer: str,
+        decision: str,
+        idempotency_key: str,
+        reason: str | None = None,
+        decided_at: str | None = None,
+    ) -> Experience:
+        """Append a separate immutable review decision; never mutate the Reflection."""
+        target_id = self._safe_id(reflection_id, "reflection_id")
+        actor = _clean_string(reviewer, "reviewer")
+        key = _clean_string(idempotency_key, "idempotency_key")
+        outcome = _clean_string(decision, "decision").lower()
+        if outcome not in {"accepted", "rejected"}:
+            raise ValueError("decision must be accepted or rejected")
+        note = str(reason or "").strip() or None
+        if outcome == "rejected" and not note:
+            raise ValueError("rejected Reflection decision requires a reason")
+        if outcome == "accepted" and note:
+            raise ValueError("accepted Reflection decision cannot contain a rejection reason")
+
+        with _exclusive_reflection_lock(self.lock_path):
+            reflections = self._load_all_reflections()
+            target = next((item for item in reflections if item.id == target_id), None)
+            if target is None:
+                raise ValueError("Reflection does not exist in this tenant")
+            source_payload = target.metadata["experience_reflection"]
+            current_source = self._load_source(source_payload["source_experience_id"])
+            if canonical_experience_digest(current_source) != source_payload["source_experience_digest"]:
+                raise ValueError("source Experience digest changed; Reflection cannot be reviewed")
+            if source_payload["author"] == actor:
+                raise ValueError("Reflection author cannot review their own submission")
+            decisions = self._load_all_decisions()
+
+            for existing in decisions:
+                payload = existing.metadata["experience_reflection_decision"]
+                if payload["idempotency_key"] != key:
+                    continue
+                same_request = (
+                    payload["reflection_id"] == target_id
+                    and payload["reviewer"] == actor
+                    and payload["decision"] == outcome
+                    and payload.get("reason") == note
+                )
+                if not same_request:
+                    raise ValueError("decision idempotency_key was reused with different content")
+                projection = (
+                    self.experience_store.exp_dir / "reflection_decision" / f"{existing.id}.json"
+                )
+                if projection.exists():
+                    if projection.is_symlink() or not projection.is_file():
+                        raise ValueError("Reflection decision projection is unsafe")
+                    stored = json.loads(projection.read_text(encoding="utf-8"))
+                    if _canonical_json(stored) != _canonical_json(existing.to_dict()):
+                        raise ValueError("Reflection decision projection conflicts with its outbox record")
+                else:
+                    self.experience_store.save(existing)
+                return existing
+
+            if any(
+                item.metadata["experience_reflection_decision"]["reflection_id"] == target_id
+                for item in decisions
+            ):
+                raise ValueError("Reflection has already received a terminal decision")
+
+            timestamp = _clean_string(
+                decided_at or datetime.now(timezone.utc).isoformat(), "decision_at"
+            )
+            decision_id = "reflection-decision-" + hashlib.sha256(
+                f"{self.tenant_id}:{target_id}:{key}".encode("utf-8")
+            ).hexdigest()[:32]
+            payload = {
+                "schema_version": "experience-reflection-decision.v1",
+                "decision_id": decision_id,
+                "tenant_id": self.tenant_id,
+                "reflection_id": target_id,
+                "source_experience_id": source_payload["source_experience_id"],
+                "source_experience_digest": source_payload["source_experience_digest"],
+                "reflection_revision": source_payload["revision"],
+                "decision": outcome,
+                "reviewer": actor,
+                "decision_at": timestamp,
+                "idempotency_key": key,
+                "reason": note,
+            }
+            record = Experience(
+                id=decision_id,
+                domain="reflection_decision",
+                task_type="experience_reflection_decision",
+                input_summary=f"Review Reflection {target_id}",
+                output_summary=f"Reflection {outcome}",
+                quality_score=0.0,
+                metadata={"experience_reflection_decision": payload},
+            )
+            self.experience_store.save(record)
+            return record
+
+    def list_reviewed_for_source(self, source_experience_id: str) -> list[dict]:
+        source_id = self._safe_id(source_experience_id, "source_experience_id")
+        with _exclusive_reflection_lock(self.lock_path):
+            source = self._load_source(source_id)
+            current_digest = canonical_experience_digest(source)
+            reflections = [
+                item for item in self._load_all_reflections()
+                if item.metadata["experience_reflection"]["source_experience_id"] == source_id
+            ]
+            reflections.sort(
+                key=lambda item: item.metadata["experience_reflection"]["revision"]
+            )
+            if any(
+                item.metadata["experience_reflection"]["source_experience_digest"] != current_digest
+                for item in reflections
+            ):
+                raise ValueError("source Experience digest changed; Reflection lineage is stale")
+            decisions = self._load_all_decisions()
+            reflection_by_id = {item.id: item for item in reflections}
+            by_reflection: dict[str, Experience] = {}
+            for decision in decisions:
+                payload = decision.metadata["experience_reflection_decision"]
+                reflection_id = payload["reflection_id"]
+                source_reflection = reflection_by_id.get(reflection_id)
+                if source_reflection is None:
+                    raise ValueError("Reflection decision points to a missing Reflection")
+                source_payload = source_reflection.metadata["experience_reflection"]
+                if (
+                    payload.get("source_experience_id") != source_payload["source_experience_id"]
+                    or payload.get("source_experience_digest") != source_payload["source_experience_digest"]
+                    or payload.get("reflection_revision") != source_payload["revision"]
+                ):
+                    raise ValueError("Reflection decision lineage does not match its Reflection")
+                if payload.get("reviewer") == source_payload["author"]:
+                    raise ValueError("Reflection author cannot review their own submission")
+                if reflection_id in by_reflection:
+                    raise ValueError("Reflection has multiple terminal decisions")
+                by_reflection[reflection_id] = decision
+            result = []
+            for reflection in reflections:
+                decision_record = by_reflection.get(reflection.id)
+                result.append({
+                    "reflection": reflection.to_dict(),
+                    "decision": (
+                        decision_record.metadata["experience_reflection_decision"]
+                        if decision_record else None
+                    ),
+                    "effective_state": (
+                        decision_record.metadata["experience_reflection_decision"]["decision"]
+                        if decision_record else "pending"
+                    ),
+                })
+            return result
 
     def list_for_source(self, source_experience_id: str) -> list[Experience]:
         source_id = self._safe_id(source_experience_id, "source_experience_id")
