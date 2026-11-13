@@ -523,7 +523,7 @@ def register_mission_routes(
                     "validator": "not_checked",
                     "execution_succeeded": None,
                     "validation_id": None,
-                    "promotion": "not_checked",
+                    "broker_promotion": "not_checked",
                 }
                 validator_status = {"status": "not_recorded"}
                 if binding_status == "pinned" and skill_replay_runtime is not None:
@@ -587,6 +587,7 @@ def register_mission_routes(
                                 skill_binding=binding,
                                 execution_request_id=execution_request_id,
                                 validation_request_id=action.get("validation_request_id"),
+                                promotion_request_id=action.get("promotion_request_id"),
                                 broker_outcomes=broker_outcomes,
                                 validator_outcome=validator_outcome or {},
                             )
@@ -663,6 +664,16 @@ def register_mission_routes(
                         "status": "broker_only",
                         "automatic_resume": False,
                         "next_step": "skill_remains_draft_no_publication",
+                    }
+                elif (
+                    verified_receipts.get("broker_execution") == "verified"
+                    and verified_receipts.get("validator") == "verified"
+                    and verified_receipts.get("broker_promotion") == "verified"
+                ):
+                    assessment = {
+                        "status": "artifact_published_verified",
+                        "automatic_resume": False,
+                        "next_step": "human_reconcile_mission_from_verified_immutable_artifact",
                     }
                 elif verified_receipts.get("validator") == "verified":
                     assessment = {
