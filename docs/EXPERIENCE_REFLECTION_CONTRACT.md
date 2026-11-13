@@ -28,6 +28,8 @@ A signed Broker execution attestation proves what ran in the isolated execution 
 - Use the `reflection` domain and `experience_reflection` task type, with a structured `metadata.experience_reflection` payload. The record's Experience quality score is not an approval signal and must not be used for Skill promotion.
 - Reflection records must be excluded from automatic stable-Experience grouping and automatic Skill drafting.
 - Each revision gets a new immutable record ID. Never reuse a previous revision's ID to update its contents.
+- The persistence adapter currently verifies evidence references against evidence identifiers already embedded in the source Experience metadata. External Mission-lineage lookup and authenticated actor/reviewer authorization remain route-layer work.
+- Once a source Experience has a Reflection chain, changing its canonical digest blocks further revisions rather than silently extending a chain over altered source content.
 - Keep remote archival content-addressed and read-back verified through the existing outbox flow.
 
 The current Experience store has existing stable-ID/upsert call sites (for example role-reflection cards and replay-validation records). Do not globally change those semantics as part of Reflection work. The append-only guarantee applies to the new Reflection record type.

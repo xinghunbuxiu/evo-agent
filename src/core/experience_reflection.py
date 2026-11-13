@@ -265,6 +265,24 @@ class ExperienceReflectionStore:
             )
         return matches[0]
 
+    @staticmethod
+    def _source_evidence_refs(metadata: dict) -> set[str]:
+        """Collect evidence identifiers already recorded on the source Experience."""
+        refs: set[str] = set()
+
+        def visit(value: Any, evidence_context: bool = False) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    visit(child, evidence_context or "evidence" in str(key).lower())
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child, evidence_context)
+            elif evidence_context and isinstance(value, str) and value.strip():
+                refs.add(value.strip())
+
+        visit(metadata)
+        return refs
+
     def _load_all_reflections(self) -> list[Experience]:
         """Read both projections and outbox events to recover interrupted saves."""
         found: dict[str, Experience] = {}
@@ -350,6 +368,10 @@ class ExperienceReflectionStore:
         with _exclusive_reflection_lock(self.lock_path):
             source = self._load_source(source_id)
             source_digest = canonical_experience_digest(source)
+            known_evidence_refs = self._source_evidence_refs(source.metadata)
+            unknown_evidence_refs = sorted(set(refs) - known_evidence_refs)
+            if unknown_evidence_refs:
+                raise ValueError("source evidence reference is not attached to this Experience")
             records = self._load_all_reflections()
 
             for existing in records:
@@ -387,6 +409,11 @@ class ExperienceReflectionStore:
             source_records.sort(
                 key=lambda item: item.metadata["experience_reflection"]["revision"]
             )
+            if any(
+                item.metadata["experience_reflection"]["source_experience_digest"] != source_digest
+                for item in source_records
+            ):
+                raise ValueError("source Experience digest changed; cannot append to its Reflection chain")
             previous_id = None
             for expected_revision, item in enumerate(source_records, start=1):
                 payload = item.metadata["experience_reflection"]

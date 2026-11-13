@@ -77,6 +77,26 @@ class ExperienceReflectionStoreTests(unittest.TestCase):
         self.assertEqual([item.id for item in self.store.list_for_source(self.source.id)], [first.id, second.id])
         self.assertEqual(first_payload["state"], "pending")
 
+    def test_rejects_evidence_reference_not_attached_to_source(self):
+        with self.assertRaisesRegex(ValueError, "not attached"):
+            self.append(refs=["unrelated-evidence"])
+
+    def test_source_digest_change_blocks_new_reflection_revision(self):
+        self.append()
+        changed_source = Experience(
+            id=self.source.id,
+            domain=self.source.domain,
+            task_type=self.source.task_type,
+            input_summary=self.source.input_summary,
+            output_summary="Source observation was modified",
+            quality_score=self.source.quality_score,
+            metadata=self.source.metadata,
+            created_at=self.source.created_at,
+        )
+        self.tenant_store.save(changed_source)
+        with self.assertRaisesRegex(ValueError, "source Experience digest changed"):
+            self.append(key="request-after-source-change")
+
     def test_tenant_cannot_submit_reflection_for_another_tenants_source(self):
         other_tenant = ExperienceReflectionStore(self.workspace, "tenant-b")
         with self.assertRaisesRegex(ValueError, "does not exist"):
