@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from .learning import Experience
+from .learning import Experience, ExperienceStore
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_STATES = {"pending", "accepted", "rejected"}
@@ -173,3 +177,251 @@ def validate_reflection_payload(
         _clean_string(payload.get("decision_at"), "decision_at")
         if payload["state"] == "rejected":
             _clean_string(payload.get("decision_reason"), "decision_reason")
+
+
+
+@contextmanager
+def _exclusive_reflection_lock(lock_path: Path):
+    """Cross-platform process lock for tenant-local revision allocation."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+
+
+class ExperienceReflectionStore:
+    """Tenant-bound append-only Reflection persistence on top of ExperienceStore.
+
+    The tenant is fixed at construction. Source records are always loaded from
+    that tenant's ExperienceStore; callers cannot submit a source object or
+    choose a revision/parent. A cross-process lock serializes idempotency checks
+    and revision allocation. ExperienceStore's durable outbox remains the only
+    remote archival path.
+    """
+
+    def __init__(self, workspace: Path, tenant_id: str):
+        self.experience_store = ExperienceStore(Path(workspace), tenant_id)
+        self.tenant_id = self.experience_store.tenant_id
+        self.lock_path = self.experience_store.tenant_root / ".experience-reflections.lock"
+
+    @staticmethod
+    def _safe_id(value: str, field: str) -> str:
+        result = _clean_string(value, field)
+        if result in {".", ".."} or "/" in result or chr(92) in result:
+            raise ValueError(f"{field} must be a safe path segment")
+        return result
+
+    def _load_source(self, source_experience_id: str) -> Experience:
+        source_id = self._safe_id(source_experience_id, "source_experience_id")
+        matches = []
+        if not self.experience_store.exp_dir.is_dir():
+            raise ValueError("source Experience does not exist in this tenant")
+        for domain_dir in self.experience_store.exp_dir.iterdir():
+            if domain_dir.is_symlink() or not domain_dir.is_dir():
+                continue
+            candidate = domain_dir / f"{source_id}.json"
+            if not candidate.exists():
+                continue
+            if candidate.is_symlink() or not candidate.is_file():
+                raise ValueError("source Experience record is unsafe")
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                source = Experience(**data)
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+                raise ValueError("source Experience record is unreadable") from exc
+            if source.id != source_id or source.domain != domain_dir.name:
+                raise ValueError("source Experience identity does not match its stored path")
+            matches.append(source)
+        if len(matches) != 1:
+            raise ValueError(
+                "source Experience is missing or ambiguous in this tenant"
+                if not matches else "source Experience ID is ambiguous in this tenant"
+            )
+        return matches[0]
+
+    def _load_all_reflections(self) -> list[Experience]:
+        """Read both projections and outbox events to recover interrupted saves."""
+        found: dict[str, Experience] = {}
+
+        def add_experience(data: dict) -> None:
+            try:
+                experience = Experience(**data)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("stored Reflection Experience is malformed") from exc
+            if experience.domain != "reflection" or experience.task_type != "experience_reflection":
+                return
+            payload = experience.metadata.get("experience_reflection")
+            validate_reflection_payload(payload, expected_tenant_id=self.tenant_id)
+            if payload.get("reflection_id") != experience.id:
+                raise ValueError("Reflection ID does not match its Experience projection")
+            serialized = _canonical_json(experience.to_dict())
+            previous = found.get(experience.id)
+            if previous is not None and _canonical_json(previous.to_dict()) != serialized:
+                raise ValueError("Reflection ID has conflicting persisted content")
+            found[experience.id] = experience
+
+        projection_dir = self.experience_store.exp_dir / "reflection"
+        if projection_dir.is_dir():
+            for path in projection_dir.glob("*.json"):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("Reflection projection contains an unsafe entry")
+                try:
+                    add_experience(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Reflection projection is unreadable") from exc
+
+        outbox_root = self.experience_store.tenant_root / "experience_outbox"
+        for state in ("pending", "delivered"):
+            directory = outbox_root / state
+            if not directory.is_dir():
+                continue
+            for path in directory.glob("*.json"):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError("Reflection outbox contains an unsafe entry")
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                    if record.get("tenant_id") != self.tenant_id:
+                        raise ValueError("Reflection outbox tenant mismatch")
+                    if record.get("domain") != "reflection":
+                        continue
+                    content = record.get("content")
+                    if not isinstance(content, str):
+                        raise ValueError("Reflection outbox content is missing")
+                    add_experience(json.loads(content))
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Reflection outbox record is unreadable") from exc
+        return list(found.values())
+
+    def append(
+        self,
+        source_experience_id: str,
+        *,
+        author: str,
+        findings: dict,
+        idempotency_key: str,
+        source_evidence_refs: list[str] | None = None,
+        created_at: str | None = None,
+    ) -> Experience:
+        """Append one pending revision; retries return the original immutable record.
+
+        Authentication and author membership must be established by the calling
+        route. This store binds persistence to its tenant but is not an auth layer.
+        """
+        source_id = self._safe_id(source_experience_id, "source_experience_id")
+        actor = _clean_string(author, "author")
+        key = _clean_string(idempotency_key, "idempotency_key")
+        if not isinstance(findings, dict) or not findings:
+            raise ValueError("findings must be a non-empty object")
+        refs = source_evidence_refs if source_evidence_refs is not None else []
+        if not isinstance(refs, list) or any(
+            not isinstance(item, str) or not item.strip() for item in refs
+        ):
+            raise ValueError("source_evidence_refs must be a list of non-empty strings")
+        # Reject non-JSON values before taking the persistence lock.
+        _canonical_json(findings)
+        _canonical_json(refs)
+
+        with _exclusive_reflection_lock(self.lock_path):
+            source = self._load_source(source_id)
+            source_digest = canonical_experience_digest(source)
+            records = self._load_all_reflections()
+
+            for existing in records:
+                payload = existing.metadata["experience_reflection"]
+                if payload["idempotency_key"] != key:
+                    continue
+                same_request = (
+                    payload["source_experience_id"] == source_id
+                    and payload["source_experience_digest"] == source_digest
+                    and payload["author"] == actor
+                    and _canonical_json(payload["findings"]) == _canonical_json(findings)
+                    and payload.get("source_evidence_refs", []) == refs
+                )
+                if not same_request:
+                    raise ValueError("idempotency_key was already used with different Reflection content")
+                # Recover the projection if a prior process stopped after
+                # writing the outbox event but before completing ExperienceStore.save.
+                projection = (
+                    self.experience_store.exp_dir / "reflection" / f"{existing.id}.json"
+                )
+                if projection.exists():
+                    if projection.is_symlink() or not projection.is_file():
+                        raise ValueError("Reflection projection is unsafe")
+                    stored = json.loads(projection.read_text(encoding="utf-8"))
+                    if _canonical_json(stored) != _canonical_json(existing.to_dict()):
+                        raise ValueError("Reflection projection conflicts with its immutable outbox record")
+                else:
+                    self.experience_store.save(existing)
+                return existing
+
+            source_records = [
+                item for item in records
+                if item.metadata["experience_reflection"]["source_experience_id"] == source_id
+            ]
+            source_records.sort(
+                key=lambda item: item.metadata["experience_reflection"]["revision"]
+            )
+            previous_id = None
+            for expected_revision, item in enumerate(source_records, start=1):
+                payload = item.metadata["experience_reflection"]
+                if payload["revision"] != expected_revision:
+                    raise ValueError("Reflection revision sequence is inconsistent")
+                if payload.get("parent_reflection_id") != previous_id:
+                    raise ValueError("Reflection parent chain is inconsistent")
+                previous_id = item.id
+
+            revision = len(source_records) + 1
+            reflection = build_pending_reflection(
+                source,
+                tenant_id=self.tenant_id,
+                author=actor,
+                findings=findings,
+                source_evidence_refs=refs,
+                revision=revision,
+                parent_reflection_id=previous_id,
+                idempotency_key=key,
+                created_at=created_at,
+            )
+            # save() writes the immutable outbox event first, then the unique
+            # revision-ID projection. The process lock prevents concurrent
+            # allocators from selecting the same revision or idempotency key.
+            self.experience_store.save(reflection)
+            return reflection
+
+    def list_for_source(self, source_experience_id: str) -> list[Experience]:
+        source_id = self._safe_id(source_experience_id, "source_experience_id")
+        with _exclusive_reflection_lock(self.lock_path):
+            records = [
+                item for item in self._load_all_reflections()
+                if item.metadata["experience_reflection"]["source_experience_id"] == source_id
+            ]
+            records.sort(
+                key=lambda item: item.metadata["experience_reflection"]["revision"]
+            )
+            return records

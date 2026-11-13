@@ -1,6 +1,6 @@
 # Experience Reflection Contract
 
-Status: contract proposal for the Mission learning pipeline. This document does not claim that a Reflection API or reviewer workflow is implemented.
+Status: contract and tenant-bound persistence adapter are implemented. Authenticated submit/list/decision routes and reviewer workflow are not implemented.
 
 ## 1. Purpose and boundary
 
@@ -120,7 +120,7 @@ No Reflection state, confidence score, Recipe draft or worker-reported success c
 
 ## 7. Implementation sequence
 
-1. Add the append-only Reflection record validator and persistence adapter on top of ExperienceStore.
+1. [x] Add the append-only Reflection record validator and tenant-bound persistence adapter on top of ExperienceStore.
 2. Add tenant-authorized submit/list/decision routes with idempotency and source-digest verification.
 3. Add review-queue UI and audit trail.
 4. Connect accepted revisions to Recipe Skill draft generation only.
