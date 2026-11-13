@@ -250,6 +250,15 @@ class SkillReplayRuntime:
         if (
             isinstance(validator_outcome, Mapping)
             and validator_outcome.get("status") == "completed"
+            and result["broker_execution"] == "verified"
+            and result["execution_succeeded"] is not True
+        ):
+            # A passed Validator attestation cannot legitimize a failed Broker
+            # execution, even if the cached Validator signature is otherwise valid.
+            result["validator"] = "invalid"
+        elif (
+            isinstance(validator_outcome, Mapping)
+            and validator_outcome.get("status") == "completed"
             and isinstance(validation_request_id, str)
             and broker_envelope is not None
             and result["broker_execution"] == "verified"

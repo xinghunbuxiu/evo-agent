@@ -148,6 +148,44 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["validator"], "not_checked")
         verify_validator.assert_not_called()
 
+    @patch("admin.skill_replay_runtime.verify_validation_response")
+    @patch("admin.skill_replay_runtime.verify_broker_response")
+    def test_recovery_review_rejects_validator_pass_for_failed_broker_execution(
+        self, verify_broker, verify_validator,
+    ):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=dict(self.environ, **{
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator/validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(self.validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        }))
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-a",
+            "node_id": "node-a", "task_id": "task-a",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "1.0.0",
+            "content_sha256": "a" * 64, "trust_level": "draft",
+            "mission_context": context,
+        }
+        verify_broker.return_value = {"execution_succeeded": False}
+        result = runtime.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            execution_request_id="11111111-1111-4111-8111-111111111111",
+            validation_request_id="22222222-2222-4222-8222-222222222222",
+            broker_outcomes={
+                "execution": {"status": "completed", "response": {"signed": "failed-execution"}},
+            },
+            validator_outcome={
+                "status": "completed", "response": {"signed": "unexpected-validator-pass"},
+            },
+        )
+        self.assertEqual(result["broker_execution"], "verified")
+        self.assertFalse(result["execution_succeeded"])
+        self.assertEqual(result["validator"], "invalid")
+        verify_validator.assert_not_called()
+
     def test_missing_configuration_keeps_replay_disabled(self):
         self.assertIsNone(create_skill_replay_runtime(workspace=self.workspace, environ={}))
 
