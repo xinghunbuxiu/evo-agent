@@ -1129,12 +1129,51 @@ def create_app() -> FastAPI:
     sync_worker_catalog(organization_registry, worker_manifests, enabled_worker_ids)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
+    def _record_worker_employee_link(*, tenant_id: str, member_id: str, worker_id: str) -> None:
+        runtime = _load_autonomy_runtime(workspace, tenant_id)
+        members = _normalize_child_members_runtime(
+            runtime.get("child_members"),
+            legacy_child_agent=runtime.get("child_agent") if isinstance(runtime.get("child_agent"), dict) else None,
+        )
+        updated = False
+        next_items = []
+        for item in members.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            employee = dict(item)
+            if str(employee.get("member_id") or "").strip() == member_id:
+                instance_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
+                worker_ids = instance_runtime.get("organization_worker_ids", [])
+                if not isinstance(worker_ids, list):
+                    worker_ids = []
+                instance_runtime["organization_worker_ids"] = list(dict.fromkeys([
+                    *[str(value).strip() for value in worker_ids if str(value).strip()],
+                    worker_id,
+                ]))
+                employee["instance_runtime"] = instance_runtime
+                updated = True
+            next_items.append(employee)
+        if not updated:
+            raise ValueError("Bound employee profile was not found in its tenant runtime")
+        members["items"] = next_items
+        runtime["child_members"] = members
+        if members.get("selected_member_id") == member_id:
+            selected = next(
+                (item for item in next_items if str(item.get("member_id") or "").strip() == member_id),
+                None,
+            )
+            if isinstance(selected, dict):
+                runtime["child_agent"] = _normalize_child_agent_runtime(selected)
+        runtime["tenant_id"] = tenant_id
+        _save_autonomy_runtime(workspace, runtime, tenant_id)
+
     _mission_action_runtime_ref.update(create_mission_action_runtime_bindings(
         normalize_string_list=lambda value: [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else [],
         task_priority_cls=TaskPriority,
         mission_action_handlers=register_builtin_worker_mission_action_handlers(workspace=workspace),
         context_resolvers=build_mission_context_resolvers(workspace),
         organization_registry=organization_registry,
+        record_worker_employee_link=_record_worker_employee_link,
     ))
     _load_sessions()
     

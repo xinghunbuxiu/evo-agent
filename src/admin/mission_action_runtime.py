@@ -101,6 +101,7 @@ def create_mission_action_runtime_bindings(
     mission_action_handlers: dict[str, Callable] | None = None,
     context_resolvers: dict[str, Callable[[dict], dict]] | None = None,
     organization_registry: OrganizationRegistry | None = None,
+    record_worker_employee_link: Callable[..., Any] | None = None,
 ):
     def build_mission_actions(
         *,
@@ -581,6 +582,19 @@ def create_mission_action_runtime_bindings(
                         claim_origin = "incubated"
                     else:
                         raise ValueError("Workforce recommendation is not executable")
+                    worker_owner = organization_registry.get_worker(chosen_worker_id)
+                    owner_member_id = str(worker_owner.get("owner_member_id") or "").strip() if isinstance(worker_owner, dict) else ""
+                    owner_tenant_id = str(worker_owner.get("owner_tenant_id") or "").strip() if isinstance(worker_owner, dict) else ""
+                    if owner_member_id:
+                        if owner_tenant_id != str(tenant_id or "").strip():
+                            raise ValueError("Worker employee owner belongs to a different tenant")
+                        if not callable(record_worker_employee_link):
+                            raise RuntimeError("Employee execution link recorder is unavailable")
+                        record_worker_employee_link(
+                            tenant_id=owner_tenant_id,
+                            member_id=owner_member_id,
+                            worker_id=chosen_worker_id,
+                        )
                     claimed_worker = organization_registry.claim_worker_task(
                         worker_id=chosen_worker_id, task_id=claim_id
                     )
