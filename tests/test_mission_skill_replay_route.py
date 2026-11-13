@@ -718,5 +718,193 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
 
+    def test_real_runtime_reconciles_completed_broker_publication_through_admin_route(self):
+        from unittest.mock import patch
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from core import Skill, SkillTrustLevel
+        from core.skill_replay_contract import build_skill_replay_binding
+        from admin.knowledge_runtime import write_skill_candidate
+        from admin.skill_replay_runtime import (
+            create_skill_replay_runtime,
+            _deterministic_request_id,
+        )
+
+        root = self.workspace.parent
+        evidence_root = root / "evidence"
+        evidence_root.mkdir(mode=0o700)
+        broker_key_path = root / "broker.pub"
+        broker_key = Ed25519PrivateKey.generate()
+        broker_key_path.write_bytes(broker_key.public_key().public_bytes_raw())
+        broker_key_path.chmod(0o400)
+        validator_key_path = root / "validator.pub"
+        validator_key = Ed25519PrivateKey.generate()
+        validator_key_path.write_bytes(validator_key.public_key().public_bytes_raw())
+        validator_key_path.chmod(0o400)
+        environ = {
+            "EVO_SKILL_REPLAY_BROKER_SOCKET": "/run/evo-sandbox-broker.sock",
+            "EVO_SKILL_REPLAY_WORKSPACE_ID": "workspace-a",
+            "EVO_SKILL_REPLAY_BROKER_PUBLIC_KEY": str(broker_key_path),
+            "EVO_SKILL_REPLAY_BROKER_KEY_ID": "broker-test-key",
+            "EVO_SKILL_REPLAY_EVIDENCE_ROOT": str(evidence_root),
+            "EVO_SKILL_REPLAY_VALIDATOR_SOCKET": "/run/evo-skill-validator.sock",
+            "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY": str(validator_key_path),
+            "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID": "validator-test-key",
+        }
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=environ)
+        skill = Skill(
+            id="skill-a",
+            name="Recovery integration Skill",
+            domain="python",
+            description="test immutable publication reconciliation",
+            code="def run(context):\n    return {'ok': True}\n",
+            parameters={
+                "mission_run_id": "run-a",
+                "mission_node_id": "node-a",
+                "execution_contract": {
+                    "kind": "python_run_context",
+                    "replay_eligible": True,
+                },
+            },
+            trust_level=SkillTrustLevel.DRAFT,
+            version="1.0.0",
+        )
+        write_skill_candidate(self.workspace, "tenant-a", skill)
+
+        context = {
+            "tenant_id": "tenant-a",
+            "mission_run_id": "run-a",
+            "node_id": "node-a",
+            "task_id": "task-a",
+        }
+        binding = build_skill_replay_binding(skill, context)
+        stage_id = "33333333-3333-4333-8333-333333333333"
+        execution_id = "44444444-4444-4444-8444-444444444444"
+        validation_id = "55555555-5555-4555-8555-555555555555"
+        validation_attestation = {
+            "validation_id": "validation-a",
+            "validator_id": "validator-independent",
+            "policy_id": "policy-a",
+            "policy_sha256": "a" * 64,
+            "checks_sha256": "b" * 64,
+        }
+        promotion_id = _deterministic_request_id("promotion", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "validation_attestation": validation_attestation,
+        })
+        artifact = {
+            "schema_version": "mission.skill-artifact.v2",
+            "tenant_id": "tenant-a",
+            "skill_id": "skill-a",
+            "skill_version": "1.0.0",
+            "content_sha256": binding["content_sha256"],
+            "trust_level": "verified",
+        }
+        provenance = {
+            "schema_version": "mission.skill-validation-provenance.v1",
+            "validation_id": "validation-a",
+            "validator_id": "validator-independent",
+        }
+        promotion_receipt = {
+            "artifact": artifact,
+            "validation_provenance": provenance,
+        }
+        runtime.broker_request_status = lambda request_id, mission_context: {
+            "status": "completed",
+            "response": (
+                promotion_receipt
+                if request_id == promotion_id
+                else {"receipt": request_id}
+            ),
+        }
+        runtime.validator_request_status = lambda request_id, mission_context: {
+            "status": "completed",
+            "response": {"attestation": "original-validator-receipt"},
+        }
+        runtime.verify_recovery_responses = lambda **kwargs: {
+            "broker_stage": "verified",
+            "broker_execution": "verified",
+            "execution_succeeded": True,
+            "validator": "verified",
+            "validation_id": "validation-a",
+            "broker_promotion": "verified",
+        }
+        runtime.adapter.execute = lambda *args, **kwargs: self.fail(
+            "reconciliation must never execute Skill code"
+        )
+
+        save_mission_runs(self.workspace, {"items": [{
+            "mission_run_id": "run-a",
+            "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-a"}]},
+            "actions": [{
+                "action_type": "skill_replay",
+                "status": "interrupted",
+                "recovery_status": "needs_review",
+                "task_id": "task-a",
+                "node_id": "node-a",
+                "skill_id": "skill-a",
+                "skill_binding": binding,
+                "stage_request_id": stage_id,
+                "execution_request_id": execution_id,
+                "validation_request_id": validation_id,
+                "promotion_request_id": promotion_id,
+            }],
+        }]})
+
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        review = asyncio.run(app.routes[(
+            "GET", "/api/missions/skill-replays/recovery-review"
+        )](request=_get_request(), tenant_id="tenant-a", limit=20))
+        review_item = review["data"]["items"][0]
+        self.assertEqual(
+            review_item["recovery_assessment"]["status"],
+            "artifact_published_verified",
+        )
+        self.assertEqual(
+            review_item["recovery_assessment"]["next_step"],
+            "human_reconcile_mission_from_verified_immutable_artifact",
+        )
+        self.assertFalse(review_item["recovery_assessment"]["automatic_resume"])
+
+        route = (
+            "/api/missions/{mission_run_id}/skills/{skill_id}/recovery/"
+            "{task_id}/resume-promotion"
+        )
+        with patch(
+            "admin.skill_replay_runtime.verify_validation_response",
+            return_value=validation_attestation,
+        ), patch(
+            "admin.skill_replay_runtime.promote_skill_candidate_via_broker",
+            side_effect=AssertionError("completed publication must not be published again"),
+        ) as publish:
+            response = asyncio.run(app.routes[("POST", route)](
+                request=_request({"confirm": True}),
+                mission_run_id="run-a",
+                skill_id="skill-a",
+                task_id="task-a",
+            ))
+
+        self.assertEqual(response["data"]["status"], "reconciled")
+        self.assertEqual(response["data"]["artifact"], artifact)
+        self.assertEqual(response["data"]["validation_provenance"], provenance)
+        publish.assert_not_called()
+        saved = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["recovery_status"], "reconciled")
+        self.assertEqual(saved["promotion_status"], "published")
+        self.assertEqual(saved["published_artifact"], artifact)
+        self.assertEqual(saved["recovery_attempt_status"], "completed")
+        self.assertEqual(
+            saved["recovery_attempts"][-1]["operation"],
+            "reconcile_existing_publication",
+        )
+        self.assertTrue(
+            saved["recovery_attempts"][-1]["reconciled_existing_publication"]
+        )
+
 if __name__ == "__main__":
     unittest.main()

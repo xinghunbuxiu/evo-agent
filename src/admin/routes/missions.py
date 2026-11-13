@@ -630,9 +630,17 @@ def register_mission_routes(
             current_attempts = current_action.get("recovery_attempts", [])
             if current_attempts and current_attempts[-1].get("attempt_id") == attempt_id:
                 current_attempts[-1].update({
+                    "operation": (
+                        "reconcile_existing_publication"
+                        if recovered.get("reconciled_existing_publication") is True
+                        else "resume_promotion_only"
+                    ),
                     "status": "completed",
                     "finished_at": datetime.now().astimezone().isoformat(),
                     "artifact": recovered.get("artifact"),
+                    "reconciled_existing_publication": (
+                        recovered.get("reconciled_existing_publication") is True
+                    ),
                 })
             current_run["updated_at"] = datetime.now().astimezone().isoformat()
             save_mission_runs(workspace, current_state)
