@@ -19,7 +19,7 @@ class JavaScriptSkillCandidateTransportTests(unittest.TestCase):
             "name": "Worker candidate",
             "domain": "python",
             "description": "Explicit executable artifact from the capability result",
-            "code": "def run(context):\\n    return {'ok': True}\\n",
+            "code": "def run(context):\n    return {'ok': True}\n",
             "execution_contract": {
                 "kind": "python_run_context",
                 "replay_eligible": True,
