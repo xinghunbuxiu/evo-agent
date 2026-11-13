@@ -135,6 +135,36 @@ class SkillArtifactStoreTests(unittest.TestCase):
         artifact = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
         self.assertEqual(artifact.stat().st_mode & 0o777, 0o400)
 
+    def test_publish_verifies_final_artifact_readback_before_returning_success(self):
+        original_load = self.store.load_for_binding
+        with patch.object(self.store, "load_for_binding", wraps=original_load) as readback:
+            identity = self._publish()
+
+        readback.assert_called_once()
+        binding = readback.call_args.args[0]
+        self.assertEqual(binding["tenant_id"] if "tenant_id" in binding else binding["mission_context"]["tenant_id"], "tenant-one")
+        self.assertEqual(binding["skill_id"], identity["skill_id"])
+        self.assertEqual(binding["skill_version"], identity["skill_version"])
+        self.assertEqual(binding["content_sha256"], identity["content_sha256"])
+        self.assertEqual(binding["trust_level"], "verified")
+
+    def test_publish_fails_closed_when_final_artifact_readback_fails(self):
+        with patch.object(
+            self.store,
+            "load_for_binding",
+            side_effect=SkillArtifactStoreError("simulated readback failure"),
+        ):
+            with self.assertRaisesRegex(
+                SkillArtifactStoreError,
+                "failed readback verification",
+            ):
+                self._publish()
+
+        # The immutable file may already exist, but no success identity/receipt
+        # can be returned until a later exact retry verifies the persisted bytes.
+        artifact = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
+        self.assertTrue(artifact.is_file())
+
     def test_stages_draft_candidate_for_isolated_replay_without_trust_promotion(self):
         candidate = SimpleNamespace(
             id=self.skill.id,

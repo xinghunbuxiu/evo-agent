@@ -388,6 +388,36 @@ class SkillArtifactStore:
             _existing_create_once_matches(
                 path, payload, collision_message=collision_message,
             )
+
+        # Do not let the Broker issue a successful promotion receipt based only
+        # on the intended in-memory payload. Re-open the final immutable path and
+        # independently verify its metadata, content digest, and Validator
+        # attestation before reporting publication success.
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": skill_id,
+            "skill_version": version,
+            "content_sha256": digest,
+            "trust_level": trust,
+            "mission_context": normalized_context,
+        }
+        try:
+            persisted = self.load_for_binding(binding)
+        except Exception as exc:
+            raise SkillArtifactStoreError(
+                "published Skill artifact failed readback verification"
+            ) from exc
+        if (
+            getattr(persisted, "id", None) != skill_id
+            or getattr(persisted, "version", None) != version
+            or getattr(persisted, "tenant_id", None) != normalized_tenant
+            or getattr(persisted, "trust_level", None) != trust
+            or getattr(persisted, "content_sha256", None) != digest
+            or getattr(persisted, "code", None) != code
+        ):
+            raise SkillArtifactStoreError(
+                "published Skill artifact readback does not match the requested immutable identity"
+            )
         return {
             "tenant_id": normalized_tenant,
             "skill_id": skill_id,
