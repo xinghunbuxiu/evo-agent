@@ -167,6 +167,98 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             ):
                 service.stage_skill_candidate(shadowed)
 
+    def test_stage_reconstructs_lost_receipt_from_exact_immutable_candidate(self):
+        artifact_root = Path(self.temp.name) / "broker-owned-stage-recovery"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-stage-recovery",
+            "node_id": "node-stage-recovery",
+            "task_id": "task-stage-recovery",
+        }
+        code = "def run(context):\\n    return {'stable': True}\\n"
+        request = {
+            "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "project-test",
+            "mission_context": context,
+            "skill_id": "skill-stage-recovery",
+            "skill_version": "1.0.0",
+            "code": code,
+        }
+        original_complete = self.store.complete
+        complete_calls = 0
+
+        def lose_first_receipt(request_id, payload, response):
+            nonlocal complete_calls
+            complete_calls += 1
+            if complete_calls == 1:
+                raise RuntimeError("simulated Broker crash after candidate staging")
+            return original_complete(request_id, payload, response)
+
+        self.store.complete = lose_first_receipt
+        with self.assertRaisesRegex(
+            RuntimeError, "after candidate staging",
+        ):
+            service.stage_skill_candidate(request)
+
+        # The first attempt has a durable candidate but an indeterminate
+        # Broker receipt. Only the exact same request may reconstruct it.
+        status = self.store.lookup(
+            request["request_id"],
+            workspace_id="project-test",
+            mission_context=context,
+        )
+        self.assertEqual(status["status"], "indeterminate")
+        self.store.complete = original_complete
+        response = service.stage_skill_candidate(request)
+        self.assertEqual(complete_calls, 1)
+        self.assertEqual(response["request_id"], request["request_id"])
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps({
+                key: response[key] for key in (
+                    "schema_version", "request_id", "workspace_id",
+                    "mission_context", "candidate_artifact",
+                )
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+        self.assertEqual(
+            self.store.lookup(
+                request["request_id"],
+                workspace_id="project-test",
+                mission_context=context,
+            )["status"],
+            "completed",
+        )
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-stage-recovery",
+            "skill_version": "1.0.0",
+            "content_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        staged = artifact_store.load_for_binding(binding)
+        self.assertEqual(staged.code, code)
+        self.assertEqual(self.skill_calls, [])
+
     def test_broker_promotes_staged_candidate_only_with_exact_validator_attestation(self):
         artifact_root = Path(self.temp.name) / "promotion-artifacts"
         artifact_root.mkdir(mode=0o700)

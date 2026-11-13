@@ -498,7 +498,13 @@ class SandboxBrokerService:
             )
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
-        cached_response = self.replay_store.claim(request_id, request)
+        # Staging is a non-executable, immutable create-once side effect.
+        # If the candidate was written but the signed receipt was not cached,
+        # the exact same request may safely reconstruct that receipt. The
+        # request digest still binds every field, including the source code.
+        cached_response = self.replay_store.claim(
+            request_id, request, allow_indeterminate_resume=True,
+        )
         if cached_response is not None:
             return cached_response
         candidate = SimpleNamespace(
