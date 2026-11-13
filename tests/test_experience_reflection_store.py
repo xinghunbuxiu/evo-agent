@@ -99,7 +99,7 @@ class ExperienceReflectionStoreTests(unittest.TestCase):
 
     def test_tenant_cannot_submit_reflection_for_another_tenants_source(self):
         other_tenant = ExperienceReflectionStore(self.workspace, "tenant-b")
-        with self.assertRaisesRegex(ValueError, "does not exist"):
+        with self.assertRaisesRegex(ValueError, "does not exist or is ambiguous"):
             other_tenant.append(
                 self.source.id,
                 author="tenant-b-member",

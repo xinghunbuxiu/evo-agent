@@ -260,7 +260,7 @@ class ExperienceReflectionStore:
             matches.append(source)
         if len(matches) != 1:
             raise ValueError(
-                "source Experience is missing or ambiguous in this tenant"
+                "source Experience does not exist or is ambiguous in this tenant"
                 if not matches else "source Experience ID is ambiguous in this tenant"
             )
         return matches[0]
