@@ -879,9 +879,20 @@ def create_mission_execution_bindings(
             node_id for node_id, statuses in node_statuses_by_id.items()
             if statuses and all(status in {"completed", "improved"} for status in statuses)
         )
+        dispatch_denied_node_ids = {
+            str(item.get("node_id") or "").strip()
+            for item in refreshed_actions
+            if isinstance(item, dict)
+            and item.get("action_type") == "dispatch_denied"
+            and item.get("status") == "blocked"
+            and str(item.get("node_id") or "").strip()
+        }
         failed_node_ids = sorted(
             node_id for node_id, statuses in node_statuses_by_id.items()
-            if any(status in {"failed", "verification_failed", "regressed", "cancelled"} for status in statuses)
+            if (
+                any(status in {"failed", "verification_failed", "regressed", "cancelled"} for status in statuses)
+                or node_id in dispatch_denied_node_ids
+            )
         )
         completed_node_set = set(completed_node_ids)
         failed_node_set = set(failed_node_ids)

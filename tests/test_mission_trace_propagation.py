@@ -380,6 +380,11 @@ class MissionTracePropagationTests(unittest.TestCase):
             "node_id": "node-a", "action_type": "task_submitted", "status": "submitted",
             "task_id": task_id, "task_type": "analyze", "decision_trace": [],
         } for task_id, _ in task_statuses]
+        if not actions:
+            actions.append({
+                "node_id": "node-a", "action_type": "dispatch_denied",
+                "status": "blocked", "decision_trace": [],
+            })
         actions.append({
             "node_id": "node-b", "action_type": "dependency_blocked", "status": "blocked",
             "depends_on": ["node-a"], "dependency_state": "waiting", "decision_trace": [],
@@ -440,6 +445,19 @@ class MissionTracePropagationTests(unittest.TestCase):
         refreshed, resume = self._refresh_dependency_for_task_statuses([
             ("task-node-a-cancelled", "cancelled"),
         ])
+
+        resume.assert_not_called()
+        self.assertEqual(refreshed["dependency_runtime"]["failed_node_ids"], ["node-a"])
+        dependent = next(
+            item for item in refreshed["actions"]
+            if item.get("node_id") == "node-b" and item.get("action_type") == "dependency_blocked"
+        )
+        self.assertEqual(dependent["dependency_state"], "failed")
+        self.assertEqual(dependent["replan_reason_code"], "dependency_failed")
+        self.assertTrue(refreshed["summary"]["next_cycle_plan"]["dependency_replan"]["required"])
+
+    def test_dispatch_denied_prerequisite_marks_dependents_for_replanning(self):
+        refreshed, resume = self._refresh_dependency_for_task_statuses([])
 
         resume.assert_not_called()
         self.assertEqual(refreshed["dependency_runtime"]["failed_node_ids"], ["node-a"])
