@@ -427,6 +427,7 @@ def _extract_task_snapshot(task) -> dict:
         "evaluation_verdict": evaluation.get("verdict"),
         "evaluation_score": _safe_float(evaluation.get("score")) if isinstance(evaluation, dict) and evaluation.get("score") is not None else None,
         "evaluation_metrics": evaluation.get("metrics", {}) if isinstance(evaluation, dict) else {},
+        "skill_candidate": result.get("skill_candidate") if isinstance(result, dict) and isinstance(result.get("skill_candidate"), dict) else None,
         "replay_of": (task.payload or {}).get("_replay_of"),
     }
 

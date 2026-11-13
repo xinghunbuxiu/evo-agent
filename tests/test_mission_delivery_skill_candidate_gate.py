@@ -44,6 +44,79 @@ class MissionDeliverySkillCandidateGateTests(unittest.TestCase):
                 write_candidate.assert_not_called()
         growth_event.assert_not_called()
 
+
+    def test_accepted_delivery_can_emit_a_real_executable_draft_candidate(self):
+        candidate = {
+            "id": "skill_delivery_exec_v1",
+            "name": "Delivery executable",
+            "domain": "python",
+            "description": "Validated executable candidate",
+            "code": "def run(context):\\n    return {'success': True}\\n",
+            "execution_contract": {"kind": "python_run_context", "replay_eligible": True},
+            "version": "1.0.0",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            result = knowledge_runtime.create_mission_delivery_skill_candidate(
+                workspace=Path(tmp),
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "mission-a",
+                    "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": []}]},
+                },
+                analyze_snapshot={"task_id": "analyze-a", "summary": "validated input"},
+                reconstruct_snapshot={
+                    "task_id": "reconstruct-a",
+                    "evaluation_verdict": "pass",
+                    "evaluation_score": 1.0,
+                    "evaluation_metrics": {"components": 3, "has_target_dir": True},
+                    "skill_candidate": candidate,
+                },
+                safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                build_snapshot_signature=lambda snapshot: {},
+                record_growth_event=lambda *args, **kwargs: None,
+            )
+            self.assertEqual(result["skill_id"], "skill_delivery_exec_v1")
+            self.assertEqual(result["replay_status"], "eligible")
+            self.assertTrue(result["replay_eligible"])
+            saved = json.loads((Path(tmp) / ".tenants/tenant-a/skills/draft/skill_delivery_exec_v1.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["trust_level"], "draft")
+            self.assertEqual(saved["parameters"]["execution_contract"], candidate["execution_contract"])
+            self.assertEqual(saved["parameters"]["mission_run_id"], "mission-a")
+            self.assertEqual(saved["parameters"]["mission_node_id"], "promote_knowledge")
+            self.assertEqual(saved["parameters"]["candidate_origin_task_id"], "reconstruct-a")
+
+    def test_invalid_executable_candidate_is_rejected_instead_of_becoming_a_recipe(self):
+        candidate = {
+            "id": "skill_delivery_invalid",
+            "name": "Invalid executable",
+            "domain": "python",
+            "description": "Invalid entry point",
+            "code": "print('not a run entry point')",
+            "execution_contract": {"kind": "python_run_context", "replay_eligible": True},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "synchronous run"):
+                knowledge_runtime.create_mission_delivery_skill_candidate(
+                    workspace=Path(tmp),
+                    tenant_id="tenant-a",
+                    mission_run={
+                        "mission_run_id": "mission-a",
+                        "plan": {"nodes": [{"id": "promote_knowledge", "decision_trace": []}]},
+                    },
+                    analyze_snapshot={"task_id": "analyze-a"},
+                    reconstruct_snapshot={
+                        "task_id": "reconstruct-a",
+                        "evaluation_verdict": "pass",
+                        "evaluation_score": 1.0,
+                        "evaluation_metrics": {"components": 2, "has_target_dir": True},
+                        "skill_candidate": candidate,
+                    },
+                    safe_float=lambda value, default=0.0: float(value) if value is not None else default,
+                    build_snapshot_signature=lambda snapshot: {},
+                    record_growth_event=lambda *args, **kwargs: None,
+                )
+            self.assertFalse((Path(tmp) / ".tenants/tenant-a/skills/draft/skill_delivery_invalid.json").exists())
+
     def test_promotion_action_does_not_save_experience_when_reconstruct_evidence_id_is_missing(self):
         analyze_task = object()
         reconstruct_task = object()

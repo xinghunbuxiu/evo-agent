@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -392,6 +394,7 @@ def auto_draft_stable_experience_skills(
                 "source_worker_ids": source_worker_ids,
                 "stable_experience_count": int(group.get("count") or 0),
                 "verified": bool(verified_info),
+            "replay_eligible": skill_info.get("replay_eligible") is True,
             },
         )
         drafted.append({
@@ -406,6 +409,85 @@ def auto_draft_stable_experience_skills(
         })
     return drafted
 
+
+
+_EXECUTABLE_CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_EXECUTABLE_CANDIDATE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
+
+
+def _build_mission_delivery_executable_skill(
+    candidate: object, *, mission_run: dict, promotion_node: dict,
+    analyze_snapshot: dict, reconstruct_snapshot: dict,
+    validation_evidence: dict, primary_worker_id: str | None,
+) -> Skill:
+    """Accept an explicit executable artifact without executing it in Admin."""
+    required = {"id", "name", "domain", "description", "code", "execution_contract"}
+    if not isinstance(candidate, dict) or not required.issubset(candidate) or set(candidate) - (required | {"version"}):
+        raise ValueError("executable Skill candidate has unsupported or missing fields")
+    skill_id = candidate.get("id")
+    if not isinstance(skill_id, str) or not _EXECUTABLE_CANDIDATE_ID_RE.fullmatch(skill_id):
+        raise ValueError("executable Skill candidate ID is invalid")
+    name, domain = candidate.get("name"), candidate.get("domain")
+    description, code = candidate.get("description"), candidate.get("code")
+    if not isinstance(name, str) or not name.strip() or len(name) > 160:
+        raise ValueError("executable Skill candidate name is invalid")
+    if not isinstance(domain, str) or not _EXECUTABLE_CANDIDATE_ID_RE.fullmatch(domain):
+        raise ValueError("executable Skill candidate domain is invalid")
+    if not isinstance(description, str) or len(description) > 2000:
+        raise ValueError("executable Skill candidate description is invalid")
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("executable Skill candidate code is empty")
+    try:
+        code_size = len(code.encode("utf-8", errors="strict"))
+        tree = ast.parse(code, mode="exec")
+    except (UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        raise ValueError("executable Skill candidate code is not valid bounded Python source") from exc
+    if code_size > 512 * 1024:
+        raise ValueError("executable Skill candidate code exceeds its size limit")
+    contract = candidate.get("execution_contract")
+    if contract != {"kind": "python_run_context", "replay_eligible": True}:
+        raise ValueError("executable Skill candidate requires the explicit python_run_context contract")
+    version = candidate.get("version", "1.0.0")
+    if not isinstance(version, str) or not _EXECUTABLE_CANDIDATE_VERSION_RE.fullmatch(version):
+        raise ValueError("executable Skill candidate version is invalid")
+    entries = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+    ]
+    if len(entries) != 1 or isinstance(entries[0], ast.AsyncFunctionDef):
+        raise ValueError("executable Skill candidate must define one synchronous run(context)")
+    arguments = entries[0].args
+    if (
+        arguments.posonlyargs or len(arguments.args) != 1
+        or arguments.vararg is not None or arguments.kwarg is not None
+        or arguments.kwonlyargs or arguments.args[0].arg != "context"
+    ):
+        raise ValueError("executable Skill candidate entry point must accept only context")
+    mission_run_id = str(mission_run.get("mission_run_id") or "")
+    mission_node_id = str(promotion_node.get("id") or "")
+    origin_task_id = str(reconstruct_snapshot.get("task_id") or "")
+    if not mission_run_id or not mission_node_id or not origin_task_id:
+        raise ValueError("executable Skill candidate provenance is incomplete")
+    parameters = {
+        "execution_contract": dict(contract),
+        "mission_run_id": mission_run_id,
+        "mission_node_id": mission_node_id,
+        "candidate_origin_task_id": origin_task_id,
+        "evidence_ids": [str(analyze_snapshot["task_id"]), origin_task_id],
+        "validation_evidence": dict(validation_evidence),
+        "primary_worker_id": primary_worker_id,
+        "acceptance": {
+            "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
+            "has_target_dir": True,
+            "components_min": int((reconstruct_snapshot.get("evaluation_metrics") or {}).get("components", 0) or 0),
+        },
+    }
+    return Skill(
+        id=skill_id, name=name.strip(), domain=domain,
+        description=description, code=code, parameters=parameters,
+        trust_level=SkillTrustLevel.DRAFT,
+        source="mission_delivery_executable_candidate", version=version,
+    )
 
 def create_mission_delivery_skill_candidate(
     *,
@@ -449,63 +531,77 @@ def create_mission_delivery_skill_candidate(
         framework_hint = "react"
     elif "vue" in analyze_summary or "vue" in reconstruct_summary:
         framework_hint = "vue"
-    skill_id = f"skill_javascript_reverse_{framework_hint}_delivery"
-    existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
-    existing_usage = int(existing_payload.get("usage_count", 0) or 0)
-    skill = Skill(
-        id=skill_id,
-        name=f"mission_delivery_{framework_hint}_reverse",
-        domain="javascript",
-        capability_type="javascript_reverse",
-        description="根据已验证成功的 JS 逆向交付样本自动生成的草稿技能候选。",
-        code=(
-            "1. 接收工作目录或 bundle 路径。\n"
-            "2. 自动解析真正的 assets/main-*.js 入口与 source_dir。\n"
-            "3. 执行 analyze 提取框架、打包器、页面与边界线索。\n"
-            "4. 执行 reconstruct 生成可接手的项目骨架。\n"
-            "5. 根据 evaluation_verdict、components、has_target_dir 自动验证交付质量。\n"
-            "6. 将成功结果沉淀为经验、验证摘要与后续成长候选。"
-        ),
-        parameters={
-            "execution_contract": {
-                "kind": "non_executable_recipe",
-                "reason": "This candidate is a natural-language delivery recipe, not Python run(context) source.",
-                "replay_eligible": False,
+
+    executable_candidate = reconstruct_snapshot.get("skill_candidate")
+    if executable_candidate is not None:
+        skill = _build_mission_delivery_executable_skill(
+            executable_candidate,
+            mission_run=mission_run,
+            promotion_node=promotion_node,
+            analyze_snapshot=analyze_snapshot,
+            reconstruct_snapshot=reconstruct_snapshot,
+            validation_evidence=validation_evidence,
+            primary_worker_id=primary_worker_id,
+        )
+        existing_candidate = load_local_skill_payload(workspace, tenant_id, skill.id)
+        if existing_candidate is not None and existing_candidate != skill.to_dict():
+            raise ValueError("executable Skill candidate ID already exists with different immutable content")
+        skill_info = write_skill_candidate(workspace, tenant_id, skill)
+        skill_info.update({"replay_status": "eligible", "replay_eligible": True})
+    else:
+        skill_id = f"skill_javascript_reverse_{framework_hint}_delivery"
+        existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
+        existing_usage = int(existing_payload.get("usage_count", 0) or 0)
+        skill = Skill(
+            id=skill_id,
+            name=f"mission_delivery_{framework_hint}_reverse",
+            domain="javascript",
+            capability_type="javascript_reverse",
+            description="根据已验证成功的 JS 逆向交付样本自动生成的草稿技能候选。",
+            code=(
+                "1. 接收工作目录或 bundle 路径。\n"
+                "2. 自动解析真正的 assets/main-*.js 入口与 source_dir。\n"
+                "3. 执行 analyze 提取框架、打包器、页面与边界线索。\n"
+                "4. 执行 reconstruct 生成可接手的项目骨架。\n"
+                "5. 根据 evaluation_verdict、components、has_target_dir 自动验证交付质量。\n"
+                "6. 将成功结果沉淀为经验、验证摘要与后续成长候选。"
+            ),
+            parameters={
+                "execution_contract": {
+                    "kind": "non_executable_recipe",
+                    "reason": "This candidate is a natural-language delivery recipe, not Python run(context) source.",
+                    "replay_eligible": False,
+                },
+                "mission_kind": mission_run.get("mission_kind"),
+                "mission_run_id": mission_run["mission_run_id"],
+                "mission_node_id": promotion_node["id"],
+                "primary_worker_id": primary_worker_id,
+                "evidence_ids": [analyze_snapshot["task_id"], reconstruct_snapshot["task_id"]],
+                "decision_trace": decision_trace,
+                "validation_evidence": validation_evidence,
+                "framework_hint": framework_hint,
+                "components": components,
+                "accepted_tasks": ["analyze", "reconstruct"],
+                "required_context_keys": ["source_path", "bundle_path", "source_dir"],
+                "acceptance": {
+                    "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
+                    "has_target_dir": bool(metrics.get("has_target_dir")),
+                    "components_min": components,
+                },
             },
-            "mission_kind": mission_run.get("mission_kind"),
-            "mission_run_id": mission_run["mission_run_id"],
-            "mission_node_id": promotion_node["id"],
-            "primary_worker_id": primary_worker_id,
-            "evidence_ids": [analyze_snapshot["task_id"], reconstruct_snapshot["task_id"]],
-            "decision_trace": decision_trace,
-            "validation_evidence": validation_evidence,
-            "framework_hint": framework_hint,
-            "components": components,
-            "accepted_tasks": ["analyze", "reconstruct"],
-            "required_context_keys": ["source_path", "bundle_path", "source_dir"],
-            "acceptance": {
-                "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
-                "has_target_dir": bool(metrics.get("has_target_dir")),
-                "components_min": components,
-            },
-        },
-        # A newly generated artifact is always a new draft, even if an older
-        # artifact with the same stable ID was previously verified.
-        trust_level=SkillTrustLevel.DRAFT,
-        source="mission_delivery_auto_generated",
-        version="1.0.0",
-        usage_count=existing_usage + 1,
-        success_rate=1.0 if reconstruct_snapshot.get("evaluation_verdict") == "pass" else 0.0,
-    )
-    skill_info = write_skill_candidate(workspace, tenant_id, skill)
+            # A newly generated artifact is always a new draft, even if an older
+            # artifact with the same stable ID was previously verified.
+            trust_level=SkillTrustLevel.DRAFT,
+            source="mission_delivery_auto_generated",
+            version="1.0.0",
+            usage_count=existing_usage + 1,
+            success_rate=1.0 if reconstruct_snapshot.get("evaluation_verdict") == "pass" else 0.0,
+        )
+        skill_info = write_skill_candidate(workspace, tenant_id, skill)
+
     execution_contract = skill.parameters.get("execution_contract", {})
-    replay_eligible = (
-        isinstance(execution_contract, dict)
-        and execution_contract.get("kind") == "python_run_context"
-        and execution_contract.get("replay_eligible") is True
-    )
     verified_info = None
-    if replay_eligible:
+    if skill_info.get("replay_eligible") is True:
         # A future executable candidate must supply independently attested replay
         # evidence before verification. This path deliberately has no implicit
         # worker-success or historical-experience fallback.
