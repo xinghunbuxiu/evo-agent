@@ -1848,6 +1848,7 @@ def create_app() -> FastAPI:
         app,
         workspace=workspace,
         tenant_manager=tenant_manager,
+        organization_registry=organization_registry,
         task_queue=task_queue,
         plugin_summary=plugin_summary,
         worker_runtime=worker_runtime,

@@ -45,6 +45,7 @@ def register_system_runtime_routes(
     *,
     workspace: Path,
     tenant_manager,
+    organization_registry,
     task_queue,
     plugin_summary,
     worker_runtime: dict,
@@ -2552,6 +2553,23 @@ def register_system_runtime_routes(
         if str(employee.get("member_id") or "").strip() in existing_ids:
             return error_response("同名员工实例已存在，请修改名称或角色标识", 400)
 
+        requested_worker_id = str(payload.get("worker_id") or "").strip()
+        if requested_worker_id:
+            try:
+                bound_worker = organization_registry.bind_worker_owner(
+                    worker_id=requested_worker_id,
+                    owner_tenant_id=normalized_tenant_id,
+                    owner_member_id=str(employee.get("member_id") or "").strip(),
+                )
+            except (KeyError, ValueError) as exc:
+                return error_response(f"员工与执行 Worker 绑定失败：{exc}", 400)
+            employee_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
+            employee_runtime["organization_worker_ids"] = list(dict.fromkeys([
+                *employee_runtime.get("organization_worker_ids", []),
+                requested_worker_id,
+            ]))
+            employee["instance_runtime"] = employee_runtime
+
         instance_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
         for key in ("workspace_root", "memory_root", "artifacts_root", "learning_materials_root"):
             relative_path = str(instance_runtime.get(key) or "").strip()
@@ -2570,6 +2588,7 @@ def register_system_runtime_routes(
         return success_response({
             "employee": employee,
             "member": employee,
+            "bound_worker": bound_worker if requested_worker_id else None,
             "autonomy": enriched,
         }, "员工实例已创建，后续由育成师继续建立画像与边界")
 

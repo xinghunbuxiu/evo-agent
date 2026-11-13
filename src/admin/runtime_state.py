@@ -569,6 +569,7 @@ def normalize_child_member_runtime(payload: dict | None, *, index: int = 0) -> d
             "learning_materials_root": str(instance_runtime.get("learning_materials_root") or runtime_paths["learning_materials_root"]).strip() or runtime_paths["learning_materials_root"],
             "official_work_policy": str(instance_runtime.get("official_work_policy") or "employee_self_execution_only").strip() or "employee_self_execution_only",
             "external_project_policy": str(instance_runtime.get("external_project_policy") or "learning_material_only").strip() or "learning_material_only",
+            "organization_worker_ids": _string_list(instance_runtime.get("organization_worker_ids"), fallback=[]),
         },
         "current_jobs": current_jobs,
         "world_observation": {
