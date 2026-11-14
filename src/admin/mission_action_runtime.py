@@ -599,21 +599,15 @@ def create_mission_action_runtime_bindings(
                     worker_owner = organization_registry.get_worker(chosen_worker_id)
                     owner_member_id = str(worker_owner.get("owner_member_id") or "").strip() if isinstance(worker_owner, dict) else ""
                     owner_tenant_id = str(worker_owner.get("owner_tenant_id") or "").strip() if isinstance(worker_owner, dict) else ""
-                    if mission_member_id:
-                        if owner_member_id and (
-                            owner_member_id != mission_member_id
-                            or owner_tenant_id != str(tenant_id or "").strip()
-                        ):
-                            raise ValueError("Worker is already bound to a different employee or tenant")
-                        if not owner_member_id:
+                    if mission_member_id and not owner_member_id:
                             organization_registry.bind_worker_owner(
                                 worker_id=chosen_worker_id,
                                 owner_tenant_id=str(tenant_id or "").strip(),
                                 owner_member_id=mission_member_id,
                             )
-                            worker_owner = organization_registry.get_worker(chosen_worker_id)
-                            owner_member_id = mission_member_id
-                            owner_tenant_id = str(tenant_id or "").strip()
+                        worker_owner = organization_registry.get_worker(chosen_worker_id)
+                        owner_member_id = mission_member_id
+                        owner_tenant_id = str(tenant_id or "").strip()
                     if owner_member_id:
                         if owner_tenant_id != str(tenant_id or "").strip():
                             raise ValueError("Worker employee owner belongs to a different tenant")
