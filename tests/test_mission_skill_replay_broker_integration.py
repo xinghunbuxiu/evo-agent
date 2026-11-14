@@ -291,7 +291,8 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertEqual(replay_action["experience_id"], operation["replay"]["experience"]["id"])
             pinned_binding = replay_action["skill_binding"]
             self.assertEqual(pinned_binding, operation["skill_binding"])
-            self.assertEqual(pinned_binding["mission_context"], mission_context)
+            expected_mission_context = {**mission_context, "task_id": replay_action["task_id"]}
+            self.assertEqual(pinned_binding["mission_context"], expected_mission_context)
             self.assertEqual(replay_action["candidate_skill_version"], skill.version)
             self.assertEqual(replay_action["candidate_content_sha256"], digest)
 
@@ -300,7 +301,7 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 tenant_id=tenant_id,
                 evidence_id=evidence_id,
             )
-            self.assertEqual(evidence["mission_context"], mission_context)
+            self.assertEqual(evidence["mission_context"], expected_mission_context)
             self.assertEqual(evidence["broker_attestation"]["request_id"], evidence_id)
 
             published_binding = dict(operation["skill_binding"])
