@@ -296,7 +296,20 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 self.assertTrue(replay_action.get("evidence_id"))
                 self.assertTrue(replay_action.get("validation_request_id"))
                 self.assertIsNone(replay_action.get("promotion_request_id"))
-                self.assertEqual(list(artifact_root.iterdir()), [])
+                candidate_path = (
+                    artifact_root / tenant_id / skill.id
+                    / f"{skill.version}.candidate.json"
+                )
+                published_path = (
+                    artifact_root / tenant_id / skill.id
+                    / f"{skill.version}.json"
+                )
+                self.assertTrue(candidate_path.is_file())
+                self.assertFalse(published_path.exists())
+                self.assertEqual(
+                    list((artifact_root / tenant_id / skill.id).glob("*.json")),
+                    [candidate_path],
+                )
 
                 evidence_id = replay_action["evidence_id"]
                 evidence = evidence_store.load_verified(
