@@ -141,6 +141,18 @@ def create_mission_action_runtime_bindings(
         if callable(context_resolver):
             resolved_context = context_resolver(context)
         worker_handler = mission_action_handlers.get(primary_worker_id) if isinstance(mission_action_handlers, dict) else None
+        # Mission's employee context is the durable personnel identity; Worker is
+        # only the disposable execution instance. Keep the two linked when Mission
+        # incubates or claims an execution worker.
+        mission_member_id = str(
+            resolved_context.get("member_id")
+            or resolved_context.get("child_member_id")
+            or resolved_context.get("target_member_id")
+            or context.get("member_id")
+            or context.get("child_member_id")
+            or context.get("target_member_id")
+            or ""
+        ).strip()
 
         def worker_handler_id(worker: dict[str, Any] | None) -> str:
             if not isinstance(worker, dict):
@@ -578,6 +590,8 @@ def create_mission_action_runtime_bindings(
                                 worker_id=chosen_worker_id,
                                 role_id=role_id,
                                 profile=template_profile,
+                                owner_tenant_id=tenant_id if mission_member_id else None,
+                                owner_member_id=mission_member_id or None,
                             )
                         claim_origin = "incubated"
                     else:
@@ -585,6 +599,21 @@ def create_mission_action_runtime_bindings(
                     worker_owner = organization_registry.get_worker(chosen_worker_id)
                     owner_member_id = str(worker_owner.get("owner_member_id") or "").strip() if isinstance(worker_owner, dict) else ""
                     owner_tenant_id = str(worker_owner.get("owner_tenant_id") or "").strip() if isinstance(worker_owner, dict) else ""
+                    if mission_member_id:
+                        if owner_member_id and (
+                            owner_member_id != mission_member_id
+                            or owner_tenant_id != str(tenant_id or "").strip()
+                        ):
+                            raise ValueError("Worker is already bound to a different employee or tenant")
+                        if not owner_member_id:
+                            organization_registry.bind_worker_owner(
+                                worker_id=chosen_worker_id,
+                                owner_tenant_id=str(tenant_id or "").strip(),
+                                owner_member_id=mission_member_id,
+                            )
+                            worker_owner = organization_registry.get_worker(chosen_worker_id)
+                            owner_member_id = mission_member_id
+                            owner_tenant_id = str(tenant_id or "").strip()
                     if owner_member_id:
                         if owner_tenant_id != str(tenant_id or "").strip():
                             raise ValueError("Worker employee owner belongs to a different tenant")
@@ -616,6 +645,7 @@ def create_mission_action_runtime_bindings(
                         "claim_id": claim_id,
                         "handler_id": primary_worker_id,
                         "origin": claim_origin,
+                        "employee_member_id": owner_member_id or None,
                         "state": "claimed",
                         "claimed_at": datetime.now(timezone.utc).isoformat(),
                     }
