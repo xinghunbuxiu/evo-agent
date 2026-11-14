@@ -1,4 +1,5 @@
 """Cross-component Mission -> Broker -> Validator -> Artifact Store integration."""
+import asyncio
 import hashlib
 import json
 import os
@@ -13,7 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from starlette.requests import Request
+
 from admin.knowledge_runtime import write_skill_candidate
+from admin.mission_runtime import load_mission_runs, save_mission_runs
+from admin.routes.missions import register_mission_routes
 from admin.skill_replay_runtime import SkillReplayRuntime
 from core import Skill, SkillTrustLevel
 from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
@@ -24,6 +29,41 @@ from core.skill_artifact_store import SkillArtifactStore
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_validator import SkillValidatorService
 from core.skill_validator_transport import serve_validator_listener
+
+
+class _MissionRouteApp:
+    def __init__(self):
+        self.routes = {}
+
+    def get(self, path):
+        def decorator(handler):
+            self.routes[("GET", path)] = handler
+            return handler
+        return decorator
+
+    def post(self, path):
+        def decorator(handler):
+            self.routes[("POST", path)] = handler
+            return handler
+        return decorator
+
+
+def _mission_replay_request():
+    payload = json.dumps({"node_id": "node-delivery"}).encode("utf-8")
+
+    async def receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/api/missions/mission-integration/skills/skill-integration/replay",
+        "headers": [
+            (b"cookie", b"session=valid"),
+            (b"idempotency-key", b"11111111-1111-4111-8111-111111111111"),
+        ],
+        "query_string": b"",
+    }, receive)
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
@@ -181,18 +221,44 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             )
             broker_thread.start()
             validator_thread.start()
+            save_mission_runs(workspace, {"items": [{
+                "mission_run_id": mission_context["mission_run_id"],
+                "tenant_id": tenant_id,
+                "goal": "integration replay",
+                "plan": {"nodes": [{"id": mission_context["node_id"]}]},
+                "actions": [],
+            }]})
+            app = _MissionRouteApp()
+            register_mission_routes(
+                app,
+                workspace=workspace,
+                task_queue=object(),
+                tenant_manager=object(),
+                prepare_mission_work_type_bundle=lambda **kwargs: {},
+                mission_planner=object(),
+                upsert_plan_learning_tasks=lambda **kwargs: [],
+                refresh_mission_runs=lambda **kwargs: {"items": []},
+                start_mission=lambda *args, **kwargs: (None, None),
+                find_mission_run=lambda *args: None,
+                derive_follow_up_goal=lambda run: "",
+                derive_follow_up_context=lambda run: {},
+                success_response=lambda data, message="": {"data": data, "message": message},
+                error_response=lambda message, status: {"error": message, "status": status},
+                get_session_user=lambda request: {"id": 7} if request.cookies.get("session") == "valid" else None,
+                authorize_tenant=lambda user, requested_tenant: requested_tenant == tenant_id,
+                tenant_role=lambda user, requested_tenant: "tenant_admin" if requested_tenant == tenant_id else None,
+                organization_registry=object(),
+                skill_replay_runtime=runtime,
+            )
+            handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/replay")]
             try:
-                operation = runtime.replay_candidate(
-                    tenant_id=tenant_id,
-                    mission_run={
-                        "mission_run_id": mission_context["mission_run_id"],
-                        "tenant_id": tenant_id,
-                        "plan": {"nodes": [{"id": mission_context["node_id"]}]},
-                    },
-                    node_id=mission_context["node_id"],
-                    task_id=mission_context["task_id"],
+                response = asyncio.run(handler(
+                    request=_mission_replay_request(),
+                    mission_run_id=mission_context["mission_run_id"],
                     skill_id=skill.id,
-                )
+                ))
+                self.assertIn("data", response, response)
+                operation = response["data"]
             finally:
                 broker_stop.set()
                 validator_stop.set()
@@ -209,6 +275,25 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertEqual(operation["replay"]["experience"]["execution_status"], "succeeded")
             self.assertEqual(operation["validation"]["status"], "passed")
             self.assertEqual(operation["promotion"]["status"], "published")
+
+            mission_state = load_mission_runs(workspace)
+            mission = mission_state["items"][0]
+            replay_action = next(
+                item for item in mission["actions"]
+                if item.get("action_type") == "skill_replay"
+            )
+            self.assertEqual(replay_action["status"], "completed")
+            self.assertEqual(replay_action["validation_status"], "passed")
+            self.assertEqual(replay_action["validation_id"], operation["validation"]["validation_id"])
+            self.assertEqual(replay_action["promotion_status"], "published")
+            self.assertEqual(replay_action["published_artifact"], operation["promotion"]["artifact"])
+            self.assertEqual(replay_action["evidence_id"], operation["replay"]["evidence"]["evidence_id"])
+            self.assertEqual(replay_action["experience_id"], operation["replay"]["experience"]["id"])
+            pinned_binding = replay_action["skill_binding"]
+            self.assertEqual(pinned_binding, operation["skill_binding"])
+            self.assertEqual(pinned_binding["mission_context"], mission_context)
+            self.assertEqual(replay_action["candidate_skill_version"], skill.version)
+            self.assertEqual(replay_action["candidate_content_sha256"], digest)
 
             evidence_id = operation["replay"]["evidence"]["evidence_id"]
             evidence = evidence_store.load_verified(
