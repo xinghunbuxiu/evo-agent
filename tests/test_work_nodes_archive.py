@@ -209,11 +209,19 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         base = self._write_retry_snapshot(files)
         remote_files = dict(files)
         remote_files["archive.integrity.json"] = (base / "archive.integrity.json").read_text(encoding="utf-8")
-        provider = SimpleNamespace()
+        provider = SimpleNamespace(provider_name="gitee")
+        provider.ensure_repo = AsyncMock(return_value=SimpleNamespace(
+            full_name="owner/evo-tenant-a-experience-d-01",
+            html_url="https://gitee.com/owner/evo-tenant-a-experience-d-01",
+            branch="master",
+        ))
         if upload_error:
             provider.upsert_text_file = AsyncMock(side_effect=RuntimeError("simulated upload failure"))
         else:
-            provider.upsert_text_file = AsyncMock()
+            async def upload(*, file_path, content, **kwargs):
+                rel_path = file_path[len(self.prefix) + 1:]
+                remote_files[rel_path] = content
+            provider.upsert_text_file = AsyncMock(side_effect=upload)
         async def read_back(*, file_path, **kwargs):
             rel_path = file_path[len(self.prefix) + 1:]
             if corrupt_readback and rel_path == "manifest.json":
@@ -256,8 +264,8 @@ class LocalArchiveSnapshotTests(unittest.TestCase):
         self.assertEqual(result["status"], "archived")
         self.assertTrue(result["integrity_verified"])
         self.assertEqual(set(result["verified_files"]), set(result["files"]))
-        self.assertEqual(provider.upsert_text_file.await_count, 3)
-        self.assertEqual(provider.read_text_file.await_count, 3)
+        self.assertEqual(provider.upsert_text_file.await_count, 6)
+        self.assertEqual(provider.read_text_file.await_count, 6)
 
     def test_integrity_manifest_uses_sha256_utf8_bytes(self):
         payload = "中文内容"

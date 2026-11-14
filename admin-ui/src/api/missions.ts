@@ -1,4 +1,4 @@
-import { get, post } from './request'
+import { get, post, request } from './request'
 
 export interface MissionTemplate {
   mission_kind: string
@@ -142,6 +142,24 @@ export interface MissionRunAction {
     quality_score?: number
     recorded_at?: string
   }
+  promotion?: {
+    experience_id?: string
+    skill_candidate?: {
+      skill_id?: string
+      name?: string
+      domain?: string
+      trust_level?: string
+      replay_eligible?: boolean
+      replay_status?: string
+      replay_reason?: string
+    }
+  }
+  skill_id?: string
+  validation_status?: string
+  promotion_status?: string
+  evidence_id?: string
+  experience_id?: string
+  execution_succeeded?: boolean
   task_result?: {
     validation_outcome?: string
     message?: string
@@ -360,5 +378,30 @@ export function continueMission(missionRunId: string) {
   return post<{ source_mission_run_id: string; continued_mission_run: MissionRun }>(
     `/api/missions/${encodeURIComponent(missionRunId)}/continue`,
     {}
+  )
+}
+
+/**
+ * Replay a verified Skill for one Mission node.
+ *
+ * The caller must create one UUID per intentional Replay attempt and retain it
+ * while retrying that same HTTP request. A new UUID means a new attempt.
+ */
+export function replayMissionSkill(
+  missionRunId: string,
+  skillId: string,
+  nodeId: string,
+  idempotencyKey: string
+) {
+  if (!idempotencyKey.trim()) {
+    throw new Error('Replay requires a stable Idempotency-Key')
+  }
+  return request<Record<string, unknown>>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/skills/${encodeURIComponent(skillId)}/replay`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({ node_id: nodeId }),
+    }
   )
 }

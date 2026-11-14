@@ -20,6 +20,8 @@ import httpx
 from dotenv import load_dotenv
 
 from admin.spa_static import register_spa_static
+from admin.experience_outbox_runtime import sync_experience_outbox
+from admin.mission_plan_ai_runtime import create_worker_mission_plan_proposer
 
 # 核心组件
 import sys
@@ -42,6 +44,8 @@ from core import (
 )
 from core.tenant import TenantManager
 from core.task_queue import get_task_queue, TaskPriority, TaskStatus
+from core.organization_runtime import OrganizationRegistry, sync_worker_catalog
+from core.verification import verify_workspace_artifacts
 from admin.database import db, MYSQL_AVAILABLE
 from admin.mission_runtime import (
     derive_follow_up_context,
@@ -53,6 +57,7 @@ from admin.mission_runtime import (
 from admin.mission_bootstrap_runtime import (
     create_mission_bootstrap_runtime_bindings,
 )
+from admin.mission_staffing_runtime import resolve_selected_employee
 from admin.worker_bootstrap_runtime import (
     create_worker_bootstrap_runtime_bindings,
 )
@@ -62,6 +67,7 @@ from admin.intelligence_bootstrap_runtime import (
 from admin.mission_execution_runtime import (
     create_mission_execution_bindings,
 )
+from admin.skill_replay_runtime import create_skill_replay_runtime
 from admin.growth_policy_runtime import (
     effective_platform_promotion_status as _effective_platform_promotion_status,
     growth_policy_decision_label as _growth_policy_decision_label,
@@ -88,10 +94,13 @@ from admin.runtime_state import (
     normalize_child_agent_runtime as _normalize_child_agent_runtime,
     normalize_child_members_runtime as _normalize_child_members_runtime,
     normalize_feedback_monitor_runtime as _normalize_feedback_monitor_runtime,
+    resolve_member_for_mission as _resolve_member_for_mission,
+    resolve_members_for_mission as _resolve_members_for_mission,
     normalize_parent_profile_runtime as _normalize_parent_profile_runtime,
     save_autonomy_runtime as _save_autonomy_runtime,
     save_learning_tasks as _save_learning_tasks,
 )
+from admin.tenant_access_runtime import tenant_role_for_user as _tenant_role_for_user, user_can_access_tenant as _user_can_access_tenant
 from admin.session_runtime import (
     create_session as _create_session_entry,
     delete_session as _delete_session_entry,
@@ -138,6 +147,7 @@ from admin.worker_route_runtime import resolve_experience_domain, resolve_work_t
 from admin.routes import (
     register_auth_routes,
     register_evolution_strategy_routes,
+    register_experience_reflection_routes,
     register_catalog_routes,
     register_finance_routes,
     register_git_knowledge_routes,
@@ -419,6 +429,7 @@ def _extract_task_snapshot(task) -> dict:
         "evaluation_verdict": evaluation.get("verdict"),
         "evaluation_score": _safe_float(evaluation.get("score")) if isinstance(evaluation, dict) and evaluation.get("score") is not None else None,
         "evaluation_metrics": evaluation.get("metrics", {}) if isinstance(evaluation, dict) else {},
+        "skill_candidate": result.get("skill_candidate") if isinstance(result, dict) and isinstance(result.get("skill_candidate"), dict) else None,
         "replay_of": (task.payload or {}).get("_replay_of"),
     }
 
@@ -1102,14 +1113,73 @@ def create_app() -> FastAPI:
         if env_has_local_executor:
             workspace = env_path
     workspace.mkdir(parents=True, exist_ok=True)
+    organization_registry = OrganizationRegistry(workspace)
+    try:
+        _skill_replay_runtime = create_skill_replay_runtime(workspace=workspace)
+    except Exception as exc:
+        # Broker replay is optional and fail-closed; even malformed optional config
+        # must not prevent ordinary Mission execution from starting.
+        _skill_replay_runtime = None
+        print(f"[skill-replay] disabled during configuration: {type(exc).__name__}")
+    if _skill_replay_runtime is None:
+        print("[skill-replay] Broker runtime is not configured; replay endpoint will remain unavailable")
+    worker_manifests = builtin_worker_manifests(workspace)
+    worker_config = load_worker_registry_config(workspace)
+    worker_states = worker_config.get("workers", {}) if isinstance(worker_config.get("workers"), dict) else {}
+    enabled_worker_ids = {
+        str(worker_id)
+        for worker_id, state in worker_states.items()
+        if isinstance(state, dict) and bool(state.get("enabled"))
+    }
+    sync_worker_catalog(organization_registry, worker_manifests, enabled_worker_ids)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
-    _mission_action_runtime_ref["build_mission_actions"] = create_mission_action_runtime_bindings(
+    def _record_worker_employee_link(*, tenant_id: str, member_id: str, worker_id: str) -> None:
+        runtime = _load_autonomy_runtime(workspace, tenant_id)
+        members = _normalize_child_members_runtime(
+            runtime.get("child_members"),
+            legacy_child_agent=runtime.get("child_agent") if isinstance(runtime.get("child_agent"), dict) else None,
+        )
+        updated = False
+        next_items = []
+        for item in members.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            employee = dict(item)
+            if str(employee.get("member_id") or "").strip() == member_id:
+                instance_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
+                worker_ids = instance_runtime.get("organization_worker_ids", [])
+                if not isinstance(worker_ids, list):
+                    worker_ids = []
+                instance_runtime["organization_worker_ids"] = list(dict.fromkeys([
+                    *[str(value).strip() for value in worker_ids if str(value).strip()],
+                    worker_id,
+                ]))
+                employee["instance_runtime"] = instance_runtime
+                updated = True
+            next_items.append(employee)
+        if not updated:
+            raise ValueError("Bound employee profile was not found in its tenant runtime")
+        members["items"] = next_items
+        runtime["child_members"] = members
+        if members.get("selected_member_id") == member_id:
+            selected = next(
+                (item for item in next_items if str(item.get("member_id") or "").strip() == member_id),
+                None,
+            )
+            if isinstance(selected, dict):
+                runtime["child_agent"] = _normalize_child_agent_runtime(selected)
+        runtime["tenant_id"] = tenant_id
+        _save_autonomy_runtime(workspace, runtime, tenant_id)
+
+    _mission_action_runtime_ref.update(create_mission_action_runtime_bindings(
         normalize_string_list=lambda value: [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else [],
         task_priority_cls=TaskPriority,
         mission_action_handlers=register_builtin_worker_mission_action_handlers(workspace=workspace),
         context_resolvers=build_mission_context_resolvers(workspace),
-    )["build_mission_actions"]
+        organization_registry=organization_registry,
+        record_worker_employee_link=_record_worker_employee_link,
+    ))
     _load_sessions()
     
     # 自动初始化 MySQL 表（如果不存在）
@@ -1134,8 +1204,12 @@ def create_app() -> FastAPI:
     project_packages = load_project_packages(workspace)
     plugin_summary = PluginLoader(capability_registry=capability_registry).load_default(workspace)
     decision_engine = DecisionEngine(workspace, capability_registry)
-    mission_planner = MissionPlanner(workspace, capability_registry)
     tenant_manager = TenantManager(workspace)
+    mission_planner = MissionPlanner(
+        workspace,
+        capability_registry,
+        plan_proposer=create_worker_mission_plan_proposer(tenant_manager),
+    )
     if plugin_summary.loaded:
         print(f"✅ 已加载插件: {[item.plugin_name for item in plugin_summary.loaded]}")
     if plugin_summary.skipped:
@@ -1263,6 +1337,47 @@ def create_app() -> FastAPI:
         daemon=True,
         name="evo-js-research-loop",
     )
+    experience_outbox_task: asyncio.Task | None = None
+
+    async def _background_experience_outbox_sync_loop() -> None:
+        """Drain durable experience outboxes using only the server-scoped token."""
+        while True:
+            token = str(os.getenv("GITEE_TOKEN") or "").strip()
+            if token and token != "your_real_token_here":
+                tenants_root = workspace / ".tenants"
+                if tenants_root.is_dir():
+                    for tenant_dir in sorted(path for path in tenants_root.iterdir() if path.is_dir()):
+                        pending_dir = tenant_dir / "experience_outbox" / "pending"
+                        if not pending_dir.is_dir() or not any(pending_dir.glob("*.json")):
+                            continue
+                        tenant_id = tenant_dir.name
+                        try:
+                            git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+                            provider = _get_git_provider_instance(config, git_knowledge)
+                            namespace = (
+                                str(git_knowledge.get("namespace") or "")
+                                if isinstance(git_knowledge, dict) else ""
+                            )
+                            result = await sync_experience_outbox(
+                                workspace=workspace,
+                                tenant_id=tenant_id,
+                                provider=provider,
+                                token=token,
+                                namespace=namespace,
+                                repository_name_prefix=f"evo-{_sanitize_repo_name(tenant_id).lower()}-experience",
+                            )
+                            print(
+                                "[experience-outbox] sync complete "
+                                f"tenant={tenant_id} synced={result.get('synced', 0)} "
+                                f"pending={result.get('pending', 0)} "
+                                f"integrity_verified={result.get('integrity_verified', False)}"
+                            )
+                        except Exception as exc:
+                            print(
+                                "[experience-outbox] sync failed "
+                                f"tenant={tenant_id} error={type(exc).__name__}: {exc}"
+                            )
+            await asyncio.sleep(60)
 
     def _sanitize_git_slug(value: str, fallback: str) -> str:
         safe = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value or "").strip())
@@ -1632,14 +1747,52 @@ def create_app() -> FastAPI:
     async def start_background_research():
         purge_preset_finance_data(workspace)
         purge_preset_project_packages(workspace)
+        # Reconcile persisted Mission/Worker reservations before background work
+        # begins. Unknown or missing queue tasks remain claimed by design.
+        try:
+            recovery = _mission_bootstrap["reconcile_worker_claims_on_startup"]()
+            print(
+                "[mission-recovery] startup reconciliation complete "
+                f"mission_runs={recovery.get('mission_runs', 0)} "
+                f"claims_checked={recovery.get('claims_checked', 0)} "
+                f"claims_released={recovery.get('claims_released', 0)} "
+                f"claims_held_for_review={recovery.get('claims_held_for_review', 0)}"
+            )
+        except Exception as exc:
+            # Recovery failure must be visible but must not silently release claims
+            # or prevent the admin service from starting.
+            print(f"[mission-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
+        try:
+            replay_recovery = _mission_bootstrap["reconcile_skill_replays_on_startup"]()
+            print(
+                "[mission-replay-recovery] startup reconciliation complete "
+                f"mission_runs={replay_recovery.get('mission_runs', 0)} "
+                f"replays_marked_interrupted={replay_recovery.get('replays_marked_interrupted', 0)} "
+                f"replays_held_for_review={replay_recovery.get('replays_held_for_review', 0)}"
+            )
+        except Exception as exc:
+            # Keep Replay quarantine independent from worker-claim reconciliation.
+            print(f"[mission-replay-recovery] startup reconciliation failed: {type(exc).__name__}: {exc}")
         if not autonomy_thread.is_alive():
             autonomy_thread.start()
+        nonlocal experience_outbox_task
+        if experience_outbox_task is None or experience_outbox_task.done():
+            experience_outbox_task = asyncio.create_task(
+                _background_experience_outbox_sync_loop(),
+                name="evo-experience-outbox-sync",
+            )
 
     @app.on_event("shutdown")
     async def stop_background_research():
         autonomy_stop_event.set()
         if autonomy_thread.is_alive():
             autonomy_thread.join(timeout=3)
+        if experience_outbox_task is not None:
+            experience_outbox_task.cancel()
+            try:
+                await experience_outbox_task
+            except asyncio.CancelledError:
+                pass
         task_queue.stop()
     
     _default_session_secret = "evo-session-secret-change-in-production"
@@ -1668,6 +1821,7 @@ def create_app() -> FastAPI:
                 "mysql": bool(MYSQL_AVAILABLE),
                 "spa_static": _spa_dist_index.is_file(),
                 "secure_cookies": _secure_cookies,
+                "skill_replay_broker_configured": _skill_replay_runtime is not None,
             },
             "warnings": warnings,
         }
@@ -1727,6 +1881,10 @@ def create_app() -> FastAPI:
         effective_platform_promotion_status=_effective_platform_promotion_status,
         mission_post_action_handlers=register_builtin_worker_mission_post_action_handlers(workspace=workspace),
         mission_summary_handlers=register_builtin_worker_mission_summary_handlers(workspace=workspace),
+        resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
+        # The verifier reads declared artifacts inside the workspace; it never executes worker commands.
+        independent_verifier=verify_workspace_artifacts,
+        organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]
 
@@ -1734,6 +1892,7 @@ def create_app() -> FastAPI:
         app,
         workspace=workspace,
         tenant_manager=tenant_manager,
+        organization_registry=organization_registry,
         task_queue=task_queue,
         plugin_summary=plugin_summary,
         worker_runtime=worker_runtime,
@@ -2024,19 +2183,43 @@ def create_app() -> FastAPI:
         next_cycle_plan = summary.get("next_cycle_plan", {}) if isinstance(summary.get("next_cycle_plan"), dict) else {}
         worker_summary = summary.get("worker_summary", {}) if isinstance(summary.get("worker_summary"), dict) else {}
         role_reflection = worker_summary.get("role_reflection", {}) if isinstance(worker_summary.get("role_reflection"), dict) else {}
-        role_summary = str(role_reflection.get("summary") or "").strip()
-        role_experiment = str(role_reflection.get("next_experiment") or "").strip()
-        focus_points = [
+        scoped_actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+        has_scoped_worker_actions = any(
+            isinstance(action, dict) and str(action.get("organization_worker_id") or
+                ((action.get("worker_claim") or {}).get("worker_id") if isinstance(action.get("worker_claim"), dict) else "") or "").strip()
+            for action in scoped_actions
+        )
+        action_evidence = []
+        for action in scoped_actions:
+            if not isinstance(action, dict):
+                continue
+            result = action.get("task_result", {}) if isinstance(action.get("task_result"), dict) else {}
+            parts = [
+                str(action.get("title") or action.get("task_type") or "").strip(),
+                str(action.get("status") or action.get("execution_status") or "").strip(),
+                str(action.get("detail") or "").strip(),
+                str(result.get("summary") or "").strip(),
+            ]
+            rendered = " / ".join(part[:300] for part in parts if part)
+            if rendered:
+                action_evidence.append(rendered[:900])
+        role_summary = (
+            "；".join(action_evidence[:8])
+            if has_scoped_worker_actions
+            else str(role_reflection.get("summary") or "").strip()
+        )
+        role_experiment = "" if has_scoped_worker_actions else str(role_reflection.get("next_experiment") or "").strip()
+        focus_points = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (next_cycle_plan.get("focus_points", []) if isinstance(next_cycle_plan.get("focus_points"), list) else [])
             if str(item).strip()
         ]
-        next_steps = [
+        next_steps = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (next_cycle_plan.get("next_steps", []) if isinstance(next_cycle_plan.get("next_steps"), list) else [])
             if str(item).strip()
         ]
-        recommended_next_actions = [
+        recommended_next_actions = [] if has_scoped_worker_actions else [
             str(item).strip()
             for item in (worker_summary.get("recommended_next_actions", []) if isinstance(worker_summary.get("recommended_next_actions"), list) else [])
             if str(item).strip()
@@ -2060,7 +2243,9 @@ def create_app() -> FastAPI:
         signature = hashlib.sha1(
             "|".join([
                 str(mission_run.get("mission_run_id") or ""),
+                str(member.get("member_id") or ""),
                 status,
+                "||".join(action_evidence),
                 role_summary,
                 role_experiment,
                 "||".join(focus_points[:2]),
@@ -2076,44 +2261,6 @@ def create_app() -> FastAPI:
             "next_action": next_action,
             "current_focus": current_focus,
         }
-
-    def _resolve_member_for_mission(mission_run: dict, members: list[dict]) -> dict | None:
-        if not isinstance(mission_run, dict):
-            return None
-        context = mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
-        runtime_route = mission_run.get("runtime_route", {}) if isinstance(mission_run.get("runtime_route"), dict) else {}
-        explicit_member_id = str(
-            context.get("member_id")
-            or context.get("child_member_id")
-            or context.get("target_member_id")
-            or ""
-        ).strip()
-        if explicit_member_id:
-            matched = next(
-                (item for item in members if isinstance(item, dict) and str(item.get("member_id") or "").strip() == explicit_member_id),
-                None,
-            )
-            if isinstance(matched, dict):
-                return matched
-        role_hint = str(
-            (mission_run.get("work_type", {}) if isinstance(mission_run.get("work_type"), dict) else {}).get("work_type_id")
-            or runtime_route.get("primary_worker_id")
-            or context.get("runtime_primary_worker_id")
-            or ""
-        ).strip()
-        if role_hint:
-            matched = next(
-                (
-                    item for item in members
-                    if isinstance(item, dict)
-                    and str(item.get("status") or "active").strip() != "archived"
-                    and str(item.get("primary_role") or "").strip() == role_hint
-                ),
-                None,
-            )
-            if isinstance(matched, dict):
-                return matched
-        return None
 
     def _sync_autonomy_runtime_from_missions(*, workspace: Path, mission_runs: list[dict]) -> list[dict]:
         if not isinstance(mission_runs, list) or not mission_runs:
@@ -2133,93 +2280,103 @@ def create_app() -> FastAPI:
         for mission_run in mission_runs:
             if not isinstance(mission_run, dict):
                 continue
-            member = _resolve_member_for_mission(mission_run, members)
-            if not isinstance(member, dict):
+            member_groups = _resolve_members_for_mission(mission_run, members)
+            if not member_groups:
                 continue
-            reflection = _build_member_reflection_from_mission(mission_run, member)
-            if not isinstance(reflection, dict):
-                continue
-            signature = str(reflection.get("signature") or "").strip()
-            if signature and signature == str(mission_run.get("member_reflection_sync_signature") or "").strip():
-                continue
-            member_id = str(member.get("member_id") or "").strip()
-            if not member_id:
-                continue
-            _append_member_reflection_message(
-                relationship_center,
-                member_id=member_id,
-                content=str(reflection.get("content") or "").strip(),
-                mission_run_id=str(mission_run.get("mission_run_id") or ""),
-                signature=signature,
-            )
-            growth_state = member.get("growth_state", {}) if isinstance(member.get("growth_state"), dict) else {}
-            training_plan = member.get("training_plan", {}) if isinstance(member.get("training_plan"), dict) else {}
-            current_jobs = member.get("current_jobs", []) if isinstance(member.get("current_jobs"), list) else []
-            next_action = str(reflection.get("next_action") or "").strip()
-            current_focus = str(reflection.get("current_focus") or "").strip()
-            stage_from = str(training_plan.get("stage") or "").strip() or "profile_initialized"
-            stage_to = _member_training_stage_from_mission_status(mission_run.get("status"))
-            member["growth_state"] = {
-                **growth_state,
-                "current_focus": current_focus or growth_state.get("current_focus"),
-                "next_goal": next_action or growth_state.get("next_goal"),
-                "last_reflection_at": datetime.now().isoformat(),
-            }
-            member["training_plan"] = {
-                **training_plan,
-                "stage": stage_to,
-                "next_action": next_action or training_plan.get("next_action"),
-                "review_after": (datetime.now() + timedelta(hours=24)).isoformat(),
-            }
-            updated_jobs: list[dict] = []
-            matched_job = False
-            role_hint = str(member.get("primary_role") or "").strip()
-            for job in current_jobs:
-                if not isinstance(job, dict):
+            sync_state = mission_run.get("member_reflection_sync", {})
+            sync_state = dict(sync_state) if isinstance(sync_state, dict) else {}
+            for group in member_groups:
+                member = group.get("member") if isinstance(group, dict) else None
+                if not isinstance(member, dict):
                     continue
-                if str(job.get("job_id") or "").strip() == role_hint:
-                    matched_job = True
-                    updated_jobs.append({
-                        **job,
-                        "status": mission_run.get("status") or job.get("status"),
-                        "target_outcome": next_action or job.get("target_outcome"),
-                    })
-                else:
-                    updated_jobs.append(job)
-            if matched_job:
-                member["current_jobs"] = updated_jobs
-            if (
-                signature != str(mission_run.get("member_growth_event_signature") or "").strip()
-                or stage_from != stage_to
-            ):
-                _record_member_growth_event(
-                    workspace,
-                    runtime_tenant_id,
+                scoped_run = {**mission_run, "actions": group.get("actions", [])}
+                reflection = _build_member_reflection_from_mission(scoped_run, member)
+                if not isinstance(reflection, dict):
+                    continue
+                signature = str(reflection.get("signature") or "").strip()
+                member_id = str(member.get("member_id") or "").strip()
+                if not member_id:
+                    continue
+                if signature and signature == str(sync_state.get(member_id) or "").strip():
+                    continue
+                _append_member_reflection_message(
+                    relationship_center,
+                    member_id=member_id,
+                    content=str(reflection.get("content") or "").strip(),
+                    mission_run_id=str(mission_run.get("mission_run_id") or ""),
+                    signature=signature,
+                )
+                growth_state = member.get("growth_state", {}) if isinstance(member.get("growth_state"), dict) else {}
+                training_plan = member.get("training_plan", {}) if isinstance(member.get("training_plan"), dict) else {}
+                current_jobs = member.get("current_jobs", []) if isinstance(member.get("current_jobs"), list) else []
+                next_action = str(reflection.get("next_action") or "").strip()
+                current_focus = str(reflection.get("current_focus") or "").strip()
+                stage_from = str(training_plan.get("stage") or "").strip() or "profile_initialized"
+                stage_to = _member_training_stage_from_mission_status(mission_run.get("status"))
+                member["growth_state"] = {
+                    **growth_state,
+                    "current_focus": current_focus or growth_state.get("current_focus"),
+                    "next_goal": next_action or growth_state.get("next_goal"),
+                    "last_reflection_at": datetime.now().isoformat(),
+                }
+                member["training_plan"] = {
+                    **training_plan,
+                    "stage": stage_to,
+                    "next_action": next_action or training_plan.get("next_action"),
+                    "review_after": (datetime.now() + timedelta(hours=24)).isoformat(),
+                }
+                updated_jobs: list[dict] = []
+                matched_job = False
+                role_hint = str(member.get("primary_role") or "").strip()
+                for job in current_jobs:
+                    if not isinstance(job, dict):
+                        continue
+                    if str(job.get("job_id") or "").strip() == role_hint:
+                        matched_job = True
+                        updated_jobs.append({
+                            **job,
+                            "status": mission_run.get("status") or job.get("status"),
+                            "target_outcome": next_action or job.get("target_outcome"),
+                        })
+                    else:
+                        updated_jobs.append(job)
+                if matched_job:
+                    member["current_jobs"] = updated_jobs
+                if (
+                    signature != str(mission_run.get("member_growth_event_signature") or "").strip()
+                    or stage_from != stage_to
+                ):
+                    _record_member_growth_event(
+                        workspace,
+                        runtime_tenant_id,
+                        member=member,
+                        mission_run=mission_run,
+                        stage_from=stage_from,
+                        stage_to=stage_to,
+                        summary=str(reflection.get("content") or "").strip(),
+                        signature=signature,
+                        next_action=next_action,
+                        current_focus=current_focus,
+                    )
+                _append_trainer_growth_comment(
+                    relationship_center,
                     member=member,
                     mission_run=mission_run,
+                    signature=signature,
                     stage_from=stage_from,
                     stage_to=stage_to,
-                    summary=str(reflection.get("content") or "").strip(),
-                    signature=signature,
                     next_action=next_action,
                     current_focus=current_focus,
                 )
-            _append_trainer_growth_comment(
-                relationship_center,
-                member=member,
-                mission_run=mission_run,
-                signature=signature,
-                stage_from=stage_from,
-                stage_to=stage_to,
-                next_action=next_action,
-                current_focus=current_focus,
-            )
-            mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
-            mission_run["member_reflection_sync_signature"] = signature
-            mission_run["member_growth_event_signature"] = signature
-            mission_run["member_reflection_member_id"] = member_id
-            changed = True
-
+                sync_state[member_id] = signature
+                mission_run["member_reflection_sync"] = sync_state
+                mission_run["member_reflection_synced_at"] = datetime.now().isoformat()
+                if len(member_groups) == 1:
+                    mission_run["member_reflection_sync_signature"] = signature
+                    mission_run["member_growth_event_signature"] = signature
+                    mission_run["member_reflection_member_id"] = member_id
+                changed = True
+    
         if changed:
             runtime["relationship_center"] = relationship_center
             runtime["child_members"] = {
@@ -2258,41 +2415,18 @@ def create_app() -> FastAPI:
         ]
         if not members:
             return {}
-        role_hint = str(
-            work_type_id
-            or context.get("work_type_id")
-            or context.get("runtime_primary_worker_id")
-            or ""
-        ).strip()
         selected_member_id = str(
             runtime.get("primary_child_member_id")
             or child_members.get("selected_member_id")
             or ""
         ).strip()
-        selected_member = next(
-            (item for item in members if str(item.get("member_id") or "").strip() == selected_member_id),
-            None,
+        target_member = resolve_selected_employee(
+            members=members,
+            selected_member_id=selected_member_id,
         )
-        target_member = None
-        if role_hint:
-            target_member = next(
-                (
-                    item for item in members
-                    if str(item.get("primary_role") or "").strip() == role_hint
-                ),
-                None,
-            )
-        if target_member is None and isinstance(selected_member, dict) and str(selected_member.get("primary_role") or "").strip() != "talent_development":
-            target_member = selected_member
-        if target_member is None:
-            target_member = next(
-                (
-                    item for item in members
-                    if str(item.get("primary_role") or "").strip() != "talent_development"
-                ),
-                None,
-            )
         if not isinstance(target_member, dict):
+            # Mission must not infer personnel ownership from list order or role
+            # similarity. Only the Talent Center's explicit selection is binding.
             return {}
         member_id = str(target_member.get("member_id") or "").strip()
         if not member_id:
@@ -2301,13 +2435,7 @@ def create_app() -> FastAPI:
             "member_id": member_id,
             "member_name": str(target_member.get("name") or "").strip() or None,
             "member_primary_role": str(target_member.get("primary_role") or "").strip() or None,
-            "member_resolution_source": (
-                "role_match"
-                if role_hint and str(target_member.get("primary_role") or "").strip() == role_hint
-                else "selected_member"
-                if isinstance(selected_member, dict) and str(selected_member.get("member_id") or "").strip() == member_id
-                else "first_active_domain_member"
-            ),
+            "member_resolution_source": "talent_center_selection",
             "tenant_id": tenant_id,
             "mission_kind": mission_kind or None,
         }
@@ -2315,6 +2443,7 @@ def create_app() -> FastAPI:
     _mission_bootstrap = create_mission_bootstrap_runtime_bindings(
         workspace=workspace,
         task_queue=task_queue,
+        organization_registry=organization_registry,
         tenant_manager=tenant_manager,
         mission_planner=mission_planner,
         upsert_plan_learning_tasks=_upsert_plan_learning_tasks,
@@ -2339,6 +2468,16 @@ def create_app() -> FastAPI:
     _refresh_mission_runs = _mission_bootstrap["refresh_mission_runs"]
     _start_mission = _mission_bootstrap["start_mission"]
 
+    register_experience_reflection_routes(
+        app,
+        workspace=workspace,
+        get_session_user=_get_session_user,
+        authorize_tenant=_user_can_access_tenant,
+        tenant_role=_tenant_role_for_user,
+        success_response=success_response,
+        error_response=error_response,
+    )
+
     register_mission_routes(
         app,
         workspace=workspace,
@@ -2354,6 +2493,11 @@ def create_app() -> FastAPI:
         derive_follow_up_context=derive_follow_up_context,
         success_response=success_response,
         error_response=error_response,
+        get_session_user=_get_session_user,
+        authorize_tenant=_user_can_access_tenant,
+        tenant_role=_tenant_role_for_user,
+        organization_registry=organization_registry,
+        skill_replay_runtime=_skill_replay_runtime,
     )
 
     register_self_media_routes(

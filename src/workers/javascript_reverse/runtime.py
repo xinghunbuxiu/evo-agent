@@ -126,6 +126,7 @@ def handle_javascript_reverse_mission_node(
         "_mission_run_id": mission_run_id,
         "_mission_node_id": node_id,
         "_mission_decision_trace": node["decision_trace"],
+        "_mission_dispatch_authorization": node["mission_runtime_authorization"],
         "_mission_kind": plan.get("mission_kind"),
         "_goal": plan.get("goal"),
         "_role_reflection_context": role_reflection_context,
@@ -421,9 +422,62 @@ def complete_javascript_reverse_promotion_action(
     reconstruct_snapshot = extract_task_snapshot(reconstruct_task)
     analyze_snapshot = extract_task_snapshot(analyze_task) if analyze_task else {}
     metrics = reconstruct_snapshot.get("evaluation_metrics", {}) if isinstance(reconstruct_snapshot.get("evaluation_metrics"), dict) else {}
+    acceptance_failed = (
+        reconstruct_snapshot.get("evaluation_verdict") != "pass"
+        or metrics.get("has_target_dir") is not True
+    )
+    reconstruct_task_id = str(reconstruct_snapshot.get("task_id") or "").strip()
+    if acceptance_failed or not reconstruct_task_id:
+        missing_evidence = not reconstruct_task_id
+        current["status"] = "blocked"
+        current["detail"] = (
+            "缺少 reconstruct 任务证据 ID；不沉淀经验，也不生成 Skill 候选"
+            if missing_evidence
+            else "交付验收未通过或缺少真实目标目录；不沉淀成功经验，也不生成 Skill 候选"
+        )
+        current["promotion"] = {
+            "status": "blocked",
+            "reason": (
+                "delivery_evidence_missing"
+                if missing_evidence
+                else "delivery_acceptance_not_passed"
+            ),
+            "validation_evidence": {
+                "verdict": reconstruct_snapshot.get("evaluation_verdict"),
+                "has_target_dir": metrics.get("has_target_dir"),
+                "reconstruct_task_id": reconstruct_snapshot.get("task_id"),
+            },
+        }
+        current["next_actions"] = (
+            ["恢复 reconstruct 任务证据 ID，再重新执行交付复盘"]
+            if missing_evidence
+            else [
+                "检查 reconstruct 的失败验收项和实际交付目录",
+                "修复后重新执行并通过独立验收，再沉淀经验或 Skill 候选",
+            ]
+        )
+        return current
     framework_hint = infer_framework_hint_from_delivery({
         "summary": f"{analyze_snapshot.get('summary') or ''} {reconstruct_snapshot.get('summary') or ''}",
     })
+    runtime_route = mission_run.get("runtime_route") if isinstance(mission_run.get("runtime_route"), dict) else {}
+    mission_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+    primary_worker_id = str(
+        runtime_route.get("primary_worker_id")
+        or mission_context.get("runtime_primary_worker_id")
+        or ""
+    ).strip() or None
+    evidence_ids = [
+        str(task_id)
+        for task_id in (analyze_snapshot.get("task_id"), reconstruct_snapshot.get("task_id"))
+        if str(task_id or "").strip()
+    ]
+    validation_evidence = {
+        "verdict": reconstruct_snapshot.get("evaluation_verdict"),
+        "evaluation_score": reconstruct_snapshot.get("evaluation_score"),
+        "analyze_task_id": analyze_snapshot.get("task_id"),
+        "reconstruct_task_id": reconstruct_snapshot.get("task_id"),
+    }
     experience_id = f"mission_delivery_{mission_run.get('mission_run_id')}"
 
     exp = Experience(
@@ -438,7 +492,10 @@ def complete_javascript_reverse_promotion_action(
             "mission_delivery": {
                 "mission_run_id": mission_run["mission_run_id"],
                 "mission_node_id": action["node_id"],
+                "primary_worker_id": primary_worker_id,
+                "evidence_ids": evidence_ids,
                 "decision_trace": action["decision_trace"],
+                "validation_evidence": validation_evidence,
                 "validation_summary": {
                     "verdict": reconstruct_snapshot["evaluation_verdict"],
                     "evaluation_score": reconstruct_snapshot["evaluation_score"],

@@ -1,0 +1,13 @@
+{
+  "socket_path": "/run/evo-skill-validator/validator.sock",
+  "policy_file": "/etc/evo-skill-validator/policies.json",
+  "signing_key": "/etc/evo-skill-validator/validator-private-key.pem",
+  "key_id": "evo-validator-2026-01",
+  "validator_id": "evo-independent-skill-validator",
+  "broker_public_key": "/etc/evo-skill-validator/broker-public-key.raw",
+  "broker_key_id": "evo-broker-2026-01",
+  "allowed_uids": [1001],
+  "workspace_ids": ["evo-agent"],
+  "replay_store_path": "/var/lib/evo-skill-validator/requests.sqlite3",
+  "max_workers": 2
+}

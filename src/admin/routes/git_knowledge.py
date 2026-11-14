@@ -13,6 +13,9 @@ from typing import Callable
 from fastapi import Request
 
 from core import ExperienceStore, GitProviderError
+from core.knowledge_shards import KnowledgeShardRegistry
+from admin.experience_shard_runtime import archive_verified_experience_files, rebuild_experience_artifact_catalog
+from admin.experience_outbox_runtime import sync_experience_outbox
 
 
 def register_git_knowledge_routes(
@@ -99,16 +102,37 @@ def register_git_knowledge_routes(
                 try:
                     with open(skill_file, encoding="utf-8") as f:
                         skill_data = json.load(f)
+                    parameters = skill_data.get("parameters") if isinstance(skill_data.get("parameters"), dict) else {}
+                    provenance = {
+                        key: value
+                        for key, value in {
+                            "mission_run_id": parameters.get("mission_run_id"),
+                            "mission_node_id": parameters.get("mission_node_id"),
+                            "mission_kind": parameters.get("mission_kind"),
+                            "primary_worker_id": parameters.get("primary_worker_id"),
+                            "worker_id": parameters.get("worker_id") or parameters.get("source_worker_id"),
+                            "evidence_ids": parameters.get("evidence_ids"),
+                            "validation_evidence": parameters.get("validation_evidence"),
+                            "source_experience_ids": parameters.get("source_experience_ids"),
+                            "source_mission_run_ids": parameters.get("source_mission_run_ids"),
+                            "source_worker_ids": parameters.get("source_worker_ids"),
+                            "source_experiences": parameters.get("source_experiences"),
+                        }.items()
+                        if value is not None and value != ""
+                    }
                     skill_entries.append({
                         "id": skill_data.get("id", skill_file.stem),
                         "name": skill_data.get("name", skill_file.stem),
                         "domain": skill_data.get("domain", "javascript"),
+                        "capability_type": skill_data.get("capability_type"),
                         "trust_level": trust_level,
                         "source": skill_data.get("source", "local"),
                         "path": str(skill_file),
                         "usage_count": skill_data.get("usage_count", 0),
                         "success_rate": skill_data.get("success_rate"),
+                        "created_at": skill_data.get("created_at"),
                         "updated_at": skill_data.get("updated_at") or skill_data.get("created_at"),
+                        "provenance": provenance,
                     })
                 except Exception:
                     skill_entries.append({
@@ -281,6 +305,74 @@ def register_git_knowledge_routes(
             "tenant_id": tenant_id,
             "file_path": file_path,
         }, f"技能 {skill_name} 已上传到知识库")
+
+    @app.get("/api/tenants/{tenant_id}/knowledge-shards")
+    async def list_tenant_knowledge_shards(tenant_id: str):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        registry = KnowledgeShardRegistry(tenant_root / "knowledge_shards")
+        shards = registry.list_shards()
+        domain_summary: dict[str, dict[str, int]] = {}
+        for shard in shards:
+            domain = str(shard.get("domain") or "unknown")
+            summary = domain_summary.setdefault(domain, {"total": 0, "active": 0, "sealed": 0, "provisioning": 0})
+            summary["total"] += 1
+            state = str(shard.get("status") or "")
+            if state in summary:
+                summary[state] += 1
+        return success_response({
+            "tenant_id": tenant_id,
+            "shards": shards,
+            "total": len(shards),
+            "domains": domain_summary,
+        })
+
+    @app.post("/api/tenants/{tenant_id}/knowledge-shards/experience/rebuild")
+    async def rebuild_tenant_experience_catalog(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
+        if not token or token == "your_real_token_here":
+            return error_response("未找到可用的 Gitee Token", 400)
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        registry = KnowledgeShardRegistry(tenant_root / "knowledge_shards")
+        try:
+            result = await rebuild_experience_artifact_catalog(
+                registry=registry, provider=provider, token=token, tenant_id=tenant_id
+            )
+        except Exception as exc:
+            return error_response(f"经验目录重建失败: {type(exc).__name__}: {exc}", 500)
+        return success_response(result, "经验分片 artifact catalog 重建完成")
+
+    @app.post("/api/tenants/{tenant_id}/experience-outbox/sync")
+    async def sync_tenant_experience_outbox(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
+        token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
+        if not token or token == "your_real_token_here":
+            return error_response("未找到可用的 Gitee Token", 400)
+        git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
+        provider = get_git_provider_instance(config, git_knowledge)
+        namespace = str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else ""
+        try:
+            result = await sync_experience_outbox(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                provider=provider,
+                token=token,
+                namespace=namespace,
+                repository_name_prefix=f"evo-{sanitize_repo_name(tenant_id).lower()}-experience",
+            )
+        except Exception as exc:
+            return error_response(f"经验 outbox 同步失败: {type(exc).__name__}: {exc}", 500)
+        return success_response(result, "经验 outbox 同步完成")
 
     @app.get("/api/git/provider/status")
     async def git_provider_status(request: Request):
@@ -543,19 +635,16 @@ def register_git_knowledge_routes(
 
     @app.post("/api/tenants/{tenant_id}/git-knowledge/export/experiences")
     async def export_tenant_experiences_to_git(tenant_id: str, request: Request):
+        tenant_root = (workspace / ".tenants" / tenant_id).resolve()
+        tenants_root = (workspace / ".tenants").resolve()
+        if tenant_root.parent != tenants_root:
+            return error_response("非法 tenant_id", 400)
         token = get_user_gitee_token(request) or os.getenv("GITEE_TOKEN")
         if not token or token == "your_real_token_here":
             return error_response("未找到可用的 Gitee Token", 400)
 
         git_knowledge = tenant_manager.get_git_knowledge_config(tenant_id)
         provider = get_git_provider_instance(config, git_knowledge)
-        target_repo, target_url = get_tenant_git_repo(
-            tenant_manager,
-            tenant_id,
-            "experiences",
-            config.experiences.full_name,
-            config.experiences.url,
-        )
         store = ExperienceStore(workspace, tenant_id)
         autonomy_runtime = load_autonomy_runtime(workspace, tenant_id)
         child_experience_journals, journal_summary = collect_child_experience_journals(autonomy_runtime)
@@ -567,25 +656,33 @@ def register_git_knowledge_routes(
             "child_experience_journals": child_experience_journals,
             "journal_summary": journal_summary,
         }
-        file_path = f"exports/experiences/{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        content = json.dumps(payload, indent=2, ensure_ascii=False)
         try:
-            await provider.upsert_text_file(
+            archive_result = await archive_verified_experience_files(
+                workspace=workspace,
+                tenant_id=tenant_id,
+                provider=provider,
                 token=token,
-                repo_full_name=target_repo,
-                file_path=file_path,
-                content=json.dumps(payload, indent=2, ensure_ascii=False),
+                namespace=str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else "",
+                repository_name_prefix=f"evo-{sanitize_repo_name(tenant_id).lower()}-experience",
+                artifact_prefix=f"tenants/{tenant_id}/experience_exports/{timestamp}",
+                files={"experience-export.json": content},
                 message=f"Export experiences for tenant {tenant_id}",
-                branch="master",
             )
-        except GitProviderError as exc:
-            return error_response(str(exc), 500)
+        except Exception as exc:
+            return error_response(f"经验分片导出失败: {type(exc).__name__}: {exc}", 500)
 
         return success_response({
             "tenant_id": tenant_id,
-            "repo": target_url,
-            "file_path": file_path,
+            "repository_id": archive_result["repository_id"],
+            "repo": archive_result["target_url"],
+            "repo_full_name": archive_result["target_repo"],
+            "file_path": archive_result["files"][0],
+            "artifact_count": len(archive_result["artifacts"]),
+            "integrity_verified": archive_result["integrity_verified"],
             "journal_summary": journal_summary,
-        }, "经验摘要已导出到 Git knowledge")
+        }, "经验摘要已写入编号经验分片并完成回读验证")
 
     @app.post("/api/tenants/{tenant_id}/git-knowledge/export/report")
     async def export_tenant_report_to_git(tenant_id: str, request: Request):

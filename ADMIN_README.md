@@ -131,6 +131,76 @@ GET /api/knowledge/skills/{domain}/{skill_name}
 GET /api/stats
 ```
 
+### Mission Worker Claim 恢复复核
+
+服务启动时，如果关联队列任务缺失、状态无法读取、仍未结束，或 Worker 释放失败，系统会保留占用并标记为 `needs_review`，避免误释放正在使用的员工。
+
+```bash
+# 使用已登录浏览器会话对应的 session Cookie，并明确指定租户
+curl -b "session=<登录后获得的 session cookie>" \
+  "http://localhost:8000/api/missions/worker-claims/recovery-review?tenant_id=tenant-a&limit=100"
+```
+
+接口只读取已持久化的 Mission 记录，不刷新 Mission、不派发任务，也不会释放 Worker。当前它提供的是**待复核清单**，不是人工确认/释放操作接口。
+
+该接口要求有效登录，并且必须指定已授权的 `tenant_id`。租户成员关系目前通过部署环境变量显式配置，不提供用户自助加入或 HTTP 提权入口；未配置、配置错误或身份字段不完整时一律拒绝访问。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
+
+```bash
+# 示例：为 password 登录用户 ID=7 授予 tenant-a 管理员角色，
+# 为 Gitee 用户 ID=12345 授予 tenant-a 只读成员角色
+EVO_TENANT_MEMBERSHIPS_JSON='{"password:7":{"tenant-a":"tenant_admin"},"gitee:12345":{"tenant-a":"viewer"}}'
+```
+
+成员关系支持两种部署方式：小规模部署可继续使用 `EVO_TENANT_MEMBERSHIPS_JSON`；推荐生产环境使用受控文件 `EVO_TENANT_MEMBERSHIPS_FILE=/secure/path/memberships.json`。配置文件不存在、不可读、格式错误或含重复 JSON key 时一律拒绝访问；文件方式优先于 JSON 环境变量，不会在文件缺失时回退到环境变量。
+
+推荐通过服务器 Shell 管理成员，不开放普通 HTTP 自助提权接口：
+
+```bash
+# 初次授予租户管理员（需在可信服务器终端执行）
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json \
+  set password:7 tenant-a tenant_admin
+
+# 授予 Gitee 用户只读角色
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json \
+  set gitee:12345 tenant-a viewer
+
+# 调整角色 / 移除成员
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json \
+  set password:7 tenant-a member
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json \
+  remove password:7 tenant-a
+
+# 查看当前成员关系
+PYTHONPATH=src python3 scripts/manage_tenant_memberships.py \
+  --file /secure/path/memberships.json list
+```
+
+脚本使用进程锁、临时文件 + 原子替换、文件权限 `0600`。审计操作者身份由进程的有效操作系统 UID 和系统账户名自动取得，不接受命令行传入的操作者名称；每次变更先记录 `change_requested`，原子写入成功后再记录 `change_applied`，审计包含时间、目标身份、租户和变更前后角色。部署时应将 registry 与审计文件放在仅服务账号/运维管理员可访问的持久化目录，并设置 `EVO_TENANT_MEMBERSHIPS_FILE` 指向 registry。备份时应同时备份 registry 与审计日志。
+
+角色用于访问边界识别：`tenant_admin`、`member`、`viewer` 均可读取自己所属租户的复核清单；只有 `tenant_admin` 可以执行人工释放。账号密码用户与 Gitee 用户使用不同的身份命名空间，避免相同数字 ID 冲突。
+
+人工释放前必须由运维人员确认任务确实已结束，并核对任务结果。接口会从服务端持久化 Mission run 中重新读取 Claim 及全部关联任务，不接受客户端传入的 Worker/任务列表；只有全部关联任务处于 `success`、`completed`、`failed` 或 `cancelled` 终态，且 Worker Registry 当前占用与 Claim 一致时才会释放。任何数据缺失、租户冲突、状态不确定或 Registry 不匹配都会拒绝释放。
+
+```bash
+curl -X POST \
+  -b "session=<登录后获得的 session cookie>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "tenant-a",
+    "mission_run_id": "mission-run-id",
+    "reason": "已核对所有关联任务结果，确认任务终止且 Worker 占用属于该 Claim"
+  }' \
+  "http://localhost:8000/api/missions/worker-claims/<claim-id>/release"
+```
+
+释放操作会先持久化 `release_requested` 意图并记录操作者、租户、任务、原因和操作 ID，再释放 Worker Registry，最后将 Mission Claim 标记为 released 并写入 `release_applied` 审计。审计事件按操作 ID 幂等；如果释放状态已落盘但 applied 审计写入失败，重复请求会补齐缺失的 applied 审计事件。启动恢复会识别持久化的 requested 意图，并在重新核验所有关联任务终态后继续完成释放。复核审计文件位于 `.admin/worker_claim_recovery_audit.jsonl`，文件权限为 `0600`。
+
+**注意**：Mission runs 与 Worker Registry 仍是两个独立文件存储；协调锁覆盖本应用内遵循该锁的 Claim 转换和 Mission 保存路径，但这不是数据库级跨存储事务，也不提供跨主机共享文件系统的一致性保证。部署为多主机时应迁移到具备事务/租约能力的共享持久化存储。发生 503 时不要据此断言 Worker 一定仍占用或一定已释放，应先查看 recovery-review 清单、Mission Claim 状态和审计日志，再决定是否重试。
+
 ## 生产部署
 
 ### 1. 安全加固

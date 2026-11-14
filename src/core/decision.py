@@ -500,14 +500,60 @@ class DecisionEngine:
             capability_id=decision.selected_capability_id,
             strategy_id=(decision.strategy or {}).get("strategy_id"),
         )
+        feedback = result.feedback if isinstance(result.feedback, dict) else {}
+        skill_template = (
+            feedback.get("skill_execution_template")
+            if isinstance(feedback.get("skill_execution_template"), dict)
+            else {}
+        )
+        skill_id = str(skill_template.get("skill_id") or "").strip()
+        matched_skills = feedback.get("matched_verified_skills")
+        if not isinstance(matched_skills, list):
+            matched_skills = []
+        skill_execution = None
+        if skill_id:
+            skill_execution = {
+                "schema_version": "skill.execution.feedback.v1",
+                "skill_id": skill_id,
+                "skill_name": skill_template.get("skill_name"),
+                "skill_version": skill_template.get("skill_version"),
+                "skill_trust_level": skill_template.get("skill_trust_level"),
+                "application_mode": "provider_execution_template",
+                "task_type": task_type,
+                "execution_success": bool(result.success),
+                "execution_status": "succeeded" if result.success else "failed",
+                "quality_score": quality_score,
+                "evaluation": evaluation_dict if evaluation else None,
+                "matched_skills": [
+                    {
+                        key: item.get(key)
+                        for key in ("id", "name", "version", "trust_level")
+                        if item.get(key) is not None
+                    }
+                    for item in matched_skills
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                ],
+            }
+            for source_key, target_key in (
+                ("task_id", "task_id"),
+                ("mission_run_id", "mission_run_id"),
+                ("mission_node_id", "mission_node_id"),
+                ("worker_id", "worker_id"),
+            ):
+                value = parameters.get(source_key)
+                if value is not None and str(value).strip():
+                    skill_execution[target_key] = str(value).strip()
+
         metadata = {
             "capability_id": decision.selected_capability_id,
             "strategy": decision.strategy or {},
             "evaluation": evaluation_dict if evaluation else None,
-            "feedback": result.feedback,
+            "feedback": feedback,
             "result_summary": result.summary,
             "learning_signature": learning_signature,
         }
+        if skill_execution is not None:
+            metadata["skill_execution"] = skill_execution
         exp = Experience(
             id=self._make_experience_id(
                 tenant_id=tenant_id,
@@ -815,6 +861,7 @@ class DecisionEngine:
                 "domain": skill.domain,
                 "capability_type": skill.capability_type,
                 "trust_level": skill.trust_level.value,
+                "version": skill.version,
                 "success_rate": skill.success_rate,
                 "usage_count": skill.usage_count,
                 "framework_hint": parameters_map.get("framework_hint"),
@@ -875,6 +922,8 @@ class DecisionEngine:
         return {
             "skill_id": primary.get("id"),
             "skill_name": primary.get("name"),
+            "skill_version": primary.get("version"),
+            "skill_trust_level": primary.get("trust_level"),
             "framework_hint": framework_hint,
             "mission_kind": primary.get("mission_kind"),
             "accepted_tasks": primary.get("accepted_tasks", []),
