@@ -31,6 +31,11 @@ class FakeContainer:
         self.killed = False
         self.removed = False
         self.create_config = None
+        self.attrs = {}
+        self.attrs_override = {}
+
+    def reload(self):
+        return None
 
     def start(self):
         if self.start_error:
@@ -66,12 +71,73 @@ class FakeContainers:
     def create(self, **kwargs):
         self.config = kwargs
         self.container.create_config = kwargs
+        mounts = [
+            {
+                "Type": "bind",
+                "Source": str(Path(source).resolve()),
+                "Destination": mount["bind"],
+                "RW": mount.get("mode") != "ro",
+            }
+            for source, mount in (kwargs.get("volumes") or {}).items()
+        ]
+        self.container.attrs = {
+            "Config": {
+                "User": kwargs.get("user"),
+                "Tty": kwargs.get("tty"),
+                "OpenStdin": kwargs.get("stdin_open"),
+            },
+            "HostConfig": {
+                "NetworkMode": kwargs.get("network_mode"),
+                "ReadonlyRootfs": kwargs.get("read_only"),
+                "Privileged": kwargs.get("privileged"),
+                "CapDrop": kwargs.get("cap_drop"),
+                "CapAdd": kwargs.get("cap_add"),
+                "SecurityOpt": kwargs.get("security_opt"),
+                "Memory": kwargs.get("mem_limit"),
+                "MemorySwap": kwargs.get("memswap_limit"),
+                "NanoCpus": kwargs.get("nano_cpus"),
+                "PidsLimit": kwargs.get("pids_limit"),
+                "ShmSize": kwargs.get("shm_size"),
+                "IpcMode": kwargs.get("ipc_mode"),
+                "Tmpfs": kwargs.get("tmpfs"),
+                "Devices": kwargs.get("devices"),
+                "DeviceRequests": kwargs.get("device_requests"),
+                "VolumesFrom": kwargs.get("volumes_from"),
+                "PidMode": kwargs.get("pid_mode") or "",
+                "AutoRemove": kwargs.get("auto_remove"),
+            },
+            "Mounts": mounts,
+        }
+        for section, override in self.container.attrs_override.items():
+            self.container.attrs.setdefault(section, {}).update(override)
         return self.container
+
+
+class FakeImages:
+    def __init__(self, image):
+        self.image = image
+
+    def get(self, reference):
+        if reference != IMAGE:
+            raise AssertionError("unexpected image reference")
+        return self.image
 
 
 class FakeDockerClient:
     def __init__(self, container):
         self.containers = FakeContainers(container)
+        self.info_payload = {
+            "SecurityOptions": ["name=seccomp,profile=builtin"],
+            "MemoryLimit": True,
+            "SwapLimit": True,
+            "CpuCfsQuota": True,
+            "PidsLimit": True,
+            "CgroupVersion": "2",
+        }
+        self.images = FakeImages(SimpleNamespace(attrs={"RepoDigests": [IMAGE]}))
+
+    def info(self):
+        return dict(self.info_payload)
 
 
 class DockerSandboxExecutorTests(unittest.TestCase):
@@ -89,6 +155,51 @@ class DockerSandboxExecutorTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_runtime_preflight_verifies_pinned_image_and_real_container_policy(self):
+        self.assertTrue(self.executor.verify_runtime_ready())
+        config = self.client.containers.config
+        self.assertEqual(config["image"], IMAGE)
+        self.assertEqual(config["command"], ["/usr/local/bin/python", "-I", "-S", "-c", "pass"])
+        self.assertEqual(config["network_mode"], "none")
+        self.assertTrue(config["read_only"])
+        self.assertEqual(config["cap_drop"], ["ALL"])
+        self.assertEqual(config["security_opt"], ["no-new-privileges:true"])
+        self.assertTrue(self.container.started)
+        self.assertTrue(self.container.removed)
+        self.assertEqual(config.get("volumes"), None)
+
+    def test_runtime_preflight_rejects_missing_seccomp_before_container_creation(self):
+        self.client.info_payload["SecurityOptions"] = ["name=apparmor"]
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "seccomp"):
+            self.executor.verify_runtime_ready()
+        self.assertIsNone(self.client.containers.config)
+
+    def test_runtime_preflight_rejects_missing_cgroup_resource_enforcement(self):
+        self.client.info_payload["PidsLimit"] = False
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "PidsLimit"):
+            self.executor.verify_runtime_ready()
+        self.assertIsNone(self.client.containers.config)
+
+    def test_runtime_preflight_rejects_digest_not_reported_by_daemon(self):
+        self.client.images.image.attrs["RepoDigests"] = ["registry.example/evo/python-runner@sha256:" + ("c" * 64)]
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "exact configured repository digest"):
+            self.executor.verify_runtime_ready()
+        self.assertIsNone(self.client.containers.config)
+
+    def test_runtime_preflight_rejects_inspected_host_network_override(self):
+        self.container.attrs_override = {"HostConfig": {"NetworkMode": "host"}}
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "resource or isolation policy"):
+            self.executor.verify_runtime_ready()
+        self.assertFalse(self.container.started)
+        self.assertTrue(self.container.removed)
+
+    def test_runtime_preflight_rejects_failed_probe_and_cleans_container(self):
+        self.container.wait_result = {"StatusCode": 9}
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "did not exit successfully"):
+            self.executor.verify_runtime_ready()
+        self.assertTrue(self.container.started)
+        self.assertTrue(self.container.removed)
 
     def test_creates_container_with_fixed_isolation_policy(self):
         result = self.executor(self.spec)

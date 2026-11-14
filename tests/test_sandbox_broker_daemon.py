@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from core.sandbox_broker_daemon import BrokerDaemonConfigurationError, build_service
+from core.sandbox_docker_executor import DockerSandboxConfigurationError
 
 
 IMAGE = "registry.example/evo/python-runner@sha256:" + ("b" * 64)
@@ -71,13 +72,28 @@ class SandboxBrokerDaemonTests(unittest.TestCase):
         with patch(
             "core.sandbox_broker_daemon.DockerSandboxExecutor.connect_docker_socket",
             return_value=object(),
-        ):
+        ), patch(
+            "core.sandbox_broker_daemon.DockerSandboxExecutor.verify_runtime_ready",
+            return_value=True,
+        ) as preflight:
             service, allowed_uids, workers = build_service(self.config)
+        preflight.assert_called_once()
         self.assertEqual(allowed_uids, (os.getuid(),))
         self.assertEqual(workers, 2)
         self.assertIn("workspace-one", service.workspace_roots)
         self.assertEqual(service.workspace_tenants["workspace-one"], frozenset({"tenant-one"}))
         self.assertIsNotNone(service.skill_artifact_store)
+
+    def test_docker_isolation_preflight_failure_blocks_broker_startup(self):
+        with patch(
+            "core.sandbox_broker_daemon.DockerSandboxExecutor.connect_docker_socket",
+            return_value=object(),
+        ), patch(
+            "core.sandbox_broker_daemon.DockerSandboxExecutor.verify_runtime_ready",
+            side_effect=DockerSandboxConfigurationError("seccomp is unavailable"),
+        ):
+            with self.assertRaisesRegex(BrokerDaemonConfigurationError, "isolation preflight failed"):
+                build_service(self.config)
 
     def test_rejects_missing_or_ambiguous_workspace_tenant_allowlist(self):
         invalid_configs = (

@@ -164,6 +164,200 @@ class DockerSandboxExecutor:
         client.ping()
         return client
 
+    def _skill_replay_container_options(self, *, command, labels, volumes=None) -> dict:
+        """Return the single fixed container policy used by Replay and startup probes."""
+        options = {
+            "image": self.image,
+            "command": command,
+            "name": None,
+            "hostname": None,
+            "user": "65532:65532",
+            "working_dir": "/tmp",
+            "environment": {
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONUNBUFFERED": "1",
+                "HOME": "/tmp",
+                "PYTHONNOUSERSITE": "1",
+            },
+            "read_only": True,
+            "network_mode": "none",
+            "privileged": False,
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges:true"],
+            "mem_limit": _MAX_MEMORY_BYTES,
+            "memswap_limit": _MAX_MEMORY_BYTES,
+            "nano_cpus": _MAX_CPU_NANOS,
+            "shm_size": 32 * 1024 * 1024,
+            "pids_limit": _MAX_PIDS,
+            "ipc_mode": "private",
+            "tmpfs": {
+                "/tmp": (
+                    f"rw,noexec,nosuid,nodev,size={_TMPFS_SIZE_BYTES},"
+                    "mode=1777"
+                ),
+            },
+            "log_config": self.log_config,
+            "labels": dict(labels),
+            "detach": True,
+            "auto_remove": False,
+            "stdin_open": False,
+            "tty": False,
+            "init": True,
+        }
+        if volumes is not None:
+            options["volumes"] = volumes
+        return options
+
+    def _verify_container_isolation(self, container: Any, *, expected_mounts) -> None:
+        """Inspect the created container before start; reject policy drift."""
+        try:
+            container.reload()
+            attributes = container.attrs
+        except Exception as exc:
+            raise DockerSandboxConfigurationError(
+                "Docker could not confirm the created container isolation policy"
+            ) from exc
+        if not isinstance(attributes, dict):
+            raise DockerSandboxConfigurationError("Docker container inspection is malformed")
+        config = attributes.get("Config")
+        host = attributes.get("HostConfig")
+        mounts = attributes.get("Mounts")
+        if not isinstance(config, dict) or not isinstance(host, dict) or not isinstance(mounts, list):
+            raise DockerSandboxConfigurationError("Docker container inspection is incomplete")
+
+        if config.get("User") != "65532:65532" or config.get("Tty") is not False or config.get("OpenStdin") is not False:
+            raise DockerSandboxConfigurationError("Docker container identity or interactive settings are unsafe")
+        required_host_values = {
+            "NetworkMode": "none",
+            "ReadonlyRootfs": True,
+            "Privileged": False,
+            "Memory": _MAX_MEMORY_BYTES,
+            "MemorySwap": _MAX_MEMORY_BYTES,
+            "NanoCpus": _MAX_CPU_NANOS,
+            "PidsLimit": _MAX_PIDS,
+            "ShmSize": 32 * 1024 * 1024,
+            "IpcMode": "private",
+            "AutoRemove": False,
+        }
+        if any(host.get(key) != value for key, value in required_host_values.items()):
+            raise DockerSandboxConfigurationError("Docker did not apply the required resource or isolation policy")
+        if set(host.get("CapDrop") or []) != {"ALL"} or host.get("CapAdd") not in (None, []):
+            raise DockerSandboxConfigurationError("Docker capability policy is unsafe")
+        security_options = host.get("SecurityOpt")
+        if not isinstance(security_options, list) or "no-new-privileges:true" not in security_options:
+            raise DockerSandboxConfigurationError("Docker no-new-privileges policy is missing")
+        if host.get("Devices") not in (None, []) or host.get("DeviceRequests") not in (None, []):
+            raise DockerSandboxConfigurationError("Docker device access is not permitted")
+        if host.get("VolumesFrom") not in (None, []):
+            raise DockerSandboxConfigurationError("Docker inherited mounts are not permitted")
+        if host.get("PidMode") not in (None, "", "private"):
+            raise DockerSandboxConfigurationError("Docker host or shared PID namespace is not permitted")
+
+        tmpfs = host.get("Tmpfs")
+        if not isinstance(tmpfs, dict) or set(tmpfs) != {"/tmp"}:
+            raise DockerSandboxConfigurationError("Docker writable temporary filesystem policy is invalid")
+        tmpfs_options = set(str(tmpfs["/tmp"]).split(","))
+        if not {
+            "rw", "noexec", "nosuid", "nodev",
+            f"size={_TMPFS_SIZE_BYTES}", "mode=1777",
+        }.issubset(tmpfs_options):
+            raise DockerSandboxConfigurationError("Docker temporary filesystem is not sufficiently restricted")
+
+        allowed_system_mounts = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
+        actual_mounts = []
+        for mount in mounts:
+            if not isinstance(mount, dict):
+                raise DockerSandboxConfigurationError("Docker mount inspection is malformed")
+            destination = mount.get("Destination")
+            if destination in allowed_system_mounts:
+                continue
+            if mount.get("Type") != "bind" or mount.get("RW") is not False:
+                raise DockerSandboxConfigurationError("Docker contains an unexpected writable or non-bind mount")
+            actual_mounts.append((mount.get("Source"), destination))
+        expected = [(str(Path(source).resolve()), destination) for source, destination in expected_mounts]
+        if sorted(actual_mounts) != sorted(expected):
+            raise DockerSandboxConfigurationError("Docker mount set does not match the exact read-only input contract")
+
+    def _verify_daemon_capabilities(self) -> None:
+        """Require seccomp and cgroup resource enforcement before accepting work."""
+        try:
+            info = self.docker_client.info()
+        except Exception as exc:
+            raise DockerSandboxConfigurationError("Docker daemon security capabilities are unavailable") from exc
+        if not isinstance(info, dict):
+            raise DockerSandboxConfigurationError("Docker daemon information is malformed")
+        security_options = info.get("SecurityOptions")
+        if (
+            not isinstance(security_options, list)
+            or not any(
+                "seccomp" in str(option).lower() and "unconfined" not in str(option).lower()
+                for option in security_options
+            )
+        ):
+            raise DockerSandboxConfigurationError("Docker daemon does not report an enforced seccomp profile")
+        for feature in ("MemoryLimit", "SwapLimit", "CpuCfsQuota", "PidsLimit"):
+            if info.get(feature) is not True:
+                raise DockerSandboxConfigurationError(
+                    f"Docker daemon does not confirm required cgroup feature: {feature}"
+                )
+        if str(info.get("CgroupVersion") or "") not in {"1", "2"}:
+            raise DockerSandboxConfigurationError("Docker cgroup version is unavailable")
+
+    def verify_runtime_ready(self) -> bool:
+        """Prove the pinned image and fixed isolation policy work before daemon startup."""
+        self._verify_daemon_capabilities()
+        try:
+            image = self.docker_client.images.get(self.image)
+        except Exception as exc:
+            raise DockerSandboxConfigurationError(
+                "the exact digest-pinned Skill Replay image is not available locally"
+            ) from exc
+        image_attributes = getattr(image, "attrs", None)
+        repo_digests = image_attributes.get("RepoDigests") if isinstance(image_attributes, dict) else None
+        if not isinstance(repo_digests, list) or self.image not in repo_digests:
+            raise DockerSandboxConfigurationError(
+                "Docker image inspection did not confirm the exact configured repository digest"
+            )
+
+        container = None
+        try:
+            container = self.docker_client.containers.create(
+                **self._skill_replay_container_options(
+                    command=["/usr/local/bin/python", "-I", "-S", "-c", "pass"],
+                    labels={
+                        "com.evo-agent.sandbox": "true",
+                        "com.evo-agent.skill-replay": "preflight",
+                    },
+                )
+            )
+            self._verify_container_isolation(container, expected_mounts=[])
+            container.start()
+            result = container.wait(timeout=10)
+            if (
+                not isinstance(result, dict)
+                or isinstance(result.get("StatusCode"), bool)
+                or result.get("StatusCode") != 0
+            ):
+                raise DockerSandboxConfigurationError(
+                    "isolated Skill Replay preflight container did not exit successfully"
+                )
+        except DockerSandboxConfigurationError:
+            raise
+        except Exception as exc:
+            raise DockerSandboxConfigurationError(
+                "isolated Skill Replay preflight container could not complete"
+            ) from exc
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True, v=True)
+                except Exception as exc:
+                    raise DockerSandboxConfigurationError(
+                        "isolated Skill Replay preflight container cleanup failed"
+                    ) from exc
+        return True
+
     @staticmethod
     def _write_replay_input(path: Path, payload: bytes) -> None:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -217,44 +411,14 @@ class DockerSandboxExecutor:
             self._write_replay_input(stage_dir / "context.json", context_bytes)
             os.chmod(stage_dir, 0o555)
             container = self.docker_client.containers.create(
-                image=self.image,
-                command=["/usr/local/bin/python", "-I", "-S", "-c", _SKILL_REPLAY_BOOTSTRAP],
-                name=None,
-                hostname=None,
-                user="65532:65532",
-                working_dir="/tmp",
-                environment={
-                    "PATH": "/usr/local/bin:/usr/bin:/bin",
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    "PYTHONUNBUFFERED": "1",
-                    "HOME": "/tmp",
-                    "PYTHONNOUSERSITE": "1",
-                },
-                volumes={str(stage_dir): {"bind": "/replay", "mode": "ro"}},
-                read_only=True,
-                network_mode="none",
-                privileged=False,
-                cap_drop=["ALL"],
-                security_opt=["no-new-privileges:true"],
-                mem_limit=_MAX_MEMORY_BYTES,
-                memswap_limit=_MAX_MEMORY_BYTES,
-                nano_cpus=_MAX_CPU_NANOS,
-                shm_size=32 * 1024 * 1024,
-                pids_limit=_MAX_PIDS,
-                ipc_mode="private",
-                tmpfs={
-                    "/tmp": (
-                        f"rw,noexec,nosuid,nodev,size={_TMPFS_SIZE_BYTES},"
-                        "mode=1777"
-                    ),
-                },
-                log_config=self.log_config,
-                labels={"com.evo-agent.sandbox": "true", "com.evo-agent.skill-replay": "true"},
-                detach=True,
-                auto_remove=False,
-                stdin_open=False,
-                tty=False,
-                init=True,
+                **self._skill_replay_container_options(
+                    command=["/usr/local/bin/python", "-I", "-S", "-c", _SKILL_REPLAY_BOOTSTRAP],
+                    volumes={str(stage_dir): {"bind": "/replay", "mode": "ro"}},
+                    labels={"com.evo-agent.sandbox": "true", "com.evo-agent.skill-replay": "true"},
+                )
+            )
+            self._verify_container_isolation(
+                container, expected_mounts=[(str(stage_dir), "/replay")],
             )
             container.start()
             try:
@@ -386,6 +550,9 @@ class DockerSandboxExecutor:
                 stdin_open=False,
                 tty=False,
                 init=True,
+            )
+            self._verify_container_isolation(
+                container, expected_mounts=[(str(workspace), "/workspace")],
             )
             container.start()
             try:

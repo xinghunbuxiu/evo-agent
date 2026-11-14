@@ -165,11 +165,17 @@ def build_service(config: dict) -> tuple[SandboxBrokerService, tuple[int, ...], 
     except (SkillArtifactStoreError, TypeError, OSError) as exc:
         raise BrokerDaemonConfigurationError("trusted Skill Artifact Store configuration is invalid") from exc
 
-    executor = DockerSandboxExecutor(
-        docker_client=DockerSandboxExecutor.connect_docker_socket(),
-        image=config["image"],
-        replay_staging_root=artifact_store.root,
-    )
+    try:
+        executor = DockerSandboxExecutor(
+            docker_client=DockerSandboxExecutor.connect_docker_socket(),
+            image=config["image"],
+            replay_staging_root=artifact_store.root,
+        )
+        executor.verify_runtime_ready()
+    except Exception as exc:
+        raise BrokerDaemonConfigurationError(
+            "Docker Skill Replay isolation preflight failed; Broker startup is blocked"
+        ) from exc
     service = SandboxBrokerService(
         workspace_roots=resolved_roots,
         workspace_tenants=resolved_tenants,

@@ -71,6 +71,15 @@ without the socket unit. Verify that `/run/evo-sandbox-broker/broker.sock`
 is a Unix stream socket owned by `evo-broker:evo-app`, mode `0660`, and that
 the parent directory is not writable by application users.
 
+The Broker now performs an isolation preflight before opening its socket:
+
+- Docker daemon info must report an active seccomp profile and cgroup memory, swap, CPU quota and PID-limit support.
+- The exact configured image digest must appear in the daemon's local image inspection; the Broker never pulls an image automatically.
+- A short-lived no-op container is created, inspected, started and removed using the same non-root, read-only, networkless, capability-free and resource-limited policy as Skill Replay.
+- The daemon refuses startup if inspection differs from policy, the probe exits non-zero, or cleanup cannot be confirmed. There is no host-process fallback.
+
+This preflight runs as the dedicated evo-broker account, not as the GitHub Actions runner. Keep the runner outside the docker group: Docker socket access is host-administrator privilege. Unit tests with a fake Docker client verify policy construction and failure handling, but only a successful preflight on the actual broker host confirms that its Docker daemon can enforce the requested policy.
+
 ## 5. Connect the independent Validator and Admin runtime
 
 The Validator must run as a separate service identity with its own Ed25519
