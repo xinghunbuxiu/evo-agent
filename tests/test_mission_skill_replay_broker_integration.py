@@ -257,8 +257,13 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     mission_run_id=mission_context["mission_run_id"],
                     skill_id=skill.id,
                 ))
-                self.assertIn("data", response, response)
-                operation = response["data"]
+                if validator_accepts:
+                    self.assertIn("data", response, response)
+                    operation = response["data"]
+                else:
+                    self.assertIn("error", response, response)
+                    self.assertEqual(response.get("status"), 502, response)
+                    operation = None
             finally:
                 broker_stop.set()
                 validator_stop.set()
