@@ -67,7 +67,7 @@ def _mission_replay_request():
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
-    def test_mission_replay_persists_experience_and_publishes_validator_attested_artifact(self):
+    def _run_mission_replay_integration(self, *, validator_accepts: bool):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             workspace = root / "workspace"
@@ -142,7 +142,7 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             output_envelope = {
                 "schema_version": SKILL_REPLAY_OUTPUT_SCHEMA,
                 "success": True,
-                "value": {"ok": True},
+                "value": {"ok": validator_accepts},
                 "error": None,
                 "logs": "",
             }
@@ -271,6 +271,44 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertFalse(broker_thread.is_alive())
             self.assertFalse(validator_thread.is_alive())
 
+            if not validator_accepts:
+                self.assertIn("error", response, response)
+                self.assertEqual(response.get("status"), 502, response)
+                mission_state = load_mission_runs(workspace)
+                mission = mission_state["items"][0]
+                replay_action = next(
+                    item for item in mission["actions"]
+                    if item.get("action_type") == "skill_replay"
+                )
+                self.assertEqual(replay_action["status"], "interrupted")
+                self.assertEqual(replay_action["recovery_status"], "needs_review")
+                self.assertEqual(
+                    replay_action["recovery_reason"],
+                    "skill_replay_outcome_indeterminate",
+                )
+                self.assertIsNone(replay_action.get("execution_succeeded"))
+                self.assertIsInstance(replay_action.get("evidence_ref"), dict)
+                self.assertTrue(replay_action.get("evidence_id"))
+                self.assertTrue(replay_action.get("validation_request_id"))
+                self.assertIsNone(replay_action.get("promotion_request_id"))
+                self.assertEqual(list(artifact_root.iterdir()), [])
+
+                evidence_id = replay_action["evidence_id"]
+                evidence = evidence_store.load_verified(
+                    tenant_id=tenant_id,
+                    evidence_id=evidence_id,
+                )
+                expected_mission_context = {
+                    **mission_context,
+                    "task_id": replay_action["task_id"],
+                }
+                self.assertEqual(evidence["mission_context"], expected_mission_context)
+                self.assertEqual(
+                    evidence["broker_attestation"]["request_id"],
+                    evidence_id,
+                )
+                return
+
             self.assertEqual(operation["replay"]["result"]["execution_succeeded"], True)
             self.assertEqual(operation["replay"]["experience"]["execution_status"], "succeeded")
             self.assertEqual(operation["validation"]["status"], "passed")
@@ -311,6 +349,13 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertEqual(published.version, skill.version)
             self.assertEqual(published.code, code)
             self.assertEqual(published.trust_level, "verified")
+
+    def test_mission_replay_persists_experience_and_publishes_validator_attested_artifact(self):
+        self._run_mission_replay_integration(validator_accepts=True)
+
+    def test_validator_policy_rejection_keeps_mission_interrupted_and_never_publishes(self):
+        self._run_mission_replay_integration(validator_accepts=False)
+
 
 
 if __name__ == "__main__":
