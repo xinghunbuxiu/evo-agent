@@ -57,6 +57,7 @@ from admin.mission_runtime import (
 from admin.mission_bootstrap_runtime import (
     create_mission_bootstrap_runtime_bindings,
 )
+from admin.mission_staffing_runtime import resolve_selected_employee
 from admin.worker_bootstrap_runtime import (
     create_worker_bootstrap_runtime_bindings,
 )
@@ -2414,41 +2415,18 @@ def create_app() -> FastAPI:
         ]
         if not members:
             return {}
-        role_hint = str(
-            work_type_id
-            or context.get("work_type_id")
-            or context.get("runtime_primary_worker_id")
-            or ""
-        ).strip()
         selected_member_id = str(
             runtime.get("primary_child_member_id")
             or child_members.get("selected_member_id")
             or ""
         ).strip()
-        selected_member = next(
-            (item for item in members if str(item.get("member_id") or "").strip() == selected_member_id),
-            None,
+        target_member = resolve_selected_employee(
+            members=members,
+            selected_member_id=selected_member_id,
         )
-        target_member = None
-        if role_hint:
-            target_member = next(
-                (
-                    item for item in members
-                    if str(item.get("primary_role") or "").strip() == role_hint
-                ),
-                None,
-            )
-        if target_member is None and isinstance(selected_member, dict) and str(selected_member.get("primary_role") or "").strip() != "talent_development":
-            target_member = selected_member
-        if target_member is None:
-            target_member = next(
-                (
-                    item for item in members
-                    if str(item.get("primary_role") or "").strip() != "talent_development"
-                ),
-                None,
-            )
         if not isinstance(target_member, dict):
+            # Mission must not infer personnel ownership from list order or role
+            # similarity. Only the Talent Center's explicit selection is binding.
             return {}
         member_id = str(target_member.get("member_id") or "").strip()
         if not member_id:
@@ -2457,13 +2435,7 @@ def create_app() -> FastAPI:
             "member_id": member_id,
             "member_name": str(target_member.get("name") or "").strip() or None,
             "member_primary_role": str(target_member.get("primary_role") or "").strip() or None,
-            "member_resolution_source": (
-                "role_match"
-                if role_hint and str(target_member.get("primary_role") or "").strip() == role_hint
-                else "selected_member"
-                if isinstance(selected_member, dict) and str(selected_member.get("member_id") or "").strip() == member_id
-                else "first_active_domain_member"
-            ),
+            "member_resolution_source": "talent_center_selection",
             "tenant_id": tenant_id,
             "mission_kind": mission_kind or None,
         }
