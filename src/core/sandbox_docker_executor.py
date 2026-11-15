@@ -306,11 +306,6 @@ class DockerSandboxExecutor:
 
     def _verify_pinned_image(self) -> None:
         """Reconfirm the exact configured image digest before each execution."""
-        self._verify_pinned_image()
-
-    def verify_runtime_ready(self) -> bool:
-        """Prove the pinned image and fixed isolation policy work before daemon startup."""
-        self._verify_daemon_capabilities()
         try:
             image = self.docker_client.images.get(self.image)
         except Exception as exc:
@@ -323,6 +318,11 @@ class DockerSandboxExecutor:
             raise DockerSandboxConfigurationError(
                 "Docker image inspection did not confirm the exact configured repository digest"
             )
+
+    def verify_runtime_ready(self) -> bool:
+        """Prove the pinned image and fixed isolation policy work before daemon startup."""
+        self._verify_daemon_capabilities()
+        self._verify_pinned_image()
 
         container = None
         try:
