@@ -275,10 +275,10 @@ class MissionTracePropagationTests(unittest.TestCase):
             )
             plan = self._dependency_plan()
             initial = bindings["build_mission_actions"](
-            task_queue=object(), tenant_id="tenant-a", mission_run_id="run-a", plan=plan,
-            context={"runtime_primary_worker_id": "worker-a"}, work_type={}, work_type_summary={},
-        )
-        blocked = next(item for item in initial["actions"] if item["node_id"] == "node-b")
+                task_queue=object(), tenant_id="tenant-a", mission_run_id="run-a", plan=plan,
+                context={"runtime_primary_worker_id": "worker-a"}, work_type={}, work_type_summary={},
+            )
+            blocked = next(item for item in initial["actions"] if item["node_id"] == "node-b")
             self.assertEqual(submitted_nodes, ["node-a"])
             self.assertEqual(blocked["action_type"], "dependency_blocked")
             self.assertEqual(blocked["dependency_state"], "waiting")
@@ -288,15 +288,15 @@ class MissionTracePropagationTests(unittest.TestCase):
             registry.release_worker_task(worker_id="worker-a", task_id=claim["claim_id"])
 
             resumed = bindings["resume_dependency_nodes"](
-            task_queue=object(),
-            mission_run={
-                "mission_run_id": "run-a", "tenant_id": "tenant-a", "plan": plan,
-                "context": {"runtime_primary_worker_id": "worker-a"},
-                "runtime_route": {"primary_worker_id": "worker-a"},
-                "work_type": {}, "work_type_summary": {},
-            },
-            node_ids=["node-b"], completed_node_ids=["node-a"],
-        )
+                task_queue=object(),
+                mission_run={
+                    "mission_run_id": "run-a", "tenant_id": "tenant-a", "plan": plan,
+                    "context": {"runtime_primary_worker_id": "worker-a"},
+                    "runtime_route": {"primary_worker_id": "worker-a"},
+                    "work_type": {}, "work_type_summary": {},
+                },
+                node_ids=["node-b"], completed_node_ids=["node-a"],
+            )
             self.assertEqual(submitted_nodes, ["node-a", "node-b"])
             self.assertEqual(len(resumed["actions"]), 1)
             self.assertEqual(resumed["actions"][0]["node_id"], "node-b")
