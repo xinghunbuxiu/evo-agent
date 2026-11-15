@@ -304,6 +304,10 @@ class DockerSandboxExecutor:
         if str(info.get("CgroupVersion") or "") not in {"1", "2"}:
             raise DockerSandboxConfigurationError("Docker cgroup version is unavailable")
 
+    def _verify_pinned_image(self) -> None:
+        """Reconfirm the exact configured image digest before each execution."""
+        self._verify_pinned_image()
+
     def verify_runtime_ready(self) -> bool:
         """Prove the pinned image and fixed isolation policy work before daemon startup."""
         self._verify_daemon_capabilities()
@@ -397,6 +401,12 @@ class DockerSandboxExecutor:
             raise DockerSandboxConfigurationError("Skill Replay input exceeds its configured size limit")
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 300:
             raise DockerSandboxConfigurationError("Skill Replay timeout is outside broker policy")
+
+        # The Docker daemon can restart or be reconfigured while the Broker
+        # process remains alive. Startup preflight alone is therefore stale
+        # evidence; recheck daemon isolation and the pinned image for every run.
+        self._verify_daemon_capabilities()
+        self._verify_pinned_image()
 
         stage_dir = Path(tempfile.mkdtemp(prefix="evo-skill-replay-", dir=self.replay_staging_root))
         container = None
@@ -504,6 +514,10 @@ class DockerSandboxExecutor:
                 or not 1 <= spec.max_output_bytes <= 256 * 1024):
             raise DockerSandboxConfigurationError("output limit is outside the broker policy")
         command = self._command(spec)
+        # Generic test jobs execute untrusted workspace code too; do not rely
+        # only on the daemon state observed at Broker startup.
+        self._verify_daemon_capabilities()
+        self._verify_pinned_image()
         container = None
         timed_out = False
         exit_code = None

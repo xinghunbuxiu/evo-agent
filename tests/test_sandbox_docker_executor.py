@@ -304,6 +304,52 @@ class DockerSandboxExecutorTests(unittest.TestCase):
         self.assertTrue(self.container.removed)
         self.assertFalse(Path(next(iter(config["volumes"]))).exists())
 
+    def test_skill_replay_rechecks_daemon_seccomp_before_container_creation(self):
+        staging = self.root / "trusted-artifacts"
+        staging.mkdir(mode=0o700)
+        executor = DockerSandboxExecutor(
+            docker_client=self.client, image=IMAGE, replay_staging_root=staging,
+        )
+        code = "def run(context): return True"
+        skill = SimpleNamespace(
+            id="skill-demo", version="1.0.0", code=code,
+            content_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+        )
+        self.client.info_payload["SecurityOptions"] = ["name=seccomp,profile=unconfined"]
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "seccomp"):
+            executor.execute_skill_replay(
+                skill,
+                {"tenant_id": "tenant-a", "mission_run_id": "mission-1", "node_id": "node-1", "task_id": "task-1"},
+                timeout_seconds=5,
+            )
+        self.assertIsNone(self.client.containers.config)
+
+    def test_skill_replay_rechecks_pinned_image_before_container_creation(self):
+        staging = self.root / "trusted-artifacts"
+        staging.mkdir(mode=0o700)
+        executor = DockerSandboxExecutor(
+            docker_client=self.client, image=IMAGE, replay_staging_root=staging,
+        )
+        code = "def run(context): return True"
+        skill = SimpleNamespace(
+            id="skill-demo", version="1.0.0", code=code,
+            content_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+        )
+        self.client.images.image.attrs["RepoDigests"] = ["registry.example/evo/python-runner@sha256:" + ("b" * 64)]
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "repository digest"):
+            executor.execute_skill_replay(
+                skill,
+                {"tenant_id": "tenant-a", "mission_run_id": "mission-1", "node_id": "node-1", "task_id": "task-1"},
+                timeout_seconds=5,
+            )
+        self.assertIsNone(self.client.containers.config)
+
+    def test_generic_runner_rechecks_daemon_seccomp_before_container_creation(self):
+        self.client.info_payload["SecurityOptions"] = ["name=seccomp,profile=unconfined"]
+        with self.assertRaisesRegex(DockerSandboxConfigurationError, "seccomp"):
+            self.executor(self.spec)
+        self.assertIsNone(self.client.containers.config)
+
     def test_skill_replay_rejects_changed_artifact_digest_before_container_creation(self):
         staging = self.root / "trusted-artifacts"
         staging.mkdir(mode=0o700)
