@@ -27,6 +27,33 @@ from admin.mission_runtime import (
 )
 
 
+def _worker_role_supports_staffing_request(
+    organization_registry, staffing_request: dict, worker: dict,
+) -> bool:
+    if organization_registry is None or not callable(getattr(organization_registry, "get_role", None)):
+        return False
+    role_id = str(worker.get("role_id") or "").strip()
+    role = organization_registry.get_role(role_id) if role_id else None
+    if not isinstance(role, dict) or role.get("status") != "active":
+        return False
+    raw_required = staffing_request.get("required_capabilities")
+    required = {
+        str(value).strip().casefold()
+        for value in raw_required
+        if str(value).strip()
+    } if isinstance(raw_required, list) else set()
+    raw_capabilities = role.get("required_capabilities")
+    capabilities = {
+        str(value).strip().casefold()
+        for value in raw_capabilities
+        if str(value).strip()
+    } if isinstance(raw_capabilities, list) else set()
+    if required:
+        return required.issubset(capabilities)
+    recommended_role_id = str(staffing_request.get("role_id") or "").strip()
+    return bool(recommended_role_id) and recommended_role_id == role_id
+
+
 def register_mission_routes(
     app,
     *,
@@ -1058,6 +1085,138 @@ def register_mission_routes(
             return error_response("Worker Claim 释放失败；占用状态已保留待复核", 503)
         return success_response(result, "Worker Claim 已人工释放")
 
+    @app.get("/api/missions/{mission_run_id}/staffing-options")
+    async def get_mission_staffing_options(
+        request: Request, mission_run_id: str, tenant_id: str | None = None,
+    ):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        normalized_tenant_id = str(tenant_id or "").strip()
+        if not normalized_tenant_id:
+            return error_response("必须指定 tenant_id", 400)
+        if not authorize_tenant(user, normalized_tenant_id):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, normalized_tenant_id) != "tenant_admin":
+            return error_response("仅租户管理员可以查看人员派遣候选", 403)
+        if not callable(resolve_tenant_members):
+            return error_response("Talent Center 员工档案读取服务不可用", 503)
+        if organization_registry is None or not callable(getattr(organization_registry, "list_workers", None)):
+            return error_response("Organization Worker Registry 不可用", 503)
+        try:
+            raw_members = resolve_tenant_members(normalized_tenant_id)
+            if not isinstance(raw_members, list):
+                return error_response("Talent Center 员工档案格式无效", 503)
+            employees = []
+            for member in raw_members:
+                if not isinstance(member, dict):
+                    continue
+                member_id = str(member.get("member_id") or "").strip()
+                status = str(member.get("status") or "active").strip()
+                primary_role = str(member.get("primary_role") or "").strip()
+                member_tenant_id = str(member.get("tenant_id") or "").strip()
+                if (
+                    not member_id
+                    or status != "active"
+                    or primary_role == "talent_development"
+                    or (member_tenant_id and member_tenant_id != normalized_tenant_id)
+                ):
+                    continue
+                instance_runtime = member.get("instance_runtime") if isinstance(member.get("instance_runtime"), dict) else {}
+                linked_worker_ids = instance_runtime.get("organization_worker_ids", [])
+                employees.append({
+                    "member_id": member_id,
+                    "name": str(member.get("name") or member_id),
+                    "primary_role": primary_role,
+                    "status": status,
+                    "organization_worker_ids": [
+                        str(value).strip() for value in linked_worker_ids
+                        if isinstance(linked_worker_ids, list) and str(value).strip()
+                    ] if isinstance(linked_worker_ids, list) else [],
+                })
+            employee_ids = {item["member_id"] for item in employees}
+            with exclusive_mission_claim_lock(workspace):
+                state = load_mission_runs_strict(workspace)
+                mission_run = next((
+                    item for item in state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and str(item.get("tenant_id") or "") == normalized_tenant_id
+                ), None)
+                if not isinstance(mission_run, dict):
+                    return error_response("未找到对应租户的 Mission run", 404)
+                raw_requests = mission_run.get("staffing_requests")
+                raw_requests = raw_requests if isinstance(raw_requests, list) else []
+                raw_assignments = mission_run.get("staffing_assignments")
+                raw_assignments = raw_assignments if isinstance(raw_assignments, list) else []
+                approved_node_ids = {
+                    str(item.get("node_id") or "").strip()
+                    for item in raw_assignments
+                    if isinstance(item, dict) and item.get("status") == "approved"
+                }
+                pending_requests = [
+                    dict(item) for item in raw_requests
+                    if isinstance(item, dict)
+                    and str(item.get("node_id") or "").strip()
+                    and str(item.get("node_id") or "").strip() not in approved_node_ids
+                ]
+                runtime_route = mission_run.get("runtime_route")
+                if not isinstance(runtime_route, dict):
+                    plan_route = mission_run.get("plan", {}).get("runtime_route", {}) if isinstance(mission_run.get("plan"), dict) else {}
+                    runtime_route = plan_route if isinstance(plan_route, dict) else {}
+                run_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+                expected_handler_id = str(
+                    runtime_route.get("primary_worker_id")
+                    or run_context.get("runtime_primary_worker_id")
+                    or ""
+                ).strip()
+                workers = []
+                for worker in organization_registry.list_workers():
+                    if not isinstance(worker, dict):
+                        continue
+                    owner_tenant_id = str(worker.get("owner_tenant_id") or "").strip()
+                    owner_member_id = str(worker.get("owner_member_id") or "").strip()
+                    if owner_tenant_id != normalized_tenant_id or owner_member_id not in employee_ids:
+                        continue
+                    profile = worker.get("profile") if isinstance(worker.get("profile"), dict) else {}
+                    handler_id = str(profile.get("handler_id") or "").strip()
+                    active_task_ids = worker.get("active_task_ids")
+                    active_task_ids = active_task_ids if isinstance(active_task_ids, list) else []
+                    status = str(worker.get("status") or "offline").strip()
+                    handler_matches = not expected_handler_id or handler_id == expected_handler_id
+                    compatible_node_ids = [
+                        str(staffing_request.get("node_id") or "")
+                        for staffing_request in pending_requests
+                        if _worker_role_supports_staffing_request(
+                            organization_registry, staffing_request, worker,
+                        )
+                    ]
+                    workers.append({
+                        "worker_id": str(worker.get("worker_id") or ""),
+                        "owner_member_id": owner_member_id,
+                        "role_id": str(worker.get("role_id") or ""),
+                        "handler_id": handler_id,
+                        "status": status,
+                        "active_task_count": len(active_task_ids),
+                        "available": status == "available" and not active_task_ids and handler_matches,
+                        "handler_matches": handler_matches,
+                        "compatible_node_ids": compatible_node_ids,
+                    })
+            return success_response({
+                "mission_run_id": mission_run_id,
+                "tenant_id": normalized_tenant_id,
+                "pending_requests": pending_requests,
+                "assignments": [
+                    dict(item) for item in raw_assignments if isinstance(item, dict)
+                ],
+                "employees": employees,
+                "workers": workers,
+            }, "Mission 人员派遣候选已加载")
+        except (OSError, UnicodeError, ValueError):
+            return error_response("读取 Mission 人员派遣候选失败", 503)
+        except Exception:
+            return error_response("读取 Mission 人员派遣候选失败", 503)
+
     @app.post("/api/missions/{mission_run_id}/staffing-assignments")
     async def approve_mission_staffing(request: Request, mission_run_id: str):
         user = get_session_user(request)
@@ -1166,6 +1325,10 @@ def register_mission_routes(
                 )
                 if not valid:
                     return error_response(f"人员派遣审批校验失败: {reason}", 409)
+                if not _worker_role_supports_staffing_request(
+                    organization_registry, staffing_request, worker,
+                ):
+                    return error_response("人员派遣审批校验失败: staffing_assignment_worker_role_capability_mismatch", 409)
 
                 assignments.append(assignment)
                 mission_run["staffing_assignments"] = assignments

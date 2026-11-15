@@ -84,6 +84,11 @@ class MissionStaffingApprovalRouteTests(unittest.TestCase):
     def _handler(self, mission, members):
         app = _App()
         registry = mock.Mock()
+        registry.get_role.return_value = {
+            "role_id": "python",
+            "status": "active",
+            "required_capabilities": ["python"],
+        }
         registry.get_worker.return_value = {
             "worker_id": "worker-a",
             "owner_tenant_id": "tenant-a",
@@ -166,6 +171,142 @@ class MissionStaffingApprovalRouteTests(unittest.TestCase):
         self.assertEqual(response.get("status"), 403)
         self.assertEqual(saved_run["staffing_assignments"], [])
         save.assert_not_called()
+ 
+    def test_staffing_options_do_not_expose_workers_for_inactive_employees(self):
+        app = _App()
+        mission = _mission_run()
+        registry = mock.Mock()
+        registry.get_role.return_value = {
+            "role_id": "python",
+            "status": "active",
+            "required_capabilities": ["python"],
+        }
+        registry.list_workers.return_value = [{
+            "worker_id": "worker-a",
+            "owner_tenant_id": "tenant-a",
+            "owner_member_id": "employee-inactive",
+            "role_id": "python",
+            "status": "available",
+            "active_task_ids": [],
+            "profile": {"handler_id": "worker-a"},
+        }]
+        members = [{
+            "member_id": "employee-inactive",
+            "name": "Inactive",
+            "primary_role": "python_engineer",
+            "status": "inactive",
+        }]
+        with mock.patch.object(
+            mission_routes, "load_mission_runs_strict", return_value={"items": [mission]}
+        ), mock.patch.object(
+            mission_routes, "exclusive_mission_claim_lock", side_effect=lambda workspace: nullcontext()
+        ):
+            mission_routes.register_mission_routes(
+                app,
+                workspace=Path("."),
+                task_queue=object(),
+                tenant_manager=object(),
+                prepare_mission_work_type_bundle=lambda **kwargs: {},
+                mission_planner=object(),
+                upsert_plan_learning_tasks=lambda **kwargs: [],
+                refresh_mission_runs=lambda **kwargs: {"items": []},
+                start_mission=lambda *args, **kwargs: (None, None),
+                find_mission_run=lambda *args: None,
+                derive_follow_up_goal=lambda run: "",
+                derive_follow_up_context=lambda run: {},
+                success_response=lambda data, message="": {"data": data, "message": message},
+                error_response=lambda message, status: {"error": message, "status": status},
+                get_session_user=lambda request: {"id": 7},
+                authorize_tenant=lambda user, tenant_id: tenant_id == "tenant-a",
+                tenant_role=lambda user, tenant_id: "tenant_admin",
+                organization_registry=registry,
+                resolve_tenant_members=lambda tenant_id: members,
+                build_mission_actions=None,
+            )
+            handler = app.routes[("GET", "/api/missions/{mission_run_id}/staffing-options")]
+            response = asyncio.run(handler(
+                request=_request(), mission_run_id="run-a", tenant_id="tenant-a",
+            ))
+        self.assertIn("data", response)
+        self.assertEqual(response["data"]["employees"], [])
+        self.assertEqual(response["data"]["workers"], [])
+
+    def test_staffing_options_are_tenant_scoped_and_mark_only_available_workers(self):
+        app = _App()
+        mission = _mission_run()
+        registry = mock.Mock()
+        registry.list_workers.return_value = [
+            {
+                "worker_id": "worker-a",
+                "owner_tenant_id": "tenant-a",
+                "owner_member_id": "employee-a",
+                "role_id": "python",
+                "status": "available",
+                "active_task_ids": [],
+                "profile": {"handler_id": "worker-a"},
+            },
+            {
+                "worker_id": "worker-busy",
+                "owner_tenant_id": "tenant-a",
+                "owner_member_id": "employee-a",
+                "role_id": "python",
+                "status": "busy",
+                "active_task_ids": ["task-1"],
+                "profile": {"handler_id": "worker-a"},
+            },
+            {
+                "worker_id": "worker-other-tenant",
+                "owner_tenant_id": "tenant-b",
+                "owner_member_id": "employee-a",
+                "role_id": "python",
+                "status": "available",
+                "active_task_ids": [],
+                "profile": {"handler_id": "worker-a"},
+            },
+        ]
+        members = [
+            {"member_id": "employee-a", "name": "Python Engineer", "primary_role": "python_engineer", "status": "active"},
+            {"member_id": "talent", "name": "Talent Center", "primary_role": "talent_development", "status": "active"},
+        ]
+        with mock.patch.object(
+            mission_routes, "load_mission_runs_strict", return_value={"items": [mission]}
+        ), mock.patch.object(
+            mission_routes, "exclusive_mission_claim_lock", side_effect=lambda workspace: nullcontext()
+        ):
+            mission_routes.register_mission_routes(
+                app,
+                workspace=Path("."),
+                task_queue=object(),
+                tenant_manager=object(),
+                prepare_mission_work_type_bundle=lambda **kwargs: {},
+                mission_planner=object(),
+                upsert_plan_learning_tasks=lambda **kwargs: [],
+                refresh_mission_runs=lambda **kwargs: {"items": []},
+                start_mission=lambda *args, **kwargs: (None, None),
+                find_mission_run=lambda *args: None,
+                derive_follow_up_goal=lambda run: "",
+                derive_follow_up_context=lambda run: {},
+                success_response=lambda data, message="": {"data": data, "message": message},
+                error_response=lambda message, status: {"error": message, "status": status},
+                get_session_user=lambda request: {"id": 7},
+                authorize_tenant=lambda user, tenant_id: tenant_id == "tenant-a",
+                tenant_role=lambda user, tenant_id: "tenant_admin",
+                organization_registry=registry,
+                resolve_tenant_members=lambda tenant_id: members,
+                build_mission_actions=None,
+            )
+            handler = app.routes[("GET", "/api/missions/{mission_run_id}/staffing-options")]
+            response = asyncio.run(handler(
+                request=_request(), mission_run_id="run-a", tenant_id="tenant-a",
+            ))
+        self.assertIn("data", response)
+        data = response["data"]
+        self.assertEqual([item["member_id"] for item in data["employees"]], ["employee-a"])
+        self.assertEqual(
+            {item["worker_id"]: item["available"] for item in data["workers"]},
+            {"worker-a": True, "worker-busy": False},
+        )
+        self.assertEqual([item["node_id"] for item in data["pending_requests"]], ["node-a"])
 
 
 if __name__ == "__main__":

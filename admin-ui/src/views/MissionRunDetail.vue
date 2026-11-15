@@ -49,8 +49,11 @@
       :continue-disabled="continuing"
        :show-continue-button="true"
       :replay-busy-key="replayBusyKey"
+      :staffing-options="staffingOptions"
+      :staffing-busy-key="staffingBusyKey"
       @continue="continueCurrentMission"
       @replay-skill="replayCurrentSkill"
+      @approve-staffing="approveCurrentStaffing"
     />
 
     <div v-else class="rounded-2xl border border-rose-200 bg-white p-8 text-center text-sm text-rose-600">
@@ -65,7 +68,15 @@ import { useRoute, useRouter } from 'vue-router'
 import MissionRunDetailPanel from '../components/MissionRunDetailPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
-import { continueMission, getMissionRun, replayMissionSkill, type MissionRun } from '../api/missions'
+import {
+  approveMissionStaffing,
+  continueMission,
+  getMissionRun,
+  getMissionStaffingOptions,
+  replayMissionSkill,
+  type MissionRun,
+  type MissionStaffingOptions,
+} from '../api/missions'
 
 type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
 
@@ -76,6 +87,8 @@ const missionRun = ref<MissionRun | null>(null)
 const loading = ref(false)
 const continuing = ref(false)
 const replayBusyKey = ref('')
+const staffingOptions = ref<MissionStaffingOptions | null>(null)
+const staffingBusyKey = ref('')
 const message = ref('')
 const success = ref(false)
 let refreshTimer: number | null = null
@@ -156,11 +169,62 @@ const loadMissionRun = async () => {
   try {
     const result = await getMissionRun(id)
     missionRun.value = result.data || null
+    staffingOptions.value = null
+    if (missionRun.value?.staffing_requests?.length) {
+      try {
+        const options = await getMissionStaffingOptions(id, missionRun.value.tenant_id)
+        staffingOptions.value = options.data || null
+      } catch (staffingError) {
+        console.warn('Failed to load Mission staffing options:', staffingError)
+      }
+    }
   } catch (error) {
     console.error('Failed to load mission run:', error)
     missionRun.value = null
+    staffingOptions.value = null
   } finally {
     loading.value = false
+  }
+}
+
+const approveCurrentStaffing = async (payload: {
+  nodeId: string
+  employeeMemberId: string
+  workerId: string
+}) => {
+  const current = missionRun.value
+  const nodeId = String(payload.nodeId || '').trim()
+  const employeeMemberId = String(payload.employeeMemberId || '').trim()
+  const workerId = String(payload.workerId || '').trim()
+  if (!current || !nodeId || !employeeMemberId || !workerId || staffingBusyKey.value) return
+  const confirmed = window.confirm(
+    `确认将 Mission 节点 ${nodeId} 派给员工 ${employeeMemberId} 的 Worker ${workerId}？批准后会立即恢复该节点派遣。`
+  )
+  if (!confirmed) return
+  staffingBusyKey.value = nodeId
+  message.value = ''
+  try {
+    const response = await approveMissionStaffing(current.mission_run_id, {
+      tenant_id: current.tenant_id,
+      node_id: nodeId,
+      employee_member_id: employeeMemberId,
+      worker_id: workerId,
+    })
+    if (!response.success) {
+      success.value = false
+      message.value = response.message || '人员审批未成功；请刷新并核对 Mission 状态。'
+      await loadMissionRun()
+      return
+    }
+    success.value = true
+    message.value = '人员派遣已批准，Mission 已尝试恢复对应节点。'
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '人员派遣审批失败'
+    await loadMissionRun()
+  } finally {
+    staffingBusyKey.value = ''
   }
 }
 

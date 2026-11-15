@@ -65,6 +65,98 @@
     </div>
 
     <div v-show="showActions" class="space-y-2">
+      <section
+        v-if="staffingOptions?.pending_requests?.length"
+        class="rounded-xl border border-amber-200 bg-amber-50/60 p-4"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-semibold text-slate-900">育成师人员派遣审批</div>
+          <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-800">
+            待审批 {{ staffingOptions.pending_requests.length }}
+          </span>
+        </div>
+        <p class="mt-1 text-xs leading-5 text-slate-600">
+          Mission 只提出人员需求；请选择明确的员工档案和该员工名下可用 Worker。批准后才会恢复对应节点。
+        </p>
+        <div
+          v-for="staffingRequest in staffingOptions.pending_requests"
+          :key="`${run.mission_run_id}-staffing-${staffingRequest.node_id}`"
+          class="mt-3 rounded-lg border border-amber-100 bg-white p-3"
+        >
+          <div class="font-medium text-slate-900">
+            {{ staffingRequest.node_id }}
+            <span class="ml-1 text-xs font-normal text-slate-500">{{ staffingRequest.task_type || '任务节点' }}</span>
+          </div>
+          <div class="mt-1 text-xs text-slate-500">
+            角色 {{ staffingRequest.role_id || '未指定' }}
+            <span v-if="staffingRequest.required_capabilities?.length">
+              · 能力 {{ staffingRequest.required_capabilities.join('、') }}
+            </span>
+          </div>
+          <div class="mt-3 grid gap-3 md:grid-cols-2">
+            <label class="block text-xs font-medium text-slate-700">
+              选择员工
+              <select
+                class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                :value="draftFor(staffingRequest.node_id).employeeMemberId"
+                @change="setStaffingEmployee(staffingRequest.node_id, $event)"
+              >
+                <option value="">请选择员工档案</option>
+                <option
+                  v-for="employee in staffingOptions.employees"
+                  :key="employee.member_id"
+                  :value="employee.member_id"
+                >
+                  {{ employee.name }} · {{ employee.primary_role || employee.member_id }}
+                </option>
+              </select>
+            </label>
+            <label class="block text-xs font-medium text-slate-700">
+              选择 Worker
+              <select
+                class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                :value="draftFor(staffingRequest.node_id).workerId"
+                :disabled="!draftFor(staffingRequest.node_id).employeeMemberId"
+                @change="setStaffingWorker(staffingRequest.node_id, $event)"
+              >
+                <option value="">请选择可用 Worker</option>
+                <option
+                  v-for="worker in workersFor(staffingRequest.node_id)"
+                  :key="worker.worker_id"
+                  :value="worker.worker_id"
+                >
+                  {{ worker.worker_id }} · {{ worker.role_id }} · {{ worker.status }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs text-slate-500">
+              {{ workersFor(staffingRequest.node_id).length
+                ? 'Worker 必须属于所选员工，且当前空闲并匹配执行器。'
+                : '该员工当前没有符合执行器路由的可用 Worker。' }}
+            </span>
+            <button
+              type="button"
+              class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!canApproveStaffing(staffingRequest.node_id) || staffingBusyKey === staffingRequest.node_id"
+              @click="$emit('approve-staffing', {
+                nodeId: staffingRequest.node_id,
+                employeeMemberId: draftFor(staffingRequest.node_id).employeeMemberId,
+                workerId: draftFor(staffingRequest.node_id).workerId,
+              })"
+            >
+              {{ staffingBusyKey === staffingRequest.node_id ? '审批并恢复中…' : '批准并恢复节点' }}
+            </button>
+          </div>
+        </div>
+      </section>
+      <div
+        v-else-if="pendingStaffingRequestCount > 0"
+        class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800"
+      >
+        当前存在待审批人员需求，但员工与 Worker 候选未能加载。请确认租户管理员权限和 Talent Center 档案服务。
+      </div>
       <div v-if="!run.actions.length" class="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
         暂无动作节点。
       </div>
@@ -221,9 +313,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import MissionWorkerSummary from './MissionWorkerSummary.vue'
-import type { MissionRun } from '../api/missions'
+import type { MissionRun, MissionStaffingOptions } from '../api/missions'
 
 export type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
 
@@ -233,22 +325,81 @@ const props = withDefaults(defineProps<{
   continueDisabled?: boolean
   showContinueButton?: boolean
   replayBusyKey?: string
+  staffingOptions?: MissionStaffingOptions | null
+  staffingBusyKey?: string
 }>(), {
   section: 'overview',
   continueDisabled: false,
   showContinueButton: true,
   replayBusyKey: '',
+  staffingOptions: null,
+  staffingBusyKey: '',
 })
 
 defineEmits<{
   continue: []
   'replay-skill': [payload: { skillId: string; nodeId: string }]
+  'approve-staffing': [payload: { nodeId: string; employeeMemberId: string; workerId: string }]
 }>()
 
 const showOverview = computed(() => props.section === 'overview')
 const showActions = computed(() => props.section === 'actions')
 const showGrowth = computed(() => props.section === 'growth')
 const showPlan = computed(() => props.section === 'plan')
+
+type StaffingDraft = { employeeMemberId: string; workerId: string }
+const staffingDrafts = ref<Record<string, StaffingDraft>>({})
+
+const draftFor = (nodeId: string): StaffingDraft => (
+  staffingDrafts.value[nodeId] || { employeeMemberId: '', workerId: '' }
+)
+
+const setStaffingEmployee = (nodeId: string, event: Event) => {
+  const employeeMemberId = String((event.target as HTMLSelectElement | null)?.value || '')
+  staffingDrafts.value = {
+    ...staffingDrafts.value,
+    [nodeId]: { employeeMemberId, workerId: '' },
+  }
+}
+
+const setStaffingWorker = (nodeId: string, event: Event) => {
+  const current = draftFor(nodeId)
+  const workerId = String((event.target as HTMLSelectElement | null)?.value || '')
+  staffingDrafts.value = {
+    ...staffingDrafts.value,
+    [nodeId]: { ...current, workerId },
+  }
+}
+
+const workersFor = (nodeId: string) => {
+  const employeeMemberId = draftFor(nodeId).employeeMemberId
+  if (!employeeMemberId) return []
+  return (props.staffingOptions?.workers || []).filter(worker => (
+    worker.owner_member_id === employeeMemberId
+    && worker.available
+    && worker.handler_matches
+    && worker.compatible_node_ids.includes(nodeId)
+  ))
+}
+
+const canApproveStaffing = (nodeId: string) => {
+  const draft = draftFor(nodeId)
+  return Boolean(
+    draft.employeeMemberId
+    && draft.workerId
+    && workersFor(nodeId).some(worker => worker.worker_id === draft.workerId)
+  )
+}
+
+const pendingStaffingRequestCount = computed(() => {
+  const requests = props.run.staffing_requests || []
+  const approvedNodeIds = new Set(
+    (props.run.staffing_assignments || [])
+      .filter(item => item.status === 'approved')
+      .map(item => item.node_id)
+  )
+  return requests.filter(item => !approvedNodeIds.has(item.node_id)).length
+})
 
 const replayKey = (action: MissionRun['actions'][number]) => (
   `${action.node_id}:${action.promotion?.skill_candidate?.skill_id || ''}`

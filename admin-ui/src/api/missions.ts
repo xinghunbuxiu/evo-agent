@@ -182,6 +182,57 @@ export interface MissionRunAction {
   }
 }
 
+export interface MissionStaffingRequest {
+  request_id: string
+  tenant_id: string
+  mission_run_id: string
+  node_id: string
+  role_id?: string | null
+  required_capabilities?: string[]
+  task_type?: string | null
+  risk_level?: string
+  status?: string
+}
+
+export interface MissionStaffingEmployee {
+  member_id: string
+  name: string
+  primary_role?: string
+  status: string
+  organization_worker_ids?: string[]
+}
+
+export interface MissionStaffingWorker {
+  worker_id: string
+  owner_member_id: string
+  role_id: string
+  handler_id: string
+  status: string
+  active_task_count: number
+  available: boolean
+  handler_matches: boolean
+  compatible_node_ids: string[]
+}
+
+export interface MissionStaffingAssignment {
+  node_id: string
+  request_id: string
+  employee_member_id: string
+  worker_id: string
+  status: string
+  approved_by?: string
+  approved_at?: string
+}
+
+export interface MissionStaffingOptions {
+  mission_run_id: string
+  tenant_id: string
+  pending_requests: MissionStaffingRequest[]
+  assignments: MissionStaffingAssignment[]
+  employees: MissionStaffingEmployee[]
+  workers: MissionStaffingWorker[]
+}
+
 export interface MissionRun {
   mission_run_id: string
   tenant_id: string
@@ -201,6 +252,8 @@ export interface MissionRun {
   counts: Record<string, number>
   submitted_task_ids: string[]
   actions: MissionRunAction[]
+  staffing_requests?: MissionStaffingRequest[]
+  staffing_assignments?: MissionStaffingAssignment[]
   plan: MissionPlan
   member_reflection_member_id?: string
   summary?: {
@@ -372,6 +425,28 @@ export function listMissionRuns(tenantId?: string, limit = 20) {
 
 export function getMissionRun(missionRunId: string) {
   return get<MissionRun>(`/api/missions/${encodeURIComponent(missionRunId)}`)
+}
+
+export function getMissionStaffingOptions(missionRunId: string, tenantId: string) {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  return get<MissionStaffingOptions>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/staffing-options?${query.toString()}`
+  )
+}
+
+export function approveMissionStaffing(
+  missionRunId: string,
+  payload: {
+    tenant_id: string
+    node_id: string
+    employee_member_id: string
+    worker_id: string
+  }
+) {
+  return post<Record<string, unknown>>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/staffing-assignments`,
+    payload
+  )
 }
 
 export function continueMission(missionRunId: string) {
