@@ -16,7 +16,7 @@ _SKILL_REPLAY_RECOVERY_LEASE = timedelta(minutes=10)
 
 from fastapi import Request
 
-from admin.mission_staffing_runtime import validate_staffing_assignment
+from admin.mission_staffing_runtime import resolve_selected_employee, validate_staffing_assignment
 
 from admin.mission_runtime import (
     exclusive_mission_claim_lock,
@@ -47,6 +47,7 @@ def register_mission_routes(
     authorize_tenant: Callable[[dict, str], bool],
     tenant_role: Callable[[dict, str], str | None],
     organization_registry,
+    resolve_tenant_members: Callable[[str], list[dict]] | None = None,
     build_mission_actions: Callable[..., dict] | None = None,
     skill_replay_runtime=None,
 ) -> None:
@@ -1078,6 +1079,23 @@ def register_mission_routes(
             return error_response("无权访问该租户", 403)
         if tenant_role(user, tenant_id) != "tenant_admin":
             return error_response("仅租户管理员可以批准 Mission 人员派遣", 403)
+        if not callable(resolve_tenant_members):
+            return error_response("Talent Center 员工档案读取服务不可用，拒绝审批", 503)
+        try:
+            tenant_members = resolve_tenant_members(tenant_id)
+        except Exception:
+            return error_response("Talent Center 员工档案读取失败，拒绝审批", 503)
+        if not isinstance(tenant_members, list):
+            return error_response("Talent Center 员工档案格式无效，拒绝审批", 503)
+        selected_employee = resolve_selected_employee(
+            members=tenant_members,
+            selected_member_id=employee_member_id,
+        )
+        if not isinstance(selected_employee, dict):
+            return error_response("所选员工不存在、已停用或不具备执行员工身份", 409)
+        employee_tenant_id = str(selected_employee.get("tenant_id") or "").strip()
+        if employee_tenant_id and employee_tenant_id != tenant_id:
+            return error_response("所选员工不属于当前租户", 403)
 
         try:
             with exclusive_mission_claim_lock(workspace):

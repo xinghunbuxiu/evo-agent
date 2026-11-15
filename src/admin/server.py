@@ -1134,6 +1134,15 @@ def create_app() -> FastAPI:
     sync_worker_catalog(organization_registry, worker_manifests, enabled_worker_ids)
     global _sessions_file
     _sessions_file = workspace / ".admin" / "sessions.json"
+    def _resolve_tenant_staffing_members(tenant_id: str) -> list[dict]:
+        runtime = _load_autonomy_runtime(workspace, tenant_id)
+        normalized = _normalize_child_members_runtime(
+            runtime.get("child_members"),
+            legacy_child_agent=runtime.get("child_agent") if isinstance(runtime.get("child_agent"), dict) else None,
+        )
+        items = normalized.get("items", []) if isinstance(normalized, dict) else []
+        return [dict(item) for item in items if isinstance(item, dict)]
+
     def _record_worker_employee_link(*, tenant_id: str, member_id: str, worker_id: str) -> None:
         runtime = _load_autonomy_runtime(workspace, tenant_id)
         members = _normalize_child_members_runtime(
@@ -2497,6 +2506,7 @@ def create_app() -> FastAPI:
         authorize_tenant=_user_can_access_tenant,
         tenant_role=_tenant_role_for_user,
         organization_registry=organization_registry,
+        resolve_tenant_members=_resolve_tenant_staffing_members,
         build_mission_actions=_mission_action_runtime_ref.get("build_mission_actions"),
         skill_replay_runtime=_skill_replay_runtime,
     )
