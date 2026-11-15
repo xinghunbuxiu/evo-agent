@@ -1188,7 +1188,19 @@ class MissionTracePropagationTests(unittest.TestCase):
         calls = []
 
         def worker_handler(**kwargs):
-            calls.append(kwargs)
+            calls.append(kwargs["node"].get("organization_worker_id"))
+            kwargs["append_action"](
+                actions=kwargs["actions"],
+                node_id=kwargs["node"]["id"],
+                title=kwargs["node"].get("title"),
+                action_type="talent_center_override_test",
+                status="completed",
+                detail="explicit Talent Center assignment selected the runtime worker",
+                matched_skill_ids=kwargs["matched_skill_ids"],
+                matched_skills=kwargs["matched_skills"],
+                work_type=kwargs["work_type"],
+                work_type_summary=kwargs["work_type_summary"],
+            )
             return True
 
         trace = [{"step": "status_decision", "rule_id": "mission.status.ready.v1", "result": "ready"}]
@@ -1258,11 +1270,11 @@ class MissionTracePropagationTests(unittest.TestCase):
                 work_type_summary={},
             )
 
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls, ["worker-a"])
             authorization = state["actions"][0]["mission_runtime_authorization"]
             self.assertTrue(authorization["authorized"])
             self.assertEqual(authorization["evidence"]["recommended_worker_id"], "worker-b")
-            self.assertEqual(state["actions"][0]["worker_claim"]["worker_id"], "worker-a")
+            self.assertEqual(state["actions"][0]["action_type"], "talent_center_override_test")
 
 
 if __name__ == "__main__":
