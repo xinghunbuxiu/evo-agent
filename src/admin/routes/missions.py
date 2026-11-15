@@ -16,6 +16,8 @@ _SKILL_REPLAY_RECOVERY_LEASE = timedelta(minutes=10)
 
 from fastapi import Request
 
+from admin.mission_staffing_runtime import validate_staffing_assignment
+
 from admin.mission_runtime import (
     exclusive_mission_claim_lock,
     load_mission_runs,
@@ -45,6 +47,7 @@ def register_mission_routes(
     authorize_tenant: Callable[[dict, str], bool],
     tenant_role: Callable[[dict, str], str | None],
     organization_registry,
+    build_mission_actions: Callable[..., dict] | None = None,
     skill_replay_runtime=None,
 ) -> None:
     @app.post("/api/missions/plan")
@@ -1053,6 +1056,164 @@ def register_mission_routes(
         except Exception:
             return error_response("Worker Claim 释放失败；占用状态已保留待复核", 503)
         return success_response(result, "Worker Claim 已人工释放")
+
+    @app.post("/api/missions/{mission_run_id}/staffing-assignments")
+    async def approve_mission_staffing(request: Request, mission_run_id: str):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict):
+            return error_response("请求内容必须是 JSON 对象", 400)
+        tenant_id = str(data.get("tenant_id") or "").strip()
+        node_id = str(data.get("node_id") or "").strip()
+        employee_member_id = str(data.get("employee_member_id") or "").strip()
+        worker_id = str(data.get("worker_id") or "").strip()
+        if not all((tenant_id, node_id, employee_member_id, worker_id)):
+            return error_response("必须提供 tenant_id、node_id、employee_member_id 和 worker_id", 400)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, tenant_id) != "tenant_admin":
+            return error_response("仅租户管理员可以批准 Mission 人员派遣", 403)
+
+        try:
+            with exclusive_mission_claim_lock(workspace):
+                state = load_mission_runs_strict(workspace)
+                mission_run = next((
+                    item for item in state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and str(item.get("tenant_id") or "") == tenant_id
+                ), None)
+                if not isinstance(mission_run, dict):
+                    return error_response("未找到对应租户的 Mission run", 404)
+                requests = mission_run.get("staffing_requests")
+                requests = requests if isinstance(requests, list) else []
+                staffing_request = next((
+                    item for item in requests
+                    if isinstance(item, dict) and str(item.get("node_id") or "") == node_id
+                ), None)
+                if not isinstance(staffing_request, dict):
+                    return error_response("该任务节点没有待审批的 StaffingRequest", 404)
+                assignments = mission_run.get("staffing_assignments")
+                assignments = assignments if isinstance(assignments, list) else []
+                existing = next((
+                    item for item in assignments
+                    if isinstance(item, dict) and str(item.get("node_id") or "") == node_id
+                ), None)
+                if isinstance(existing, dict):
+                    if (
+                        existing.get("status") == "approved"
+                        and existing.get("employee_member_id") == employee_member_id
+                        and existing.get("worker_id") == worker_id
+                    ):
+                        return success_response(existing, "该人员派遣已批准")
+                    return error_response("该任务节点已有人员派遣决定；如需更换请先走撤销/复核流程", 409)
+
+                worker = organization_registry.get_worker(worker_id) if organization_registry is not None else None
+                assignment = {
+                    "schema_version": "talent.staffing_assignment.v1",
+                    "decision_owner": "talent_center",
+                    "status": "approved",
+                    "tenant_id": tenant_id,
+                    "mission_run_id": mission_run_id,
+                    "node_id": node_id,
+                    "request_id": str(staffing_request.get("request_id") or ""),
+                    "employee_member_id": employee_member_id,
+                    "worker_id": worker_id,
+                    "approved_by": str(user.get("id") or user.get("login") or ""),
+                    "approved_at": datetime.now().astimezone().isoformat(),
+                }
+                runtime_route = mission_run.get("runtime_route")
+                if not isinstance(runtime_route, dict):
+                    plan_route = mission_run.get("plan", {}).get("runtime_route", {}) if isinstance(mission_run.get("plan"), dict) else {}
+                    runtime_route = plan_route if isinstance(plan_route, dict) else {}
+                expected_handler_id = str(runtime_route.get("primary_worker_id") or "").strip()
+                valid, reason = validate_staffing_assignment(
+                    assignment=assignment,
+                    request=staffing_request,
+                    worker=worker,
+                    expected_handler_id=expected_handler_id,
+                )
+                if not valid:
+                    return error_response(f"人员派遣审批校验失败: {reason}", 409)
+
+                assignments.append(assignment)
+                mission_run["staffing_assignments"] = assignments
+                plan = mission_run.get("plan")
+                if not isinstance(plan, dict):
+                    return error_response("Mission run 缺少可恢复的计划", 409)
+                plan_assignments = plan.get("staffing_assignments")
+                plan_assignments = plan_assignments if isinstance(plan_assignments, list) else []
+                plan_assignments = [
+                    item for item in plan_assignments
+                    if not isinstance(item, dict) or str(item.get("node_id") or "") != node_id
+                ]
+                plan_assignments.append(assignment)
+                plan["staffing_assignments"] = plan_assignments
+                mission_run["plan"] = plan
+                save_mission_runs(workspace, state)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return error_response(f"人员派遣审批保存失败: {type(exc).__name__}", 503)
+
+        if not callable(build_mission_actions):
+            return success_response({
+                "assignment": assignment,
+                "dispatch_status": "approved_waiting_runtime",
+            }, "育成师已批准人员；执行恢复入口暂不可用")
+
+        try:
+            plan = mission_run.get("plan", {})
+            action_state = build_mission_actions(
+                task_queue=task_queue,
+                tenant_id=tenant_id,
+                mission_run_id=mission_run_id,
+                plan=plan,
+                context=mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {},
+                work_type=mission_run.get("work_type", {}) if isinstance(mission_run.get("work_type"), dict) else {},
+                work_type_summary=mission_run.get("work_type_summary", {}) if isinstance(mission_run.get("work_type_summary"), dict) else {},
+                only_node_ids=[node_id],
+            )
+            new_actions = action_state.get("actions", []) if isinstance(action_state, dict) else []
+            new_actions = [item for item in new_actions if isinstance(item, dict)]
+            with exclusive_mission_claim_lock(workspace):
+                latest_state = load_mission_runs_strict(workspace)
+                latest_run = next((
+                    item for item in latest_state["items"]
+                    if isinstance(item, dict) and item.get("mission_run_id") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                if not isinstance(latest_run, dict):
+                    return error_response("人员已批准，但 Mission run 在派遣恢复时消失", 409)
+                prior_actions = latest_run.get("actions", [])
+                prior_actions = prior_actions if isinstance(prior_actions, list) else []
+                latest_run["actions"] = [
+                    item for item in prior_actions
+                    if not isinstance(item, dict) or str(item.get("node_id") or "") != node_id
+                ] + new_actions
+                prior_ids = latest_run.get("submitted_task_ids", [])
+                prior_ids = prior_ids if isinstance(prior_ids, list) else []
+                new_ids = action_state.get("submitted_task_ids", []) if isinstance(action_state, dict) else []
+                latest_run["submitted_task_ids"] = list(dict.fromkeys(
+                    [str(item) for item in prior_ids + new_ids if str(item).strip()]
+                ))
+                latest_run["status"] = (
+                    "submitted" if latest_run["submitted_task_ids"]
+                    else str(action_state.get("status") or latest_run.get("status") or "planning_only")
+                )
+                latest_run["staffing_dispatch_updated_at"] = datetime.now().astimezone().isoformat()
+                save_mission_runs(workspace, latest_state)
+            return success_response({
+                "assignment": assignment,
+                "dispatch_status": action_state.get("status"),
+                "actions": new_actions,
+                "submitted_task_ids": new_ids,
+            }, "育成师审批已通过，Mission 已按批准的员工恢复派遣")
+        except Exception as exc:
+            return error_response(f"人员已批准，但派遣恢复失败: {type(exc).__name__}", 503)
 
     @app.get("/api/missions/{mission_run_id}")
     async def get_mission_run(mission_run_id: str):

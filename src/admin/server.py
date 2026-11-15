@@ -2497,6 +2497,7 @@ def create_app() -> FastAPI:
         authorize_tenant=_user_can_access_tenant,
         tenant_role=_tenant_role_for_user,
         organization_registry=organization_registry,
+        build_mission_actions=_mission_action_runtime_ref.get("build_mission_actions"),
         skill_replay_runtime=_skill_replay_runtime,
     )
 
