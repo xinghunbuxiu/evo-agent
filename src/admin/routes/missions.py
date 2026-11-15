@@ -1158,6 +1158,7 @@ def register_mission_routes(
                     dict(item) for item in raw_requests
                     if isinstance(item, dict)
                     and str(item.get("node_id") or "").strip()
+                    and str(item.get("status") or "pending").strip() == "pending"
                     and str(item.get("node_id") or "").strip() not in approved_node_ids
                 ]
                 runtime_route = mission_run.get("runtime_route")

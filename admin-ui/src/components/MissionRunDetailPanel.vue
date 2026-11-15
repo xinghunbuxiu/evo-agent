@@ -398,7 +398,10 @@ const pendingStaffingRequestCount = computed(() => {
       .filter(item => item.status === 'approved')
       .map(item => item.node_id)
   )
-  return requests.filter(item => !approvedNodeIds.has(item.node_id)).length
+  return requests.filter(item => (
+    (item.status || 'pending') === 'pending'
+    && !approvedNodeIds.has(item.node_id)
+  )).length
 })
 
 const replayKey = (action: MissionRun['actions'][number]) => (

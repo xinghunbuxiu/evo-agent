@@ -175,6 +175,15 @@ class MissionStaffingApprovalRouteTests(unittest.TestCase):
     def test_staffing_options_do_not_expose_workers_for_inactive_employees(self):
         app = _App()
         mission = _mission_run()
+        mission["staffing_requests"].append({
+            "request_id": "run-a:already-finished",
+            "tenant_id": "tenant-a",
+            "mission_run_id": "run-a",
+            "node_id": "already-finished",
+            "role_id": "python",
+            "required_capabilities": ["python"],
+            "status": "approved",
+        })
         registry = mock.Mock()
         registry.get_role.return_value = {
             "role_id": "python",
