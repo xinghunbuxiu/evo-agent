@@ -12,13 +12,44 @@ from admin import mission_runtime, knowledge_runtime  # noqa: E402
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
 from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
 from admin.mission_app_runtime import create_mission_app_runtime_bindings  # noqa: E402
+from core.organization_runtime import OrganizationRegistry  # noqa: E402
 
 
 class MissionTracePropagationTests(unittest.TestCase):
+    def _staffing_context(self, workspace, *, mission_run_id, node_ids, role_id="javascript-role", capabilities=("javascript",)):
+        registry = OrganizationRegistry(Path(workspace))
+        registry.create_role(
+            role_id=role_id,
+            title="Mission Test Worker",
+            responsibilities=["execute Mission test nodes"],
+            required_capabilities=list(capabilities),
+        )
+        registry.create_worker(
+            worker_id="worker-a",
+            role_id=role_id,
+            profile={"handler_id": "worker-a"},
+            owner_tenant_id="tenant-a",
+            owner_member_id="employee-a",
+        )
+        assignments = [{
+            "schema_version": "talent.staffing_assignment.v1",
+            "decision_owner": "talent_center",
+            "status": "approved",
+            "tenant_id": "tenant-a",
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "request_id": f"{mission_run_id}:{node_id}",
+            "employee_member_id": "employee-a",
+            "worker_id": "worker-a",
+        } for node_id in node_ids]
+        return registry, assignments
+
     def _dependency_plan(self):
         workforce = {
             "decision": "assign_existing_worker_recommended",
             "recommended_worker_id": "worker-a",
+            "recommended_role_id": "android",
+            "required_capabilities": ["android"],
             "dispatch_state": "recommendation_only",
             "dispatch_authorized": False,
         }
@@ -47,6 +78,17 @@ class MissionTracePropagationTests(unittest.TestCase):
         return {
             "goal": "dependency test",
             "runtime_route": {"primary_worker_id": "worker-a"},
+            "staffing_assignments": [{
+                "schema_version": "talent.staffing_assignment.v1",
+                "decision_owner": "talent_center",
+                "status": "approved",
+                "tenant_id": "tenant-a",
+                "mission_run_id": "run-a",
+                "node_id": node_id,
+                "request_id": f"run-a:{node_id}",
+                "employee_member_id": "employee-a",
+                "worker_id": "worker-a",
+            } for node_id in ("node-a", "node-b")],
             "nodes": nodes,
             "orchestration": {
                 "schema_version": "mission.brain.contract.v1", "decision_owner": "mission",
@@ -220,23 +262,32 @@ class MissionTracePropagationTests(unittest.TestCase):
             kwargs["counts"]["submitted"] += 1
             return True
 
-        bindings = create_mission_action_runtime_bindings(
-            normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
-            task_priority_cls=object, mission_action_handlers={"worker-a": submit_handler},
-        )
-        plan = self._dependency_plan()
-        initial = bindings["build_mission_actions"](
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry, _ = self._staffing_context(
+                temp_dir, mission_run_id="run-a", node_ids=["node-a", "node-b"],
+                role_id="android", capabilities=("android",),
+            )
+            bindings = create_mission_action_runtime_bindings(
+                normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
+                task_priority_cls=object, mission_action_handlers={"worker-a": submit_handler},
+                organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
+            )
+            plan = self._dependency_plan()
+            initial = bindings["build_mission_actions"](
             task_queue=object(), tenant_id="tenant-a", mission_run_id="run-a", plan=plan,
             context={"runtime_primary_worker_id": "worker-a"}, work_type={}, work_type_summary={},
         )
         blocked = next(item for item in initial["actions"] if item["node_id"] == "node-b")
-        self.assertEqual(submitted_nodes, ["node-a"])
-        self.assertEqual(blocked["action_type"], "dependency_blocked")
-        self.assertEqual(blocked["dependency_state"], "waiting")
-        self.assertFalse(blocked["mission_runtime_authorization"]["authorized"])
-        self.assertEqual(blocked["mission_runtime_authorization"]["reason_code"], "dependency_not_completed")
+            self.assertEqual(submitted_nodes, ["node-a"])
+            self.assertEqual(blocked["action_type"], "dependency_blocked")
+            self.assertEqual(blocked["dependency_state"], "waiting")
+            self.assertFalse(blocked["mission_runtime_authorization"]["authorized"])
+            self.assertEqual(blocked["mission_runtime_authorization"]["reason_code"], "dependency_not_completed")
+            claim = next(item["worker_claim"] for item in initial["actions"] if item.get("node_id") == "node-a" and item.get("worker_claim"))
+            registry.release_worker_task(worker_id="worker-a", task_id=claim["claim_id"])
 
-        resumed = bindings["resume_dependency_nodes"](
+            resumed = bindings["resume_dependency_nodes"](
             task_queue=object(),
             mission_run={
                 "mission_run_id": "run-a", "tenant_id": "tenant-a", "plan": plan,
@@ -246,10 +297,10 @@ class MissionTracePropagationTests(unittest.TestCase):
             },
             node_ids=["node-b"], completed_node_ids=["node-a"],
         )
-        self.assertEqual(submitted_nodes, ["node-a", "node-b"])
-        self.assertEqual(len(resumed["actions"]), 1)
-        self.assertEqual(resumed["actions"][0]["node_id"], "node-b")
-        self.assertEqual(resumed["actions"][0]["action_type"], "task_submitted")
+            self.assertEqual(submitted_nodes, ["node-a", "node-b"])
+            self.assertEqual(len(resumed["actions"]), 1)
+            self.assertEqual(resumed["actions"][0]["node_id"], "node-b")
+            self.assertEqual(resumed["actions"][0]["action_type"], "task_submitted")
 
     def test_runtime_rejects_dependency_cycles_before_any_worker_dispatch(self):
         submitted_nodes = []
@@ -898,7 +949,11 @@ class MissionTracePropagationTests(unittest.TestCase):
                     "decision_trace": trace,
                     "validation_checks": ["verify-output"],
                     "verified_skill_ids": [],
-                    "workforce_decision": workforce,
+                    "workforce_decision": {
+                        **workforce,
+                        "recommended_role_id": "javascript-role",
+                        "required_capabilities": ["javascript"],
+                    },
                 }],
                 "coordination_plan": {
                     "schema_version": "mission.coordination.v1",
@@ -918,10 +973,16 @@ class MissionTracePropagationTests(unittest.TestCase):
             bundle = Path(temp_dir) / "main.js"
             bundle.write_text("window.app = {};\n", encoding="utf-8")
             queue = Queue()
+            registry, assignments = self._staffing_context(
+                temp_dir, mission_run_id="run-a", node_ids=["analyze_bundle"]
+            )
+            plan["staffing_assignments"] = assignments
             bindings = create_mission_action_runtime_bindings(
                 normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
                 task_priority_cls=Priority,
                 mission_action_handlers={"worker-a": handle_javascript_reverse_mission_node},
+                organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
             )
             state = bindings["build_mission_actions"](
                 task_queue=queue,
@@ -994,7 +1055,11 @@ class MissionTracePropagationTests(unittest.TestCase):
                     "decision_trace": trace,
                     "validation_checks": ["verify-output"],
                     "verified_skill_ids": ["skill-verified"],
-                    "workforce_decision": workforce,
+                    "workforce_decision": {
+                        **workforce,
+                        "recommended_role_id": "javascript-role",
+                        "required_capabilities": ["javascript"],
+                    },
                 }],
                 "coordination_plan": {
                     "schema_version": "mission.coordination.v1",
@@ -1014,10 +1079,16 @@ class MissionTracePropagationTests(unittest.TestCase):
             bundle = Path(temp_dir) / "main.js"
             bundle.write_text("window.app = {};\n", encoding="utf-8")
             queue = Queue()
+            registry, assignments = self._staffing_context(
+                temp_dir, mission_run_id="run-reuse", node_ids=["analyze_bundle"]
+            )
+            plan["staffing_assignments"] = assignments
             bindings = create_mission_action_runtime_bindings(
                 normalize_string_list=lambda value: [str(item) for item in value] if isinstance(value, list) else [],
                 task_priority_cls=Priority,
                 mission_action_handlers={"worker-a": handle_javascript_reverse_mission_node},
+                organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
             )
             state = bindings["build_mission_actions"](
                 task_queue=queue,
@@ -1145,6 +1216,8 @@ class MissionTracePropagationTests(unittest.TestCase):
                     "workforce_decision": {
                         "decision": "assign_existing_worker_recommended",
                         "recommended_worker_id": "worker-b",
+                        "recommended_role_id": "javascript-role",
+                        "required_capabilities": ["javascript"],
                         "dispatch_state": "recommendation_only",
                         "dispatch_authorized": False,
                     },
@@ -1162,29 +1235,34 @@ class MissionTracePropagationTests(unittest.TestCase):
                 },
             },
         }
-        bindings = create_mission_action_runtime_bindings(
-            normalize_string_list=lambda value: value if isinstance(value, list) else [],
-            task_priority_cls=object,
-            mission_action_handlers={"worker-a": worker_handler},
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry, assignments = self._staffing_context(
+                temp_dir, mission_run_id="run-mismatch", node_ids=["execute"]
+            )
+            plan["staffing_assignments"] = assignments
+            bindings = create_mission_action_runtime_bindings(
+                normalize_string_list=lambda value: value if isinstance(value, list) else [],
+                task_priority_cls=object,
+                mission_action_handlers={"worker-a": worker_handler},
+                organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
+            )
 
-        state = bindings["build_mission_actions"](
-            task_queue=object(),
-            tenant_id="tenant-a",
-            mission_run_id="run-mismatch",
-            plan=plan,
-            context={},
-            work_type={},
-            work_type_summary={},
-        )
+            state = bindings["build_mission_actions"](
+                task_queue=object(),
+                tenant_id="tenant-a",
+                mission_run_id="run-mismatch",
+                plan=plan,
+                context={},
+                work_type={},
+                work_type_summary={},
+            )
 
-        self.assertEqual(calls, [])
-        self.assertEqual(state["status"], "blocked")
-        self.assertEqual(state["actions"][0]["action_type"], "dispatch_denied")
-        authorization = state["actions"][0]["mission_runtime_authorization"]
-        self.assertFalse(authorization["authorized"])
-        self.assertEqual(authorization["reason_code"], "runtime_worker_does_not_match_recommendation")
-        self.assertEqual(authorization["evidence"]["recommended_worker_id"], "worker-b")
+            self.assertEqual(len(calls), 1)
+            authorization = state["actions"][0]["mission_runtime_authorization"]
+            self.assertTrue(authorization["authorized"])
+            self.assertEqual(authorization["evidence"]["recommended_worker_id"], "worker-b")
+            self.assertEqual(state["actions"][0]["worker_claim"]["worker_id"], "worker-a")
 
 
 if __name__ == "__main__":

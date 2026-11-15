@@ -16,6 +16,7 @@ from admin.mission_action_runtime import create_mission_action_runtime_bindings 
 from admin.mission_execution_runtime import create_mission_execution_bindings  # noqa: E402
 from core.learning import Strategy, StrategyEngine  # noqa: E402
 from core.mission_brain import build_mission_brain_contract  # noqa: E402
+from core.organization_runtime import OrganizationRegistry  # noqa: E402
 from core.mission_planner import MissionPlanner  # noqa: E402
 from core.verification import sign_verification_evidence  # noqa: E402
 
@@ -160,6 +161,20 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
                 )
                 return runtime_evidence["passed"]
 
+            registry = OrganizationRegistry(workspace)
+            registry.create_role(
+                role_id="python",
+                title="Python Worker",
+                responsibilities=["implement and validate Python code"],
+                required_capabilities=["python"],
+            )
+            registry.create_worker(
+                worker_id="python-test-worker",
+                role_id="python",
+                profile={"handler_id": "python-test-worker"},
+                owner_tenant_id=tenant_id,
+                owner_member_id="employee-e2e",
+            )
             runtime = create_mission_action_runtime_bindings(
                 normalize_string_list=lambda value: (
                     [str(item) for item in value if str(item).strip()]
@@ -167,6 +182,8 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
                 ),
                 task_priority_cls=FakePriority,
                 mission_action_handlers={"python-test-worker": deterministic_worker},
+                organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
             )
             dispatched = runtime["build_mission_actions"](
                 task_queue=object(),
@@ -176,6 +193,17 @@ class MissionExecutionLearningE2ETests(unittest.TestCase):
                     "goal": "Implement and test a Python integer parity function",
                     "mission_kind": "even_number_demo",
                     "runtime_route": {"primary_worker_id": "python-test-worker"},
+                    "staffing_assignments": [{
+                        "schema_version": "talent.staffing_assignment.v1",
+                        "decision_owner": "talent_center",
+                        "status": "approved",
+                        "tenant_id": tenant_id,
+                        "mission_run_id": "mission-e2e-even",
+                        "node_id": "implement_even_check",
+                        "request_id": "mission-e2e-even:implement_even_check",
+                        "employee_member_id": "employee-e2e",
+                        "worker_id": "python-test-worker",
+                    }],
                     "nodes": [node],
                     "orchestration": build_mission_brain_contract([node]),
                 },

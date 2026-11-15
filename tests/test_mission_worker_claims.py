@@ -127,6 +127,8 @@ class MissionWorkerClaimTests(unittest.TestCase):
             worker_id="worker-a",
             role_id="android",
             profile={"handler_id": "worker-a", "capability_type": "android"},
+            owner_tenant_id="tenant-a",
+            owner_member_id="employee-a",
         )
 
     def _bindings(self, handler):
@@ -135,7 +137,23 @@ class MissionWorkerClaimTests(unittest.TestCase):
             task_priority_cls=object,
             mission_action_handlers={"worker-a": handler},
             organization_registry=self.registry,
+            record_worker_employee_link=lambda **kwargs: None,
         )
+
+    @staticmethod
+    def _approve_staffing(plan, mission_run_id, *, worker_id="worker-a"):
+        plan["staffing_assignments"] = [{
+            "schema_version": "talent.staffing_assignment.v1",
+            "decision_owner": "talent_center",
+            "status": "approved",
+            "tenant_id": "tenant-a",
+            "mission_run_id": mission_run_id,
+            "node_id": node["id"],
+            "request_id": f"{mission_run_id}:{node['id']}",
+            "employee_member_id": "employee-a",
+            "worker_id": worker_id,
+        } for node in plan["nodes"]]
+        return plan
 
     @staticmethod
     def _handler(**kwargs):
@@ -164,6 +182,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
             {"id": "node-one", "workforce_decision": _workforce("assign_existing_worker_recommended")},
             {"id": "node-two", "workforce_decision": _workforce("assign_existing_worker_recommended")},
         ])
+        plan = self._approve_staffing(plan, "run-a")
         result = self._bindings(handler)["build_mission_actions"](
             task_queue=object(), tenant_id="tenant-a", mission_run_id="run-a",
             plan=plan, context={"runtime_primary_worker_id": "worker-a"},
@@ -175,7 +194,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(len(worker["active_task_ids"]), 1)
         denied = next(item for item in result["actions"] if item["node_id"] == "node-two")
         self.assertEqual(denied["action_type"], "dispatch_denied")
-        self.assertEqual(denied["mission_runtime_authorization"]["reason_code"], "recommended_worker_not_available")
+        self.assertEqual(denied["mission_runtime_authorization"]["reason_code"], "staffing_assignment_worker_unavailable")
 
     def test_handler_error_after_submission_keeps_claim_until_task_ends(self):
         def partial_handler(**kwargs):
@@ -198,6 +217,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
             "id": "partial-node",
             "workforce_decision": _workforce("assign_existing_worker_recommended"),
         }])
+        plan = self._approve_staffing(plan, "run-partial")
         result = self._bindings(partial_handler)["build_mission_actions"](
             task_queue=object(), tenant_id="tenant-a", mission_run_id="run-partial",
             plan=plan, context={"runtime_primary_worker_id": "worker-a"},
@@ -210,7 +230,7 @@ class MissionWorkerClaimTests(unittest.TestCase):
         self.assertEqual(worker["status"], "busy")
         self.assertEqual(len(worker["active_task_ids"]), 1)
 
-    def test_parallel_safe_busy_worker_is_cloned_then_clone_is_claimed(self):
+    def test_parallel_safe_clone_recommendation_does_not_bypass_talent_center_approval(self):
         self.registry.claim_worker_task(worker_id="worker-a", task_id="existing-task")
         plan = _plan([{
             "id": "parallel-node",
@@ -222,14 +242,13 @@ class MissionWorkerClaimTests(unittest.TestCase):
             plan=plan, context={"runtime_primary_worker_id": "worker-a"},
             work_type={}, work_type_summary={},
         )
-        action = next(item for item in result["actions"] if item["node_id"] == "parallel-node" and item["action_type"] == "task_submitted")
-        claim = action["worker_claim"]
-        self.assertEqual(claim["origin"], "clone")
-        clone = self.registry.get_worker(claim["worker_id"])
-        self.assertEqual(clone["created_from_worker_id"], "worker-a")
-        self.assertEqual(clone["status"], "busy")
-        self.assertEqual(clone["active_task_ids"], [claim["claim_id"]])
-        self.assertEqual(action["organization_worker_id"], claim["worker_id"])
+        self.assertFalse(any(item.get("action_type") == "task_submitted" for item in result["actions"]))
+        denied = next(item for item in result["actions"] if item["node_id"] == "parallel-node")
+        self.assertEqual(denied["mission_runtime_authorization"]["reason_code"], "staffing_assignment_missing")
+        workers = self.registry.list_workers(role_id="android")
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0]["worker_id"], "worker-a")
+        self.assertEqual(workers[0]["status"], "busy")
 
     def test_failed_and_cancelled_tasks_also_release_worker_claims(self):
         refresh = _execution_bindings(self.registry)["refresh_mission_run"]

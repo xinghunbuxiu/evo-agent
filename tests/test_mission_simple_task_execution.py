@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.mission_action_runtime import create_mission_action_runtime_bindings  # noqa: E402
 from core.mission_brain import build_mission_brain_contract  # noqa: E402
+from core.organization_runtime import OrganizationRegistry  # noqa: E402
 
 
 class FakePriority:
@@ -103,6 +104,22 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
             return evidence["passed"]
 
         orchestration = build_mission_brain_contract([node])
+        registry_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(registry_temp.cleanup)
+        registry = OrganizationRegistry(Path(registry_temp.name))
+        registry.create_role(
+            role_id="python",
+            title="Python Worker",
+            responsibilities=["implement and validate Python code"],
+            required_capabilities=["python"],
+        )
+        registry.create_worker(
+            worker_id="python-test-worker",
+            role_id="python",
+            profile={"handler_id": "python-test-worker"},
+            owner_tenant_id="demo-tenant",
+            owner_member_id="employee-demo",
+        )
         bindings = create_mission_action_runtime_bindings(
             normalize_string_list=lambda value: (
                 [str(item) for item in value if str(item).strip()]
@@ -110,6 +127,8 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
             ),
             task_priority_cls=FakePriority,
             mission_action_handlers={"python-test-worker": deterministic_python_worker},
+            organization_registry=registry,
+            record_worker_employee_link=lambda **kwargs: None,
         )
         result = bindings["build_mission_actions"](
             task_queue=object(),
@@ -119,6 +138,17 @@ class MissionSimpleTaskExecutionTests(unittest.TestCase):
                 "goal": "写一个 Python 函数判断整数是否为偶数，并说明如何验证结果",
                 "mission_kind": "even_number_demo",
                 "runtime_route": {"primary_worker_id": "python-test-worker"},
+                "staffing_assignments": [{
+                    "schema_version": "talent.staffing_assignment.v1",
+                    "decision_owner": "talent_center",
+                    "status": "approved",
+                    "tenant_id": "demo-tenant",
+                    "mission_run_id": "mission-even-number",
+                    "node_id": "implement_even_check",
+                    "request_id": "mission-even-number:implement_even_check",
+                    "employee_member_id": "employee-demo",
+                    "worker_id": "python-test-worker",
+                }],
                 "nodes": [node],
                 "orchestration": orchestration,
             },
