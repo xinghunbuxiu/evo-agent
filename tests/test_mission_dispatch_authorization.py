@@ -101,6 +101,7 @@ class MissionDispatchAuthorizationTests(unittest.TestCase):
                     runtime_worker_id: handle_javascript_reverse_mission_node,
                 },
                 organization_registry=registry,
+                record_worker_employee_link=lambda **kwargs: None,
             )
             state = bindings["build_mission_actions"](
                 task_queue=queue,
