@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from core.mission_brain import index_mission_brain_decisions
 from core.organization_runtime import OrganizationRegistry
+from admin.mission_staffing_runtime import build_staffing_request
 from admin.worker_lease_runtime import start_worker_task_lease_heartbeat
 
 
@@ -226,6 +227,7 @@ def create_mission_action_runtime_bindings(
         }
 
         authorization_by_node: dict[str, dict[str, Any]] = {}
+        staffing_requests_by_node: dict[str, dict[str, Any]] = {}
 
         plan_nodes_by_id = {
             str(item.get("id") or "").strip(): item
@@ -273,6 +275,16 @@ def create_mission_action_runtime_bindings(
                     # A workforce recommendation is evidence, never dispatch authorization.
                     extra["workforce_decision"] = workforce_decision
                     extra["workforce_dispatch_authorized"] = False
+                    staffing_request = staffing_requests_by_node.get(node_key)
+                    if staffing_request is None:
+                        staffing_request = build_staffing_request(
+                            tenant_id=tenant_id,
+                            mission_run_id=mission_run_id,
+                            node=planned_node,
+                            workforce_decision=workforce_decision,
+                        )
+                        staffing_requests_by_node[node_key] = staffing_request
+                    extra["staffing_request"] = dict(staffing_request)
             kwargs["extra"] = extra
             _append_base_action(**kwargs)
 
@@ -899,6 +911,7 @@ def create_mission_action_runtime_bindings(
             "submitted_task_ids": submitted_task_ids,
             "counts": counts,
             "matched_verified_skill_ids": mission_skill_ids,
+            "staffing_requests": list(staffing_requests_by_node.values()),
             "status": overall_status,
             "execution_preference": execution_preference,
             "primary_package_id": primary_package_id,
