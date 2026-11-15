@@ -8,6 +8,25 @@ from __future__ import annotations
 from typing import Any
 
 
+def resolve_selected_employee(*, members: list[dict[str, Any]], selected_member_id: str) -> dict[str, Any] | None:
+    """Resolve only an explicit, unique, active employee selection."""
+    selected_id = str(selected_member_id or "").strip()
+    if not selected_id:
+        return None
+    matches = [
+        item for item in members
+        if isinstance(item, dict) and str(item.get("member_id") or "").strip() == selected_id
+    ]
+    if len(matches) != 1:
+        return None
+    member = matches[0]
+    if str(member.get("status") or "active").strip() != "active":
+        return None
+    if str(member.get("primary_role") or "").strip() == "talent_development":
+        return None
+    return member
+
+
 def build_staffing_request(
     *,
     tenant_id: str,
@@ -77,3 +96,6 @@ def validate_staffing_assignment(
     if str(profile.get("handler_id") or "").strip() != str(expected_handler_id or "").strip():
         return False, "staffing_assignment_handler_mismatch"
     return True, "staffing_assignment_validated"
+
+
+__all__ = ["resolve_selected_employee", "build_staffing_request", "validate_staffing_assignment"]
