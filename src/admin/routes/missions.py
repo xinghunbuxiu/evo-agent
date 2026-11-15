@@ -1105,13 +1105,16 @@ def register_mission_routes(
                     if isinstance(item, dict) and str(item.get("node_id") or "") == node_id
                 ), None)
                 if isinstance(existing, dict):
-                    if (
+                    if not (
                         existing.get("status") == "approved"
                         and existing.get("employee_member_id") == employee_member_id
                         and existing.get("worker_id") == worker_id
                     ):
-                        return success_response(existing, "该人员派遣已批准")
-                    return error_response("该任务节点已有人员派遣决定；如需更换请先走撤销/复核流程", 409)
+                        return error_response("该任务节点已有人员派遣决定；如需更换请先走撤销/复核流程", 409)
+                    assignments = [
+                        item for item in assignments
+                        if not isinstance(item, dict) or str(item.get("node_id") or "") != node_id
+                    ]
 
                 worker = organization_registry.get_worker(worker_id) if organization_registry is not None else None
                 assignment = {
@@ -1131,7 +1134,12 @@ def register_mission_routes(
                 if not isinstance(runtime_route, dict):
                     plan_route = mission_run.get("plan", {}).get("runtime_route", {}) if isinstance(mission_run.get("plan"), dict) else {}
                     runtime_route = plan_route if isinstance(plan_route, dict) else {}
-                expected_handler_id = str(runtime_route.get("primary_worker_id") or "").strip()
+                run_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+                expected_handler_id = str(
+                    runtime_route.get("primary_worker_id")
+                    or run_context.get("runtime_primary_worker_id")
+                    or ""
+                ).strip()
                 valid, reason = validate_staffing_assignment(
                     assignment=assignment,
                     request=staffing_request,

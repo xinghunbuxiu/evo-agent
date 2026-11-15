@@ -184,7 +184,10 @@ def create_mission_action_runtime_bindings(
                 for item in role.get("required_capabilities", [])
                 if str(item).strip()
             }
-            return bool(required) and required.issubset(capabilities)
+            if required:
+                return required.issubset(capabilities)
+            recommended_role = str(workforce.get("recommended_role_id") or "").strip()
+            return bool(recommended_role) and recommended_role == str(role_id or "").strip()
 
         def worker_claim_id() -> str:
             return "mission-" + uuid.uuid4().hex[:32]
