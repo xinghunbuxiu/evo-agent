@@ -317,7 +317,7 @@ import { computed, ref } from 'vue'
 import MissionWorkerSummary from './MissionWorkerSummary.vue'
 import type { MissionRun, MissionStaffingOptions } from '../api/missions'
 
-export type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
+export type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan' | 'recovery'
 
 const props = withDefaults(defineProps<{
   run: MissionRun
