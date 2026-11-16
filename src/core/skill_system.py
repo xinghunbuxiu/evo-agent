@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -103,9 +103,12 @@ class SkillRegistry:
     3. 自动生成的草稿技能
     """
     
-    def __init__(self, workspace: Path, tenant_id: str = "default"):
+    def __init__(self, workspace: Path, tenant_id: str = "default", *, artifact_store=None):
         self.workspace = workspace
         self.tenant_id = tenant_id
+        # Optional read-only view of Broker-published immutable Skill artifacts.
+        # The Broker remains the only writer; callers must supply a Mission-pinned binding.
+        self.artifact_store = artifact_store
         
         # 分布式存储（云端）
         dist_config = get_distributed_config(workspace)
@@ -122,6 +125,54 @@ class SkillRegistry:
         # 技能索引缓存
         self._index_cache: Optional[Dict[str, List[str]]] = None
     
+    def load_published_artifact(self, binding: Mapping[str, Any]) -> Skill:
+        """Load one exact Broker-published Skill version for this tenant.
+
+        This is intentionally explicit rather than part of find_skill(): the
+        immutable Artifact Store has no implicit "latest" lookup, and a Skill
+        may only be resolved when Mission supplies its pinned version, digest,
+        and execution provenance. The injected store must be mounted read-only
+        for this process; publication remains Broker-owned.
+        """
+        if self.artifact_store is None or not callable(
+            getattr(self.artifact_store, "load_for_binding", None)
+        ):
+            raise RuntimeError("Broker Skill Artifact Store is not configured")
+
+        if not isinstance(binding, Mapping):
+            raise ValueError("Skill replay binding is invalid")
+        context = binding.get("mission_context")
+        if not isinstance(context, Mapping) or context.get("tenant_id") != self.tenant_id:
+            raise ValueError("Skill replay binding belongs to another tenant")
+        if binding.get("trust_level") not in {"verified", "cloud"}:
+            raise ValueError("only independently validated published Skills may be loaded")
+
+        artifact = self.artifact_store.load_for_binding(binding)
+        if (
+            getattr(artifact, "tenant_id", None) != self.tenant_id
+            or getattr(artifact, "id", None) != binding.get("skill_id")
+            or getattr(artifact, "version", None) != binding.get("skill_version")
+            or getattr(artifact, "content_sha256", None) != binding.get("content_sha256")
+            or getattr(artifact, "trust_level", None) != binding.get("trust_level")
+        ):
+            raise ValueError("loaded Skill artifact does not match its pinned binding")
+
+        trust_level = SkillTrustLevel(artifact.trust_level)
+        return Skill(
+            id=artifact.id,
+            name=artifact.id,
+            domain="mission",
+            description="Broker-published immutable Mission Skill",
+            code=artifact.code,
+            parameters={
+                "mission_context": dict(context),
+                "content_sha256": artifact.content_sha256,
+            },
+            trust_level=trust_level,
+            source="broker_artifact",
+            version=artifact.version,
+        )
+
     def find_skill(
         self,
         domain: str,

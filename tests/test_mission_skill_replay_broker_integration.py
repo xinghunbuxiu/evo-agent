@@ -380,6 +380,25 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertEqual(published.code, code)
             self.assertEqual(published.trust_level, "verified")
 
+            # Exercise the business-side consumer, not only the Broker's
+            # storage primitive: SkillRegistry must resolve the exact pinned
+            # tenant/version/digest and preserve Mission provenance.
+            from core.skill_system import SkillRegistry, SkillTrustLevel
+            registry = SkillRegistry.__new__(SkillRegistry)
+            registry.tenant_id = tenant_id
+            registry.artifact_store = artifact_store
+            registry_skill = registry.load_published_artifact(published_binding)
+            self.assertEqual(registry_skill.id, skill.id)
+            self.assertEqual(registry_skill.version, skill.version)
+            self.assertEqual(registry_skill.code, code)
+            self.assertEqual(registry_skill.trust_level, SkillTrustLevel.VERIFIED)
+            self.assertEqual(registry_skill.source, "broker_artifact")
+            self.assertEqual(
+                registry_skill.parameters["mission_context"],
+                expected_mission_context,
+            )
+            self.assertEqual(registry_skill.parameters["content_sha256"], digest)
+
     def test_mission_replay_persists_experience_and_publishes_validator_attested_artifact(self):
         self._run_mission_replay_integration(validator_accepts=True)
 
