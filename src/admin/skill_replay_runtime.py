@@ -617,6 +617,45 @@ class SkillReplayRuntime:
             "reconciled_existing_publication": promotion_status == "completed",
         }
 
+    @staticmethod
+    def _validate_mission_delivery_acceptance(parameters: Mapping[str, Any]) -> None:
+        """Require the accepted delivery evidence attached by the candidate writer.
+
+        The candidate writer is not the execution boundary: candidates can also
+        be imported or written by other admin paths. Re-check the acceptance
+        envelope immediately before Broker staging so a forged/legacy Draft
+        cannot bypass Mission delivery acceptance.
+        """
+        acceptance = parameters.get("acceptance")
+        evidence = parameters.get("validation_evidence")
+        evidence_ids = parameters.get("evidence_ids")
+        origin_task_id = parameters.get("candidate_origin_task_id")
+        if (
+            not isinstance(acceptance, Mapping)
+            or acceptance.get("evaluation_verdict") != "pass"
+            or acceptance.get("has_target_dir") is not True
+            or isinstance(acceptance.get("components_min"), bool)
+            or not isinstance(acceptance.get("components_min"), int)
+            or acceptance.get("components_min") < 0
+        ):
+            raise ValueError("Mission delivery acceptance evidence is missing or not passed")
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("verdict") != "pass"
+            or not isinstance(evidence.get("analyze_task_id"), str)
+            or not evidence.get("analyze_task_id").strip()
+            or not isinstance(evidence.get("reconstruct_task_id"), str)
+            or not evidence.get("reconstruct_task_id").strip()
+            or not isinstance(origin_task_id, str)
+            or not origin_task_id.strip()
+            or origin_task_id != evidence.get("reconstruct_task_id")
+            or not isinstance(evidence_ids, list)
+            or not {evidence.get("analyze_task_id"), evidence.get("reconstruct_task_id")}.issubset(
+                {item for item in evidence_ids if isinstance(item, str)}
+            )
+        ):
+            raise ValueError("Mission delivery acceptance evidence lineage is incomplete or inconsistent")
+
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,
                          on_candidate_bound: Callable[[dict], None] | None = None,
@@ -659,6 +698,7 @@ class SkillReplayRuntime:
             or str(parameters.get("mission_node_id") or "") != node_id
         ):
             raise PermissionError("Skill candidate provenance does not match this Mission node")
+        self._validate_mission_delivery_acceptance(parameters)
 
         context = {
             "tenant_id": tenant_id,

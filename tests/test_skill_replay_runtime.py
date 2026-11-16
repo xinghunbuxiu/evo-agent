@@ -63,6 +63,18 @@ class SkillReplayRuntimeTests(unittest.TestCase):
                 "kind": "python_run_context",
                 "replay_eligible": True,
             },
+            "candidate_origin_task_id": "task-reconstruct",
+            "evidence_ids": ["task-analyze", "task-reconstruct"],
+            "validation_evidence": {
+                "verdict": "pass",
+                "analyze_task_id": "task-analyze",
+                "reconstruct_task_id": "task-reconstruct",
+            },
+            "acceptance": {
+                "evaluation_verdict": "pass",
+                "has_target_dir": True,
+                "components_min": 1,
+            },
         }
         return Skill(
             id="skill-demo",
@@ -650,6 +662,28 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         third_id = stage.call_args.kwargs["request_id"]
         self.assertNotEqual(first_id, second_id)
         self.assertEqual(second_id, third_id)
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_replay_rejects_candidate_without_accepted_delivery_evidence(self, stage):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        candidate = self._skill()
+        candidate.parameters.pop("acceptance")
+        write_skill_candidate(self.workspace, "tenant-a", candidate)
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        with self.assertRaisesRegex(ValueError, "acceptance evidence is missing or not passed"):
+            runtime.replay_candidate(
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "mission-1",
+                    "tenant_id": "tenant-a",
+                    "plan": {"nodes": [{"id": "node-1"}]},
+                },
+                node_id="node-1",
+                task_id="task-1",
+                skill_id="skill-demo",
+            )
+        stage.assert_not_called()
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_rejects_recipe_before_broker_staging(self, stage):

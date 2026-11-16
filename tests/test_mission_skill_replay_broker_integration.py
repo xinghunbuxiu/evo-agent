@@ -107,6 +107,18 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     "mission_run_id": mission_context["mission_run_id"],
                     "mission_node_id": mission_context["node_id"],
                 },
+                    "candidate_origin_task_id": "task-reconstruct",
+                    "evidence_ids": ["task-analyze", "task-reconstruct"],
+                    "validation_evidence": {
+                        "verdict": "pass",
+                        "analyze_task_id": "task-analyze",
+                        "reconstruct_task_id": "task-reconstruct",
+                    },
+                    "acceptance": {
+                        "evaluation_verdict": "pass",
+                        "has_target_dir": True,
+                        "components_min": 1,
+                    },
                 trust_level=SkillTrustLevel.DRAFT,
                 version="1.0.0",
             )
