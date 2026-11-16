@@ -449,6 +449,68 @@ export function approveMissionStaffing(
   )
 }
 
+export interface MissionSkillReplayRecoveryItem {
+  mission_run_id: string
+  tenant_id: string
+  goal?: string
+  node_id: string
+  task_id: string
+  skill_id: string
+  title?: string
+  recovery_status?: string
+  recovery_reason?: string
+  interrupted_at?: string
+  candidate_binding_status: string
+  skill_binding?: {
+    skill_id: string
+    skill_version: string
+    content_sha256: string
+    trust_level: string
+  } | null
+  stage_request_id?: string | null
+  execution_request_id?: string | null
+  validation_request_id?: string | null
+  promotion_request_id?: string | null
+  broker_status: Record<string, { status?: string; error_type?: string }>
+  validator_status: { status?: string; error_type?: string }
+  verified_receipts: {
+    broker_stage?: string
+    broker_execution?: string
+    validator?: string
+    broker_promotion?: string
+    execution_succeeded?: boolean | null
+    validation_id?: string | null
+  }
+  recovery_assessment: {
+    status: string
+    automatic_resume: boolean
+    next_step: string
+  }
+  evidence_ref?: {
+    evidence_id?: string
+    sha256?: string
+    relative_path?: string
+  } | null
+}
+
+export function listMissionSkillReplayRecoveryReviews(tenantId: string, limit = 100) {
+  const query = new URLSearchParams({ tenant_id: tenantId, limit: String(limit) })
+  return get<{ count: number; items: MissionSkillReplayRecoveryItem[] }>(
+    `/api/missions/skill-replays/recovery-review?${query.toString()}`
+  )
+}
+
+export function resumeMissionSkillReplayPromotion(
+  missionRunId: string,
+  skillId: string,
+  taskId: string
+) {
+  return post<Record<string, unknown>>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/skills/${encodeURIComponent(skillId)}/recovery/${encodeURIComponent(taskId)}/resume-promotion`,
+    { confirm: true }
+  )
+}
+
 export function continueMission(missionRunId: string) {
   return post<{ source_mission_run_id: string; continued_mission_run: MissionRun }>(
     `/api/missions/${encodeURIComponent(missionRunId)}/continue`,

@@ -42,6 +42,74 @@
       正在加载 mission 详情...
     </div>
 
+    <section
+      v-else-if="missionRun && activeSection === 'recovery'"
+      class="space-y-4"
+    >
+      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        复核只读取原始 Broker/Validator 状态并重新验签。恢复操作不会重新运行 Skill；若原始执行或独立验收证据不完整，服务端会拒绝发布。
+      </div>
+      <div
+        v-for="item in recoveryItems"
+        :key="item.task_id"
+        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-slate-900">{{ item.title || item.skill_id }}</div>
+            <div class="mt-1 break-all font-mono text-xs text-slate-500">
+              {{ item.skill_id }} · {{ item.node_id }} · {{ item.task_id }}
+            </div>
+            <div class="mt-2 text-xs text-slate-500">
+              中断原因：{{ item.recovery_reason || '未知' }} · {{ formatTime(item.interrupted_at) }}
+            </div>
+          </div>
+          <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+            {{ item.recovery_assessment.status }}
+          </span>
+        </div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Broker Stage</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_stage || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Broker Execution</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_execution || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Independent Validator</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.validator || item.validator_status.status || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Artifact Promotion</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_promotion || item.broker_status.promotion?.status || 'not_checked' }}</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs text-slate-600">
+          {{ item.recovery_assessment.next_step }}
+        </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+          <div class="break-all text-xs text-slate-500">
+            {{ item.skill_binding?.skill_version || '未固定版本' }}
+            <span v-if="item.skill_binding?.content_sha256"> · SHA256 {{ item.skill_binding.content_sha256 }}</span>
+          </div>
+          <button
+            v-if="canResumeReplayPromotion(item)"
+            type="button"
+            :disabled="recoveryBusyKey === item.task_id"
+            class="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="resumeReplayPromotion(item)"
+          >
+            {{ recoveryBusyKey === item.task_id ? '正在复核并恢复...' : '管理员确认恢复发布' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="!recoveryItems.length" class="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+        当前 Mission 没有待复核的 Skill Replay。
+      </div>
+    </section>
+
     <MissionRunDetailPanel
       v-else-if="missionRun"
       :run="missionRun"
@@ -73,12 +141,15 @@ import {
   continueMission,
   getMissionRun,
   getMissionStaffingOptions,
+  listMissionSkillReplayRecoveryReviews,
+  resumeMissionSkillReplayPromotion,
   replayMissionSkill,
   type MissionRun,
   type MissionStaffingOptions,
+  type MissionSkillReplayRecoveryItem,
 } from '../api/missions'
 
-type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
+type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan' | 'recovery'
 
 const route = useRoute()
 const router = useRouter()
@@ -89,6 +160,8 @@ const continuing = ref(false)
 const replayBusyKey = ref('')
 const staffingOptions = ref<MissionStaffingOptions | null>(null)
 const staffingBusyKey = ref('')
+const recoveryItems = ref<MissionSkillReplayRecoveryItem[]>([])
+const recoveryBusyKey = ref('')
 const message = ref('')
 const success = ref(false)
 let refreshTimer: number | null = null
@@ -116,6 +189,10 @@ const sectionMeta = computed(() => {
       title: `${title} · 续跑计划`,
       description: '下一轮 focus 与 next steps；可在此继续 mission。',
     },
+    recovery: {
+      title: `${title} · Skill Replay 复核`,
+      description: '核验 Broker 与 Validator 的原始签名回执；仅允许管理员按原请求恢复发布，不会重新执行 Skill。',
+    },
   }
   return map[activeSection.value]
 })
@@ -132,6 +209,7 @@ const subNavItems = computed<WorkspaceSubNavItem[]>(() => ([
   { key: 'actions', title: '动作链', badge: String(actionCount.value), active: activeSection.value === 'actions' },
   { key: 'growth', title: '成长', badge: String(growthCount.value), active: activeSection.value === 'growth' },
   { key: 'plan', title: '续跑', badge: planStepCount.value ? String(planStepCount.value) : undefined, active: activeSection.value === 'plan' },
+  { key: 'recovery', title: 'Replay 复核', badge: recoveryItems.value.length ? String(recoveryItems.value.length) : undefined, active: activeSection.value === 'recovery' },
 ]))
 
 const memberWorkspaceRoute = computed(() => {
@@ -146,7 +224,7 @@ const memberWorkspaceRoute = computed(() => {
 
 const normalizeSection = (value: unknown): MissionDetailSection => {
   const section = String(value || '').trim()
-  if (section === 'actions' || section === 'growth' || section === 'plan') return section
+  if (section === 'actions' || section === 'growth' || section === 'plan' || section === 'recovery') return section
   return 'overview'
 }
 
@@ -170,6 +248,18 @@ const loadMissionRun = async () => {
     const result = await getMissionRun(id)
     missionRun.value = result.data || null
     staffingOptions.value = null
+    recoveryItems.value = []
+    if (missionRun.value?.tenant_id) {
+      try {
+        const reviews = await listMissionSkillReplayRecoveryReviews(missionRun.value.tenant_id, 200)
+        recoveryItems.value = (reviews.data?.items || []).filter(
+          (item) => item.mission_run_id === missionRun.value?.mission_run_id,
+        )
+      } catch (recoveryError) {
+        // Recovery review is an admin-only optional view; it must not block normal Mission details.
+        console.warn('Failed to load Skill Replay recovery reviews:', recoveryError)
+      }
+    }
     if (missionRun.value?.staffing_requests?.length) {
       try {
         const options = await getMissionStaffingOptions(id, missionRun.value.tenant_id)
@@ -184,6 +274,47 @@ const loadMissionRun = async () => {
     staffingOptions.value = null
   } finally {
     loading.value = false
+  }
+}
+
+const formatTime = (value?: string) => {
+  if (!value) return '--'
+  return value.slice(0, 19).replace('T', ' ')
+}
+
+const canResumeReplayPromotion = (item: MissionSkillReplayRecoveryItem) => (
+  item.candidate_binding_status === 'pinned'
+  && item.verified_receipts.broker_stage === 'verified'
+  && item.verified_receipts.broker_execution === 'verified'
+  && item.verified_receipts.execution_succeeded === true
+  && item.verified_receipts.validator === 'verified'
+  && item.verified_receipts.broker_promotion !== 'invalid'
+  && Boolean(item.stage_request_id && item.execution_request_id && item.validation_request_id && item.promotion_request_id)
+)
+
+const resumeReplayPromotion = async (item: MissionSkillReplayRecoveryItem) => {
+  if (!missionRun.value || recoveryBusyKey.value) return
+  const confirmed = window.confirm(
+    `确认复核原始签名证据，并按原请求恢复 ${item.skill_id} 的 Artifact 发布？此操作不会重新执行 Skill。`
+  )
+  if (!confirmed) return
+  recoveryBusyKey.value = item.task_id
+  message.value = ''
+  try {
+    const response = await resumeMissionSkillReplayPromotion(
+      item.mission_run_id,
+      item.skill_id,
+      item.task_id,
+    )
+    success.value = Boolean(response.success)
+    message.value = response.message || (response.success ? 'Skill Artifact 已恢复发布。' : '恢复未完成，请继续人工复核。')
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '恢复结果不确定，请刷新复核队列。'
+    await loadMissionRun()
+  } finally {
+    recoveryBusyKey.value = ''
   }
 }
 
