@@ -438,10 +438,10 @@ class SkillExecutor:
     4. 反馈技能效果（用于验证）
     """
     
-    def __init__(self, workspace: Path, tenant_id: str = "default"):
+    def __init__(self, workspace: Path, tenant_id: str = "default", *, artifact_store=None):
         self.workspace = workspace
         self.tenant_id = tenant_id
-        self.registry = SkillRegistry(workspace, tenant_id)
+        self.registry = SkillRegistry(workspace, tenant_id, artifact_store=artifact_store)
         
         # 执行历史（用于验证）
         self.execution_log: List[Dict[str, Any]] = []
@@ -451,36 +451,32 @@ class SkillExecutor:
         domain: str,
         task_type: str,
         context: Dict[str, Any],
-        prefer_local: bool = False
+        prefer_local: bool = False,
+        *,
+        artifact_binding: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Execute a skill selected either by normal lookup or an exact Mission binding.
+
+        When artifact_binding is supplied it is authoritative: resolve only that
+        tenant/version/digest-pinned Broker artifact. Invalid bindings never fall
+        back to local/cloud lookup. Code execution remains delegated to the
+        configured trusted isolated executor; this class does not eval/exec code.
         """
-        执行技能
-        
-        流程：
-        1. 查找技能（云端 → 本地验证 → 草稿）
-        2. 执行技能代码
-        3. 记录执行结果
-        4. 返回结果
-        """
-        # 1. 查找技能
-        skill = self.registry.find_skill(domain, task_type, prefer_local)
-        if not skill:
-            return {
-                "success": False,
-                "error": f"No skill found for {domain}/{task_type}",
-                "suggestion": "Create a draft skill using register_draft()",
-            }
-        
-        # 2. 执行技能
+        skill = None
         try:
-            # TODO: 实现具体的技能执行逻辑
-            # 这里可以是：
-            # - 调用 AI 模型
-            # - 执行预设代码
-            # - 调用外部工具
+            if artifact_binding is not None:
+                skill = self.registry.load_published_artifact(artifact_binding)
+            else:
+                skill = self.registry.find_skill(domain, task_type, prefer_local)
+
+            if not skill:
+                return {
+                    "success": False,
+                    "error": f"No skill found for {domain}/{task_type}",
+                    "suggestion": "Create a draft skill using register_draft()",
+                }
+
             result = self._execute_skill_code(skill, context)
-            
-            # 3. 记录执行
             execution_record = {
                 "skill_id": skill.id,
                 "domain": domain,
@@ -490,8 +486,6 @@ class SkillExecutor:
                 "timestamp": datetime.now().isoformat(),
             }
             self.execution_log.append(execution_record)
-            
-            # 4. 返回结果
             return {
                 "success": result.get("success", False),
                 "skill_id": skill.id,
@@ -499,14 +493,12 @@ class SkillExecutor:
                 "result": result.get("data"),
                 "message": result.get("message", ""),
             }
-            
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "skill_id": skill.id,
-            }
-    
+            response = {"success": False, "error": str(e)}
+            if skill is not None:
+                response["skill_id"] = skill.id
+            return response
+
     def _execute_skill_code(self, skill: Skill, context: Dict[str, Any]) -> Dict[str, Any]:
         """拒绝执行尚未接入可信隔离回放器的 Skill。
 

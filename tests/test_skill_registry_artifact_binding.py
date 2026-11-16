@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from core.skill_system import SkillRegistry, SkillTrustLevel  # noqa: E402
+from core.skill_system import Skill, SkillExecutor, SkillRegistry, SkillTrustLevel  # noqa: E402
 
 
 class SkillRegistryArtifactBindingTests(unittest.TestCase):
@@ -72,6 +72,76 @@ class SkillRegistryArtifactBindingTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.registry.load_published_artifact(self.binding)
+
+    def _executor(self):
+        executor = SkillExecutor.__new__(SkillExecutor)
+        executor.workspace = Path(".")
+        executor.tenant_id = "tenant-a"
+        executor.registry = mock.Mock()
+        executor.execution_log = []
+        return executor
+
+    def test_executor_uses_only_explicit_pinned_artifact_when_binding_is_supplied(self):
+        executor = self._executor()
+        skill = Skill(
+            id="skill-a",
+            name="skill-a",
+            domain="mission",
+            description="published",
+            code="isolated payload",
+            trust_level=SkillTrustLevel.VERIFIED,
+            source="broker_artifact",
+            version="2.1.0",
+        )
+        executor.registry.load_published_artifact.return_value = skill
+        executor._execute_skill_code = mock.Mock(
+            return_value={"success": True, "data": {"accepted": True}, "message": "ok"}
+        )
+
+        result = executor.execute(
+            "dev", "build", {"input": "x"}, artifact_binding=self.binding
+        )
+
+        executor.registry.load_published_artifact.assert_called_once_with(self.binding)
+        executor.registry.find_skill.assert_not_called()
+        executor._execute_skill_code.assert_called_once_with(skill, {"input": "x"})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["skill_id"], "skill-a")
+
+    def test_executor_fails_closed_on_invalid_binding_without_lookup_fallback(self):
+        executor = self._executor()
+        executor.registry.load_published_artifact.side_effect = ValueError("another tenant")
+        executor._execute_skill_code = mock.Mock()
+
+        result = executor.execute(
+            "dev", "build", {}, artifact_binding=self.binding
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("another tenant", result["error"])
+        executor.registry.find_skill.assert_not_called()
+        executor._execute_skill_code.assert_not_called()
+
+    def test_executor_keeps_legacy_lookup_when_no_artifact_binding_is_supplied(self):
+        executor = self._executor()
+        skill = Skill(
+            id="local-skill",
+            name="local-skill",
+            domain="dev",
+            description="local",
+            code="",
+            trust_level=SkillTrustLevel.DRAFT,
+        )
+        executor.registry.find_skill.return_value = skill
+        executor._execute_skill_code = mock.Mock(
+            return_value={"success": True, "data": None, "message": "ok"}
+        )
+
+        result = executor.execute("dev", "build", {})
+
+        executor.registry.find_skill.assert_called_once_with("dev", "build", False)
+        executor.registry.load_published_artifact.assert_not_called()
+        self.assertTrue(result["success"])
 
 
 if __name__ == "__main__":
