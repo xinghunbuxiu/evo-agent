@@ -383,7 +383,7 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             # Exercise the business-side consumer, not only the Broker's
             # storage primitive: SkillRegistry must resolve the exact pinned
             # tenant/version/digest and preserve Mission provenance.
-            from core.skill_system import SkillRegistry, SkillTrustLevel
+            from core.skill_system import SkillRegistry
             registry = SkillRegistry.__new__(SkillRegistry)
             registry.tenant_id = tenant_id
             registry.artifact_store = artifact_store
