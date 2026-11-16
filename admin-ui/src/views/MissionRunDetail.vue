@@ -71,11 +71,11 @@
         <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div class="rounded-lg bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Broker Stage</div>
-            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_stage || 'not_checked' }}</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_stage || item.broker_status.stage?.status || 'not_checked' }}</div>
           </div>
           <div class="rounded-lg bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Broker Execution</div>
-            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_execution || 'not_checked' }}</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_execution || item.broker_status.execution?.status || 'not_checked' }}</div>
           </div>
           <div class="rounded-lg bg-slate-50 p-3">
             <div class="text-xs text-slate-500">Independent Validator</div>
@@ -282,15 +282,23 @@ const formatTime = (value?: string) => {
   return value.slice(0, 19).replace('T', ' ')
 }
 
-const canResumeReplayPromotion = (item: MissionSkillReplayRecoveryItem) => (
-  item.candidate_binding_status === 'pinned'
-  && item.verified_receipts.broker_stage === 'verified'
-  && item.verified_receipts.broker_execution === 'verified'
-  && item.verified_receipts.execution_succeeded === true
-  && item.verified_receipts.validator === 'verified'
-  && item.verified_receipts.broker_promotion !== 'invalid'
-  && Boolean(item.stage_request_id && item.execution_request_id && item.validation_request_id && item.promotion_request_id)
-)
+const canResumeReplayPromotion = (item: MissionSkillReplayRecoveryItem) => {
+  const stageStatus = item.broker_status.stage?.status
+  const stageIsVerified = item.verified_receipts.broker_stage === 'verified'
+  // Stage is create-once and never executes code. The backend may safely
+  // reissue the exact original Stage request when its status is not_found or
+  // indeterminate, but never when a signature was explicitly invalid.
+  const stageCanBeRecovered = !stageIsVerified && (
+    stageStatus === 'not_found' || stageStatus === 'indeterminate'
+  )
+  return item.candidate_binding_status === 'pinned'
+    && (stageIsVerified || stageCanBeRecovered)
+    && item.verified_receipts.broker_execution === 'verified'
+    && item.verified_receipts.execution_succeeded === true
+    && item.verified_receipts.validator === 'verified'
+    && item.verified_receipts.broker_promotion !== 'invalid'
+    && Boolean(item.stage_request_id && item.execution_request_id && item.validation_request_id && item.promotion_request_id)
+}
 
 const resumeReplayPromotion = async (item: MissionSkillReplayRecoveryItem) => {
   if (!missionRun.value || recoveryBusyKey.value) return
