@@ -206,6 +206,44 @@ class SkillArtifactStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillArtifactStoreError, "different content"):
             self.store.stage_candidate(tenant_id="tenant-one", skill=changed_candidate)
 
+    def test_identical_candidate_retry_reconfirms_directory_durability(self):
+        candidate = SimpleNamespace(
+            id=self.skill.id,
+            version=self.skill.version,
+            code=self.skill.code,
+            trust_level="draft",
+        )
+        identity = self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+        candidate_path = self.root / "tenant-one" / candidate.id / "1.2.0.candidate.json"
+        skill_directory = candidate_path.parent
+
+        from core import skill_artifact_store
+        real_fsync_directory = skill_artifact_store._fsync_directory
+
+        def fail_candidate_directory_fsync(path):
+            if Path(path) == skill_directory:
+                raise SkillArtifactStoreError(
+                    "artifact directory durability could not be confirmed"
+                )
+            return real_fsync_directory(path)
+
+        with patch(
+            "core.skill_artifact_store._fsync_directory",
+            side_effect=fail_candidate_directory_fsync,
+        ):
+            with self.assertRaisesRegex(
+                SkillArtifactStoreError, "directory durability"
+            ):
+                self.store.stage_candidate(tenant_id="tenant-one", skill=candidate)
+
+        # The immutable candidate remains present, but the failed durability
+        # check must not be reported as a successful idempotent stage.
+        self.assertTrue(candidate_path.is_file())
+        self.assertEqual(
+            self.store.stage_candidate(tenant_id="tenant-one", skill=candidate),
+            identity,
+        )
+
     def test_draft_candidate_is_tenant_scoped_and_digest_pinned(self):
         candidate = SimpleNamespace(
             id=self.skill.id, version=self.skill.version,

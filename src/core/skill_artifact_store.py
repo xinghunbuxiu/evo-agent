@@ -522,6 +522,10 @@ class SkillArtifactStore:
                 raise SkillArtifactStoreError("existing Skill candidate digest is invalid")
             if existing["code"] != code:
                 raise SkillArtifactStoreError("Skill candidate version already exists with different content")
+            # A previous publisher may have linked the immutable candidate but
+            # failed before confirming the directory entry. Exact-byte retries
+            # must re-confirm durability before returning a successful receipt.
+            _fsync_directory(path.parent)
             return {
                 "tenant_id": normalized_tenant,
                 "skill_id": skill_id,
