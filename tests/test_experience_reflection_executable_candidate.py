@@ -134,6 +134,9 @@ class ExperienceReflectionExecutableCandidateTests(unittest.TestCase):
             SkillReplayRuntime._validate_reflection_candidate_provenance(
                 self.workspace, self.tenant_id, forged,
             )
+        # Skill.from_dict retains nested mapping references; reload the pristine
+        # persisted candidate so the forged-object test cannot contaminate it.
+        skill = Skill.from_dict(json.loads(Path(result["visible_path"]).read_text(encoding="utf-8")))
         recipe_path = Path(result["visible_path"]).parent / f"{payload['parameters']['provenance']['recipe_skill_id']}.json"
         recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
         recipe["parameters"]["recipe"]["steps"].append("tampered")
