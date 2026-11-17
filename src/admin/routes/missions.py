@@ -637,12 +637,24 @@ def register_mission_routes(
                 task_id=task_id,
                 skill_binding=binding,
             )
-            if not isinstance(operation, dict) or operation.get("schema_version") != "mission.published-skill-reuse-operation.v1":
-                raise RuntimeError("Broker published Skill reuse returned an invalid operation")
+            if (
+                not isinstance(operation, dict)
+                or operation.get("schema_version") != "mission.published-skill-reuse-operation.v1"
+                or operation.get("skill_binding") != binding
+            ):
+                raise RuntimeError("Broker published Skill reuse returned an invalid or mismatched operation")
+            publication = operation.get("publication")
+            if not isinstance(publication, dict) or publication.get("status") != "reused_existing_immutable_artifact":
+                raise RuntimeError("Published Skill reuse attempted an unsupported publication transition")
             replay = operation.get("replay") if isinstance(operation.get("replay"), dict) else {}
             result = replay.get("result") if isinstance(replay.get("result"), dict) else {}
             evidence = replay.get("evidence") if isinstance(replay.get("evidence"), dict) else {}
             experience = replay.get("experience") if isinstance(replay.get("experience"), dict) else {}
+            if (
+                not isinstance(evidence.get("evidence_id"), str) or not evidence["evidence_id"]
+                or not isinstance(experience.get("id"), str) or not experience["id"]
+            ):
+                raise RuntimeError("Published Skill reuse did not return persisted execution evidence and Experience")
             completion_message = (
                 "已按固定版本复用已发布 Skill；本次执行证据与 Experience 已记录，"
                 "业务结果仍需由 Mission 验收流程独立判断"
