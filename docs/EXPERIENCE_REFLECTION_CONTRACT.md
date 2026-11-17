@@ -145,3 +145,8 @@ Do not implement steps 4–5 before the Reflection storage, authorization and li
 ### Replay eligibility for synthesized executable candidates
 
 An accepted Reflection executable candidate may enter Mission Skill Replay only after the Replay boundary re-reads the accepted Reflection and its source Experience, checks the reviewer/decision/revision lineage, verifies the tenant binding and code digest, and re-hashes the exact non-executable Recipe draft. A changed or missing source/Recipe binding fails closed before Broker staging. This check does not execute code or grant trust; Broker isolation, independent Validator attestation, and immutable Artifact publication remain mandatory.
+
+
+### Reusing a published Skill in a later Mission
+
+A later Mission can reuse an already published Skill through the explicit `SkillReplayRuntime.replay_published_artifact` path. The caller must supply the full immutable binding (tenant, Skill ID, version, content SHA-256, published trust level, and the new Mission task context). This path does not read tenant Draft files, stage a new candidate, or issue another publication. It delegates resolution to the Broker, which loads the exact published artifact and verifies its independently signed validation attestation before isolated execution. Broker-signed execution evidence and a new Experience are recorded for the new Mission task. Cross-tenant, Draft, malformed, or context-mismatched bindings fail before Broker dispatch.

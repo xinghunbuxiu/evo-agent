@@ -760,6 +760,85 @@ class SkillReplayRuntime:
         ):
             raise PermissionError("accepted Reflection Recipe binding or digest changed")
 
+    def replay_published_artifact(
+        self, *, tenant_id: str, mission_run: Mapping, node_id: str,
+        task_id: str, skill_binding: Mapping[str, Any],
+    ) -> dict:
+        """Reuse one previously published immutable Skill in a later Mission.
+
+        This path never stages a Draft or republishes an existing version. The
+        Broker resolves the exact tenant/ID/version/digest from its read-only
+        published Artifact Store and verifies the independent Validator
+        attestation before isolated execution.
+        """
+        if not isinstance(tenant_id, str) or not _ID_RE.fullmatch(tenant_id):
+            raise ValueError("tenant_id is invalid")
+        if not isinstance(mission_run, Mapping):
+            raise ValueError("Mission run is required")
+        mission_run_id = str(mission_run.get("mission_run_id") or "").strip()
+        if not _ID_RE.fullmatch(mission_run_id):
+            raise ValueError("Mission run identity is invalid")
+        mission_tenant_id = mission_run.get("tenant_id")
+        if mission_tenant_id != tenant_id:
+            raise PermissionError("Mission tenant does not match published Skill tenant")
+        if not isinstance(node_id, str) or not _ID_RE.fullmatch(node_id):
+            raise ValueError("Mission node identity is invalid")
+        if not isinstance(task_id, str) or not _ID_RE.fullmatch(task_id):
+            raise ValueError("Mission task identity is invalid")
+        plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+        nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+        if not any(isinstance(node, dict) and str(node.get("id") or "") == node_id for node in nodes):
+            raise ValueError("Mission node does not belong to this Mission run")
+        if not isinstance(skill_binding, Mapping) or set(skill_binding) != {
+            "schema_version", "skill_id", "skill_version", "content_sha256",
+            "trust_level", "mission_context",
+        }:
+            raise ValueError("published Skill binding has unsupported or missing fields")
+        binding = dict(skill_binding)
+        context = {
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+        }
+        if binding.get("schema_version") != "mission.skill-replay-binding.v1":
+            raise ValueError("unsupported published Skill binding schema")
+        if binding.get("mission_context") != context:
+            raise PermissionError("published Skill binding does not match this Mission task")
+        if binding.get("trust_level") not in {"verified", "cloud"}:
+            raise PermissionError("only independently validated published Skills may be reused")
+        if not isinstance(binding.get("skill_id"), str) or not _ID_RE.fullmatch(binding["skill_id"]):
+            raise ValueError("published Skill identity is invalid")
+        if not isinstance(binding.get("skill_version"), str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", binding["skill_version"],
+        ):
+            raise ValueError("published Skill version is invalid")
+        if not isinstance(binding.get("content_sha256"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", binding["content_sha256"],
+        ):
+            raise ValueError("published Skill content digest is invalid")
+
+        spec = ExecutionProfileSpec(
+            profile_id=SKILL_REPLAY_PROFILE_ID,
+            target=f"{binding['skill_id']}@{binding['skill_version']}",
+            argv=(), cwd=self.workspace, timeout_seconds=60,
+            max_output_bytes=MAX_OUTPUT_BYTES, network_access=False,
+        )
+        replay = self.adapter.execute(
+            spec, tenant_id=tenant_id, mission_context=context,
+            skill_binding=binding, domain="mission", task_type="published_skill_reuse",
+            input_summary=(
+                f"Reuse published Skill {binding['skill_id']}@{binding['skill_version']} "
+                f"for Mission node {node_id}"
+            ),
+        )
+        return {
+            "schema_version": "mission.published-skill-reuse-operation.v1",
+            "skill_binding": binding,
+            "replay": replay,
+            "publication": {"status": "reused_existing_immutable_artifact"},
+        }
+
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,
                          on_candidate_bound: Callable[[dict], None] | None = None,

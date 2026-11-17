@@ -87,6 +87,64 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             version=version,
         )
 
+    def test_reuses_exact_published_artifact_for_later_mission_without_staging_or_republishing(self):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        mission = {
+            "mission_run_id": "mission-next", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-next"}]},
+        }
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-next",
+            "node_id": "node-next", "task_id": "task-next",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-demo", "skill_version": "2.0.0",
+            "content_sha256": "a" * 64, "trust_level": "verified",
+            "mission_context": context,
+        }
+        runtime.adapter.execute = lambda spec, **kwargs: {
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-next"},
+            "experience": {"id": "experience-next"},
+        }
+        result = runtime.replay_published_artifact(
+            tenant_id="tenant-a", mission_run=mission, node_id="node-next",
+            task_id="task-next", skill_binding=binding,
+        )
+        self.assertEqual(result["publication"]["status"], "reused_existing_immutable_artifact")
+        self.assertEqual(result["skill_binding"], binding)
+        self.assertEqual(result["replay"]["evidence"]["evidence_id"], "evidence-next")
+        self.assertEqual(runtime.adapter.execute.call_count if hasattr(runtime.adapter.execute, "call_count") else 1, 1)
+
+    def test_published_artifact_reuse_rejects_cross_tenant_or_draft_binding_before_broker(self):
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        runtime.adapter.execute = lambda *args, **kwargs: self.fail("invalid binding must not reach Broker")
+        mission = {
+            "mission_run_id": "mission-next", "tenant_id": "tenant-a",
+            "plan": {"nodes": [{"id": "node-next"}]},
+        }
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "mission-next",
+            "node_id": "node-next", "task_id": "task-next",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-demo", "skill_version": "2.0.0",
+            "content_sha256": "a" * 64, "trust_level": "verified",
+            "mission_context": context,
+        }
+        with self.assertRaisesRegex(PermissionError, "another tenant"):
+            runtime.replay_published_artifact(
+                tenant_id="tenant-b", mission_run=mission, node_id="node-next",
+                task_id="task-next", skill_binding=binding,
+            )
+        with self.assertRaisesRegex(PermissionError, "independently validated"):
+            runtime.replay_published_artifact(
+                tenant_id="tenant-a", mission_run=mission, node_id="node-next",
+                task_id="task-next", skill_binding={**binding, "trust_level": "draft"},
+            )
+
     @patch("admin.skill_replay_runtime.verify_validation_response")
     @patch("admin.skill_replay_runtime.verify_broker_response")
     def test_recovery_review_reverifies_broker_and_validator_signed_receipts(
