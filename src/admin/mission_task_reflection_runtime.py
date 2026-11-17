@@ -41,7 +41,7 @@ def _validated_verification_attestation(
     }
     # A missing signature is an authentication failure, not a malformed
     # attestation. Unknown or missing non-signature fields remain shape errors.
-    if set(value) not in {frozenset(required), frozenset(required | {"signature"})}:
+    if frozenset(value) not in {frozenset(required), frozenset(required | {"signature"})}:
         return None, "attestation_shape_invalid"
 
     signature = value.get("signature")
