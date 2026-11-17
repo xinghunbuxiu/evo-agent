@@ -703,12 +703,45 @@ class SkillReplayRuntime:
         recipe_skill_id = provenance.get("recipe_skill_id")
         if not isinstance(recipe_skill_id, str) or not _ID_RE.fullmatch(recipe_skill_id):
             raise ValueError("accepted Reflection Recipe binding is invalid")
-        recipe_path = Path(workspace) / ".tenants" / tenant_id / "skills" / "draft" / f"{recipe_skill_id}.json"
-        if recipe_path.is_symlink() or not recipe_path.is_file():
-            raise ValueError("accepted Reflection Recipe draft is missing or unsafe")
+        workspace_root = Path(workspace).resolve(strict=True)
+        tenant_root = workspace_root / ".tenants" / tenant_id
+        recipe_dir = tenant_root / "skills" / "draft"
+        for directory in (workspace_root / ".tenants", tenant_root, tenant_root / "skills", recipe_dir):
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError("accepted Reflection Recipe directory is unsafe")
+            try:
+                directory.resolve(strict=True).relative_to(workspace_root)
+            except (OSError, ValueError) as exc:
+                raise ValueError("accepted Reflection Recipe directory escapes workspace") from exc
+        recipe_path = recipe_dir / f"{recipe_skill_id}.json"
         try:
-            recipe_payload = json.loads(recipe_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            descriptor = os.open(recipe_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            raise ValueError("accepted Reflection Recipe draft is missing or unsafe") from exc
+        try:
+            recipe_info = os.fstat(descriptor)
+            if not stat.S_ISREG(recipe_info.st_mode) or recipe_info.st_size > 512 * 1024:
+                raise ValueError("accepted Reflection Recipe draft is not a bounded regular file")
+            try:
+                recipe_path.resolve(strict=True).relative_to(tenant_root.resolve(strict=True))
+            except (OSError, ValueError) as exc:
+                raise ValueError("accepted Reflection Recipe draft escapes tenant storage") from exc
+            chunks = []
+            remaining = 512 * 1024 + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw_recipe = b"".join(chunks)
+            if len(raw_recipe) > 512 * 1024:
+                raise ValueError("accepted Reflection Recipe draft exceeds its size limit")
+        finally:
+            os.close(descriptor)
+        try:
+            recipe_payload = json.loads(raw_recipe.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
         recipe_digest = hashlib.sha256(
             json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -718,6 +751,7 @@ class SkillReplayRuntime:
             or recipe_payload.get("trust_level") != "draft"
             or recipe_payload.get("code") != ""
             or recipe_payload.get("source") != "accepted_experience_reflection_recipe"
+            or parameters.get("recipe") != recipe_payload.get("parameters", {}).get("recipe")
             or provenance.get("recipe_sha256") != recipe_digest
         ):
             raise PermissionError("accepted Reflection Recipe binding or digest changed")
