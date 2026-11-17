@@ -259,6 +259,18 @@ def register_mission_routes(
                     "该 Skill 在此 Mission 节点已有未完成或中断的 Replay；请先核验 Broker 与 Evidence Store，不得直接重跑",
                     409,
                 )
+            action = {
+                "action_type": "published_skill_reuse",
+                "status": "running",
+                "task_id": task_id,
+                "node_id": node_id,
+                "title": f"Reuse published Skill: {skill_id}",
+                "skill_id": skill_id,
+                "skill_binding": binding,
+                "idempotency_key": idempotency_key,
+                "created_at": now,
+                "detail": "正在通过 Broker 按租户、Skill ID、版本和 SHA-256 精确复用已发布 Artifact",
+            }
             actions.append(action)
             mission_run["actions"] = actions
             mission_run["updated_at"] = datetime.now().astimezone().isoformat()
@@ -487,15 +499,15 @@ def register_mission_routes(
         if not isinstance(data, dict) or set(data) != {"node_id", "skill_binding"}:
             return error_response("请求内容必须只包含 node_id 和 skill_binding", 400)
         node_id = data.get("node_id")
-        binding = data.get("skill_binding")
+        artifact_binding = data.get("skill_binding")
         if not isinstance(node_id, str) or not node_id.strip():
             return error_response("必须指定 node_id", 400)
-        if not isinstance(binding, dict) or set(binding) != {
-            "schema_version", "skill_id", "skill_version", "content_sha256",
-            "trust_level", "mission_context",
+        if not isinstance(artifact_binding, dict) or set(artifact_binding) != {
+            "schema_version", "skill_id", "skill_version", "content_sha256", "trust_level",
         }:
-            return error_response("skill_binding 字段不完整或包含未支持字段", 400)
-        if binding.get("skill_id") != skill_id:
+            return error_response("skill_binding 必须只包含已发布 Artifact 的固定身份字段", 400)
+        artifact_binding = dict(artifact_binding)
+        if artifact_binding.get("skill_id") != skill_id:
             return error_response("URL skill_id 与固定版本绑定不一致", 400)
 
         idempotency_key = str(request.headers.get("idempotency-key") or "").strip().lower()
@@ -512,18 +524,6 @@ def register_mission_routes(
             + ":".join((mission_run_id, skill_id, node_id, idempotency_key)),
         ).hex
         now = datetime.now().astimezone().isoformat()
-        action = {
-            "action_type": "published_skill_reuse",
-            "status": "running",
-            "task_id": task_id,
-            "node_id": node_id,
-            "title": f"Reuse published Skill: {skill_id}",
-            "skill_id": skill_id,
-            "skill_binding": binding,
-            "idempotency_key": idempotency_key,
-            "created_at": now,
-            "detail": "正在通过 Broker 按租户、Skill ID、版本和 SHA-256 精确复用已发布 Artifact",
-        }
 
         with exclusive_mission_claim_lock(workspace):
             try:
@@ -555,13 +555,13 @@ def register_mission_routes(
                 "node_id": node_id,
                 "task_id": task_id,
             }
-            if (
-                binding.get("schema_version") != "mission.skill-replay-binding.v1"
-                or binding.get("mission_context") != expected_context
-            ):
-                return error_response("Published Skill binding 未绑定当前租户、Mission、Node 和幂等 Task", 409)
-            if binding.get("trust_level") not in {"verified", "cloud"}:
+            if artifact_binding.get("schema_version") != "mission.skill-replay-binding.v1":
+                return error_response("Published Skill binding schema 不受支持", 409)
+            if artifact_binding.get("trust_level") not in {"verified", "cloud"}:
                 return error_response("仅允许复用已独立验收并发布的 Skill；Draft/Recipe 不可执行", 409)
+            # The server binds the immutable artifact identity to this new
+            # Mission task; clients must not reuse a previous Mission context.
+            binding = {**artifact_binding, "mission_context": expected_context}
 
             actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
             prior_request = next((
