@@ -537,6 +537,82 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(actions[0]["status"], "interrupted")
         self.assertEqual(actions[0]["recovery_status"], "needs_review")
 
+    def test_published_skill_reuse_indeterminate_operation_is_visible_in_admin_review_queue(self):
+        task_id = "published-task-a"
+        save_mission_runs(self.workspace, {"items": [
+            {
+                "mission_run_id": "run-a",
+                "tenant_id": "tenant-a",
+                "actions": [{
+                    "action_type": "published_skill_reuse",
+                    "status": "interrupted",
+                    "recovery_status": "needs_review",
+                    "recovery_reason": "published_skill_reuse_outcome_indeterminate",
+                    "task_id": task_id,
+                    "node_id": "node-a",
+                    "skill_id": "skill-a",
+                    "skill_binding": {
+                        "schema_version": "mission.skill-replay-binding.v1",
+                        "skill_id": "skill-a",
+                        "skill_version": "2.3.1",
+                        "content_sha256": "b" * 64,
+                        "trust_level": "verified",
+                        "mission_context": {
+                            "tenant_id": "tenant-a",
+                            "mission_run_id": "run-a",
+                            "node_id": "node-a",
+                            "task_id": task_id,
+                        },
+                    },
+                    "evidence_ref": {
+                        "evidence_id": "evidence-partial",
+                        "sha256": "c" * 64,
+                        "relative_path": "tenant-a/evidence.json",
+                        "private_payload": "must-not-leak",
+                    },
+                }],
+            },
+            {
+                "mission_run_id": "run-b",
+                "tenant_id": "tenant-b",
+                "actions": [{
+                    "action_type": "published_skill_reuse",
+                    "status": "interrupted",
+                    "recovery_status": "needs_review",
+                    "task_id": "other-task",
+                    "node_id": "node-b",
+                    "skill_id": "skill-b",
+                }],
+            },
+        ]})
+        app = RouteApp()
+        _register(app, self.workspace, _ReplayRuntime())
+        handler = app.routes[("GET", "/api/missions/published-skill-reuses/recovery-review")]
+        response = asyncio.run(handler(
+            request=_get_request(),
+            tenant_id="tenant-a",
+            limit=20,
+        ))
+        self.assertEqual(response["data"]["count"], 1)
+        item = response["data"]["items"][0]
+        self.assertEqual(item["binding_status"], "structurally_pinned")
+        self.assertEqual(item["skill_binding"]["skill_version"], "2.3.1")
+        self.assertEqual(item["evidence_ref"]["evidence_id"], "evidence-partial")
+        self.assertNotIn("private_payload", item["evidence_ref"])
+        self.assertFalse(item["automatic_resume"])
+        self.assertEqual(item["next_step"], "operator_review_required_no_replay")
+
+    def test_only_tenant_admin_can_view_published_skill_reuse_review_queue(self):
+        app = RouteApp()
+        _register(app, self.workspace, _ReplayRuntime(), role="member")
+        handler = app.routes[("GET", "/api/missions/published-skill-reuses/recovery-review")]
+        response = asyncio.run(handler(
+            request=_get_request(),
+            tenant_id="tenant-a",
+            limit=20,
+        ))
+        self.assertEqual(response["status"], 403)
+
     def test_admin_confirmed_recovery_resumes_only_promotion_and_reconciles_mission(self):
         action = {
             "action_type": "skill_replay",

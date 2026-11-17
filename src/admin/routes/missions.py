@@ -1255,6 +1255,106 @@ def register_mission_routes(
         }, "待人工复核的 Skill Replay")
 
 
+    @app.get("/api/missions/published-skill-reuses/recovery-review")
+    async def list_published_skill_reuse_recovery_review(
+        request: Request, tenant_id: str | None = None, limit: int = 100,
+    ):
+        """Expose indeterminate published-artifact executions for admin-only review."""
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if not tenant_id or not str(tenant_id).strip():
+            return error_response("必须指定 tenant_id", 400)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, tenant_id) != "tenant_admin":
+            return error_response("仅租户管理员可以查看 Published Skill 复核队列", 403)
+        try:
+            state = load_mission_runs_strict(workspace)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return error_response(f"Published Skill 复核数据读取失败: {type(exc).__name__}", 500)
+
+        reviews = []
+        for mission_run in state["items"]:
+            if not isinstance(mission_run, dict) or mission_run.get("tenant_id") != tenant_id:
+                continue
+            mission_run_id = str(mission_run.get("mission_run_id") or "")
+            actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
+            for action in actions:
+                if (
+                    not isinstance(action, dict)
+                    or action.get("action_type") != "published_skill_reuse"
+                    or action.get("status") != "interrupted"
+                    or action.get("recovery_status") != "needs_review"
+                ):
+                    continue
+                node_id = str(action.get("node_id") or "")
+                task_id = str(action.get("task_id") or "")
+                binding = action.get("skill_binding")
+                binding_status = "missing"
+                safe_binding = None
+                if isinstance(binding, dict):
+                    context = binding.get("mission_context")
+                    digest = binding.get("content_sha256")
+                    version = binding.get("skill_version")
+                    if (
+                        binding.get("schema_version") == "mission.skill-replay-binding.v1"
+                        and binding.get("skill_id") == action.get("skill_id")
+                        and isinstance(version, str)
+                        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version)
+                        and binding.get("trust_level") in {"verified", "cloud"}
+                        and isinstance(digest, str)
+                        and re.fullmatch(r"[0-9a-f]{64}", digest)
+                        and context == {
+                            "tenant_id": tenant_id,
+                            "mission_run_id": mission_run_id,
+                            "node_id": node_id,
+                            "task_id": task_id,
+                        }
+                    ):
+                        binding_status = "structurally_pinned"
+                        safe_binding = {
+                            "skill_id": binding["skill_id"],
+                            "skill_version": version,
+                            "content_sha256": digest,
+                            "trust_level": binding["trust_level"],
+                        }
+                    else:
+                        binding_status = "invalid"
+                evidence_ref = action.get("evidence_ref")
+                safe_evidence_ref = None
+                if isinstance(evidence_ref, dict):
+                    safe_evidence_ref = {
+                        key: evidence_ref.get(key)
+                        for key in ("evidence_id", "sha256", "relative_path")
+                        if isinstance(evidence_ref.get(key), str)
+                    }
+                reviews.append({
+                    "mission_run_id": mission_run_id,
+                    "node_id": node_id,
+                    "task_id": task_id,
+                    "skill_id": action.get("skill_id"),
+                    "status": action.get("status"),
+                    "recovery_status": action.get("recovery_status"),
+                    "recovery_reason": action.get("recovery_reason"),
+                    "interrupted_at": action.get("interrupted_at"),
+                    "binding_status": binding_status,
+                    "skill_binding": safe_binding,
+                    "evidence_ref": safe_evidence_ref,
+                    "automatic_resume": False,
+                    "next_step": "operator_review_required_no_replay",
+                })
+                if len(reviews) >= max(1, min(limit, 500)):
+                    return success_response({
+                        "count": len(reviews),
+                        "items": reviews,
+                    }, "待人工复核的 Published Skill Replay")
+        return success_response({
+            "count": len(reviews),
+            "items": reviews,
+        }, "待人工复核的 Published Skill Replay")
+
+
     @app.get("/api/missions/worker-claims/recovery-review")
     async def list_worker_claims_for_recovery_review(request: Request, tenant_id: str | None = None, limit: int = 100):
         user = get_session_user(request)
