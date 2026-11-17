@@ -38,9 +38,10 @@ def _validated_verification_attestation(
     required = {
         "source", "task_id", "tenant_id", "mission_run_id", "mission_node_id",
         "execution_event_id", "verifier_id", "verifier_version", "status", "checks",
-        "signature",
     }
-    if set(value) != required:
+    # A missing signature is an authentication failure, not a malformed
+    # attestation. Unknown or missing non-signature fields remain shape errors.
+    if set(value) not in {frozenset(required), frozenset(required | {"signature"})}:
         return None, "attestation_shape_invalid"
 
     signature = value.get("signature")

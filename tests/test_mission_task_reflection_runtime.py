@@ -96,7 +96,7 @@ class MissionTaskReflectionRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(source.metadata["task_id"], self.task.id)
         self.assertNotIn("verification", source.metadata)
-        self.assertIn("task_id", source.metadata["evidence_refs"])
+        self.assertIn(self.task.id, source.metadata["evidence_refs"])
 
         reflections = ExperienceReflectionStore(self.workspace, self.tenant_id).list_for_source(source.id)
         self.assertEqual(len(reflections), 1)
