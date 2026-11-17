@@ -560,6 +560,8 @@ def register_mission_routes(
                 or binding.get("mission_context") != expected_context
             ):
                 return error_response("Published Skill binding 未绑定当前租户、Mission、Node 和幂等 Task", 409)
+            if binding.get("trust_level") not in {"verified", "cloud"}:
+                return error_response("仅允许复用已独立验收并发布的 Skill；Draft/Recipe 不可执行", 409)
 
             actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
             prior_request = next((
@@ -647,7 +649,11 @@ def register_mission_routes(
                     item for item in latest_actions
                     if isinstance(item, dict) and item.get("task_id") == task_id
                 ), None)
-                if not isinstance(recorded, dict) or recorded.get("skill_binding") != binding:
+                if (
+                    not isinstance(recorded, dict)
+                    or recorded.get("status") != "running"
+                    or recorded.get("skill_binding") != binding
+                ):
                     return error_response("Published Skill 已执行，但 Mission 操作身份在回写前发生变化；保留人工复核", 409)
                 recorded.update({
                     "status": "completed",

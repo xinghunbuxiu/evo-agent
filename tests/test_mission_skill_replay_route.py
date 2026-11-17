@@ -355,6 +355,33 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(runtime.calls, [])
         self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
+    def test_draft_binding_is_rejected_before_broker_dispatch(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")]
+        key = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        task_id = __import__("uuid").uuid5(
+            __import__("uuid").NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:run-a:skill-a:node-a:" + key,
+        ).hex
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "2.3.1",
+            "content_sha256": "b" * 64, "trust_level": "draft",
+            "mission_context": {
+                "tenant_id": "tenant-a", "mission_run_id": "run-a",
+                "node_id": "node-a", "task_id": task_id,
+            },
+        }
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=key),
+            mission_run_id="run-a", skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 409)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
+
     def test_viewer_cannot_reuse_published_skill(self):
         runtime = _ReplayRuntime()
         app = RouteApp()
