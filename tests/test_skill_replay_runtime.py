@@ -103,11 +103,15 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             "content_sha256": "a" * 64, "trust_level": "verified",
             "mission_context": context,
         }
-        runtime.adapter.execute = lambda spec, **kwargs: {
-            "result": {"execution_succeeded": True},
-            "evidence": {"evidence_id": "evidence-next"},
-            "experience": {"id": "experience-next"},
-        }
+        calls = []
+        def execute(spec, **kwargs):
+            calls.append((spec, kwargs))
+            return {
+                "result": {"execution_succeeded": True},
+                "evidence": {"evidence_id": "evidence-next"},
+                "experience": {"id": "experience-next"},
+            }
+        runtime.adapter.execute = execute
         result = runtime.replay_published_artifact(
             tenant_id="tenant-a", mission_run=mission, node_id="node-next",
             task_id="task-next", skill_binding=binding,
@@ -115,7 +119,9 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         self.assertEqual(result["publication"]["status"], "reused_existing_immutable_artifact")
         self.assertEqual(result["skill_binding"], binding)
         self.assertEqual(result["replay"]["evidence"]["evidence_id"], "evidence-next")
-        self.assertEqual(runtime.adapter.execute.call_count if hasattr(runtime.adapter.execute, "call_count") else 1, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]["skill_binding"], binding)
+        self.assertEqual(calls[0][1]["mission_context"], context)
 
     def test_published_artifact_reuse_rejects_cross_tenant_or_draft_binding_before_broker(self):
         runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
@@ -134,7 +140,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             "content_sha256": "a" * 64, "trust_level": "verified",
             "mission_context": context,
         }
-        with self.assertRaisesRegex(PermissionError, "another tenant"):
+        with self.assertRaisesRegex(PermissionError, "does not match"):
             runtime.replay_published_artifact(
                 tenant_id="tenant-b", mission_run=mission, node_id="node-next",
                 task_id="task-next", skill_binding=binding,
