@@ -470,6 +470,252 @@ def register_mission_routes(
             pass
         return error_response(error_message, error_status)
 
+    @app.post("/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")
+    async def reuse_published_mission_skill(request: Request, mission_run_id: str, skill_id: str):
+        """Execute one exact, independently validated published artifact in a later Mission."""
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if skill_replay_runtime is None or not callable(
+            getattr(skill_replay_runtime, "replay_published_artifact", None)
+        ):
+            return error_response("Published Skill Replay Broker 尚未配置；普通 Mission 执行不受影响", 503)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict) or set(data) != {"node_id", "skill_binding"}:
+            return error_response("请求内容必须只包含 node_id 和 skill_binding", 400)
+        node_id = data.get("node_id")
+        binding = data.get("skill_binding")
+        if not isinstance(node_id, str) or not node_id.strip():
+            return error_response("必须指定 node_id", 400)
+        if not isinstance(binding, dict) or set(binding) != {
+            "schema_version", "skill_id", "skill_version", "content_sha256",
+            "trust_level", "mission_context",
+        }:
+            return error_response("skill_binding 字段不完整或包含未支持字段", 400)
+        if binding.get("skill_id") != skill_id:
+            return error_response("URL skill_id 与固定版本绑定不一致", 400)
+
+        idempotency_key = str(request.headers.get("idempotency-key") or "").strip().lower()
+        try:
+            parsed_idempotency_key = uuid.UUID(idempotency_key)
+        except (ValueError, AttributeError):
+            return error_response("必须通过 Idempotency-Key 请求头提供 UUID 幂等键", 400)
+        if str(parsed_idempotency_key) != idempotency_key:
+            return error_response("Idempotency-Key 必须是规范 UUID 格式", 400)
+
+        task_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:"
+            + ":".join((mission_run_id, skill_id, node_id, idempotency_key)),
+        ).hex
+        now = datetime.now().astimezone().isoformat()
+        action = {
+            "action_type": "published_skill_reuse",
+            "status": "running",
+            "task_id": task_id,
+            "node_id": node_id,
+            "title": f"Reuse published Skill: {skill_id}",
+            "skill_id": skill_id,
+            "skill_binding": binding,
+            "idempotency_key": idempotency_key,
+            "created_at": now,
+            "detail": "正在通过 Broker 按租户、Skill ID、版本和 SHA-256 精确复用已发布 Artifact",
+        }
+
+        with exclusive_mission_claim_lock(workspace):
+            try:
+                state = load_mission_runs_strict(workspace)
+            except (OSError, UnicodeError, ValueError):
+                return error_response("Mission 运行记录不可读取，拒绝执行 Published Skill Replay", 500)
+            mission_run = next((
+                item for item in state["items"]
+                if isinstance(item, dict)
+                and str(item.get("mission_run_id") or "") == mission_run_id
+            ), None)
+            if not isinstance(mission_run, dict):
+                return error_response("未找到对应的 mission run", 404)
+            tenant_id = str(mission_run.get("tenant_id") or "default")
+            if not authorize_tenant(user, tenant_id):
+                return error_response("无权访问该租户", 403)
+            if tenant_role(user, tenant_id) not in {"tenant_admin", "member"}:
+                return error_response("只有租户管理员或成员可以复用已发布 Skill", 403)
+            plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+            nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+            if not any(
+                isinstance(node, dict) and str(node.get("id") or "") == node_id
+                for node in nodes
+            ):
+                return error_response("node_id 不属于该 Mission", 400)
+            expected_context = {
+                "tenant_id": tenant_id,
+                "mission_run_id": mission_run_id,
+                "node_id": node_id,
+                "task_id": task_id,
+            }
+            if (
+                binding.get("schema_version") != "mission.skill-replay-binding.v1"
+                or binding.get("mission_context") != expected_context
+            ):
+                return error_response("Published Skill binding 未绑定当前租户、Mission、Node 和幂等 Task", 409)
+
+            actions = mission_run.get("actions") if isinstance(mission_run.get("actions"), list) else []
+            prior_request = next((
+                item for item in actions
+                if isinstance(item, dict)
+                and item.get("action_type") == "published_skill_reuse"
+                and item.get("idempotency_key") == idempotency_key
+            ), None)
+            if isinstance(prior_request, dict):
+                if (
+                    prior_request.get("skill_id") != skill_id
+                    or prior_request.get("node_id") != node_id
+                    or prior_request.get("task_id") != task_id
+                    or prior_request.get("skill_binding") != binding
+                ):
+                    return error_response("该 Idempotency-Key 已用于不同的 Published Skill 请求", 409)
+                if prior_request.get("status") == "completed":
+                    cached = prior_request.get("operation_result")
+                    if not isinstance(cached, dict):
+                        return error_response("该复用操作已完成但响应快照缺失；拒绝再次执行", 409)
+                    return success_response(
+                        cached,
+                        str(prior_request.get("completion_message") or "已返回同一幂等请求的复用结果"),
+                    )
+                if prior_request.get("status") == "failed":
+                    return error_response(
+                        str(prior_request.get("error_message") or "该幂等请求此前已失败；请使用新的 Idempotency-Key"),
+                        int(prior_request.get("error_status") or 409),
+                    )
+                return error_response("该幂等请求仍在执行或等待人工复核；拒绝重复执行", 409)
+
+            if any(
+                isinstance(item, dict)
+                and item.get("action_type") in {"published_skill_reuse", "skill_replay"}
+                and (
+                    item.get("status") == "running"
+                    or (
+                        item.get("status") == "interrupted"
+                        and item.get("recovery_status") == "needs_review"
+                    )
+                )
+                and item.get("skill_id") == skill_id
+                and item.get("node_id") == node_id
+                for item in actions
+            ):
+                return error_response(
+                    "该 Skill 在此 Mission 节点已有未完成或中断的 Replay；请先核验 Broker 与 Evidence Store",
+                    409,
+                )
+            actions.append(action)
+            mission_run["actions"] = actions
+            mission_run["updated_at"] = now
+            save_mission_runs(workspace, state)
+
+        partial_evidence_ref = None
+        try:
+            operation = await asyncio.to_thread(
+                skill_replay_runtime.replay_published_artifact,
+                tenant_id=tenant_id,
+                mission_run=mission_run,
+                node_id=node_id,
+                task_id=task_id,
+                skill_binding=binding,
+            )
+            if not isinstance(operation, dict) or operation.get("schema_version") != "mission.published-skill-reuse-operation.v1":
+                raise RuntimeError("Broker published Skill reuse returned an invalid operation")
+            replay = operation.get("replay") if isinstance(operation.get("replay"), dict) else {}
+            result = replay.get("result") if isinstance(replay.get("result"), dict) else {}
+            evidence = replay.get("evidence") if isinstance(replay.get("evidence"), dict) else {}
+            experience = replay.get("experience") if isinstance(replay.get("experience"), dict) else {}
+            completion_message = (
+                "已按固定版本复用已发布 Skill；本次执行证据与 Experience 已记录，"
+                "业务结果仍需由 Mission 验收流程独立判断"
+            )
+            with exclusive_mission_claim_lock(workspace):
+                latest_state = load_mission_runs_strict(workspace)
+                latest = next((
+                    item for item in latest_state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                latest_actions = latest.get("actions") if isinstance(latest, dict) and isinstance(latest.get("actions"), list) else []
+                recorded = next((
+                    item for item in latest_actions
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if not isinstance(recorded, dict) or recorded.get("skill_binding") != binding:
+                    return error_response("Published Skill 已执行，但 Mission 操作身份在回写前发生变化；保留人工复核", 409)
+                recorded.update({
+                    "status": "completed",
+                    "detail": completion_message,
+                    "execution_succeeded": result.get("execution_succeeded") is True,
+                    "evidence_id": evidence.get("evidence_id"),
+                    "experience_id": experience.get("id"),
+                    "publication_status": "reused_existing_immutable_artifact",
+                    "artifact_trust_level": binding.get("trust_level"),
+                    "artifact_content_sha256": binding.get("content_sha256"),
+                    "operation_result": operation,
+                    "completion_message": completion_message,
+                    "completed_at": datetime.now().astimezone().isoformat(),
+                })
+                latest["actions"] = latest_actions
+                latest["updated_at"] = datetime.now().astimezone().isoformat()
+                save_mission_runs(workspace, latest_state)
+            return success_response(operation, completion_message)
+        except (ValueError, PermissionError, FileNotFoundError) as exc:
+            error_status = 404 if isinstance(exc, FileNotFoundError) else 403 if isinstance(exc, PermissionError) else 409
+            error_message = f"Published Skill 复用被拒绝: {str(exc)[:180]}"
+            indeterminate = False
+        except Exception as exc:
+            partial_evidence_ref = getattr(exc, "evidence_ref", None)
+            error_status = 502
+            error_message = f"Broker Published Skill Replay 未完成: {type(exc).__name__}"
+            indeterminate = True
+
+        try:
+            with exclusive_mission_claim_lock(workspace):
+                latest_state = load_mission_runs_strict(workspace)
+                latest = next((
+                    item for item in latest_state["items"]
+                    if isinstance(item, dict)
+                    and str(item.get("mission_run_id") or "") == mission_run_id
+                    and item.get("tenant_id") == tenant_id
+                ), None)
+                latest_actions = latest.get("actions") if isinstance(latest, dict) and isinstance(latest.get("actions"), list) else []
+                recorded = next((
+                    item for item in latest_actions
+                    if isinstance(item, dict) and item.get("task_id") == task_id
+                ), None)
+                if isinstance(recorded, dict) and recorded.get("status") == "running":
+                    recorded.update({
+                        "status": "interrupted" if indeterminate else "failed",
+                        "error_type": "published_skill_reuse_outcome_indeterminate" if indeterminate else "published_skill_reuse_rejected",
+                        "error_status": error_status,
+                        "error_message": error_message,
+                        "detail": error_message,
+                    })
+                    if indeterminate:
+                        recorded.update({
+                            "recovery_status": "needs_review",
+                            "recovery_reason": "published_skill_reuse_outcome_indeterminate",
+                            "interrupted_at": datetime.now().astimezone().isoformat(),
+                        })
+                        if isinstance(partial_evidence_ref, dict):
+                            recorded["evidence_ref"] = dict(partial_evidence_ref)
+                            recorded["evidence_id"] = partial_evidence_ref.get("evidence_id")
+                    else:
+                        recorded["completed_at"] = datetime.now().astimezone().isoformat()
+                    latest["actions"] = latest_actions
+                    latest["updated_at"] = datetime.now().astimezone().isoformat()
+                    save_mission_runs(workspace, latest_state)
+        except Exception:
+            pass
+        return error_response(error_message, error_status)
+
     @app.post("/api/missions/{mission_run_id}/skills/{skill_id}/recovery/{task_id}/resume-promotion")
     async def resume_mission_skill_promotion(
         request: Request, mission_run_id: str, skill_id: str, task_id: str,

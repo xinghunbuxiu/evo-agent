@@ -150,3 +150,10 @@ An accepted Reflection executable candidate may enter Mission Skill Replay only 
 ### Reusing a published Skill in a later Mission
 
 A later Mission can reuse an already published Skill through the explicit `SkillReplayRuntime.replay_published_artifact` path. The caller must supply the full immutable binding (tenant, Skill ID, version, content SHA-256, published trust level, and the new Mission task context). This path does not read tenant Draft files, stage a new candidate, or issue another publication. It delegates resolution to the Broker, which loads the exact published artifact and verifies its independently signed validation attestation before isolated execution. Broker-signed execution evidence and a new Experience are recorded for the new Mission task. Cross-tenant, Draft, malformed, or context-mismatched bindings fail before Broker dispatch.
+
+
+## Later Mission reuse of a published Skill
+
+A tenant member may request reuse through `POST /api/missions/{mission_run_id}/skills/{skill_id}/reuse-published`. The request supplies a pinned `mission.skill-replay-binding.v1` containing the exact Skill ID, version, content SHA-256, trust level and current Mission task context. The route checks tenant authorization, Mission/Node membership, URL-to-binding identity and an HTTP UUID idempotency key before recording a durable Mission action.
+
+The runtime accepts only independently validated published trust levels (`verified` or `cloud`). The Broker must resolve that exact tenant/ID/version/digest from its read-only published Artifact Store and verify its Validator attestation before isolated execution. This path does not stage a Draft, select a newer version, or publish another artifact. Broker execution evidence and Experience are recorded for the new Mission task. Reusing a previously validated artifact does not mean the new task's business outcome has been accepted; normal Mission validation remains separate. Indeterminate Broker outcomes are retained for human review and cannot be retried with a new HTTP idempotency key while unresolved.

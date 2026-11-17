@@ -116,6 +116,30 @@ class _ReplayRuntime:
             "broker_promotion": "not_checked",
         }
 
+    def replay_published_artifact(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        context = {
+            "tenant_id": kwargs["tenant_id"],
+            "mission_run_id": kwargs["mission_run"]["mission_run_id"],
+            "node_id": kwargs["node_id"],
+            "task_id": kwargs["task_id"],
+        }
+        binding = kwargs["skill_binding"]
+        if binding.get("mission_context") != context:
+            raise PermissionError("published Skill binding does not match this Mission task")
+        return {
+            "schema_version": "mission.published-skill-reuse-operation.v1",
+            "skill_binding": binding,
+            "replay": {
+                "result": {"execution_succeeded": True},
+                "evidence": {"evidence_id": "evidence-published"},
+                "experience": {"id": "experience-published"},
+            },
+            "publication": {"status": "reused_existing_immutable_artifact"},
+        }
+
     def replay_candidate(self, **kwargs):
         self.calls.append(kwargs)
         if self.error and isinstance(self.error, (FileNotFoundError, PermissionError, ValueError)):
@@ -266,6 +290,132 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["task_id"], "task-original")
         self.assertEqual(actions[0]["recovery_status"], "needs_review")
+
+    def test_published_skill_reuse_persists_exact_binding_and_evidence_without_republication(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")]
+        key = "77777777-7777-4777-8777-777777777777"
+        task_id = __import__("uuid").uuid5(
+            __import__("uuid").NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:run-a:skill-a:node-a:" + key,
+        ).hex
+        context = {
+            "tenant_id": "tenant-a", "mission_run_id": "run-a",
+            "node_id": "node-a", "task_id": task_id,
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "2.3.1",
+            "content_sha256": "b" * 64, "trust_level": "verified",
+            "mission_context": context,
+        }
+        request = _request(
+            {"node_id": "node-a", "skill_binding": binding},
+            idempotency_key=key,
+        )
+        response = asyncio.run(handler(request=request, mission_run_id="run-a", skill_id="skill-a"))
+        self.assertEqual(response["data"]["publication"]["status"], "reused_existing_immutable_artifact")
+        self.assertEqual(len(runtime.calls), 1)
+        self.assertEqual(runtime.calls[0]["skill_binding"], binding)
+        action = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(action["action_type"], "published_skill_reuse")
+        self.assertEqual(action["status"], "completed")
+        self.assertEqual(action["skill_binding"], binding)
+        self.assertEqual(action["evidence_id"], "evidence-published")
+        self.assertEqual(action["experience_id"], "experience-published")
+        self.assertTrue(action["execution_succeeded"])
+        self.assertEqual(action["publication_status"], "reused_existing_immutable_artifact")
+
+        replayed = asyncio.run(handler(request=request, mission_run_id="run-a", skill_id="skill-a"))
+        self.assertEqual(replayed, response)
+        self.assertEqual(len(runtime.calls), 1)
+
+    def test_published_skill_reuse_rejects_wrong_mission_context_before_broker(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")]
+        key = "88888888-8888-4888-8888-888888888888"
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "2.3.1",
+            "content_sha256": "b" * 64, "trust_level": "verified",
+            "mission_context": {
+                "tenant_id": "tenant-b", "mission_run_id": "run-other",
+                "node_id": "node-a", "task_id": "wrong-task",
+            },
+        }
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=key),
+            mission_run_id="run-a", skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 409)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
+
+    def test_viewer_cannot_reuse_published_skill(self):
+        runtime = _ReplayRuntime()
+        app = RouteApp()
+        _register(app, self.workspace, runtime, role="viewer")
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")]
+        key = "99999999-9999-4999-8999-999999999999"
+        task_id = __import__("uuid").uuid5(
+            __import__("uuid").NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:run-a:skill-a:node-a:" + key,
+        ).hex
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "2.3.1",
+            "content_sha256": "b" * 64, "trust_level": "verified",
+            "mission_context": {
+                "tenant_id": "tenant-a", "mission_run_id": "run-a",
+                "node_id": "node-a", "task_id": task_id,
+            },
+        }
+        response = asyncio.run(handler(
+            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=key),
+            mission_run_id="run-a", skill_id="skill-a",
+        ))
+        self.assertEqual(response["status"], 403)
+        self.assertEqual(runtime.calls, [])
+        self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
+
+    def test_indeterminate_published_skill_reuse_blocks_new_idempotency_key(self):
+        runtime = _ReplayRuntime(error=RuntimeError("Broker response outcome is unknown"))
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("POST", "/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")]
+        key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        task_id = __import__("uuid").uuid5(
+            __import__("uuid").NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:run-a:skill-a:node-a:" + key,
+        ).hex
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-a", "skill_version": "2.3.1",
+            "content_sha256": "b" * 64, "trust_level": "verified",
+            "mission_context": {
+                "tenant_id": "tenant-a", "mission_run_id": "run-a",
+                "node_id": "node-a", "task_id": task_id,
+            },
+        }
+        first = asyncio.run(handler(
+            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=key),
+            mission_run_id="run-a", skill_id="skill-a",
+        ))
+        second_key = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        second = asyncio.run(handler(
+            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=second_key),
+            mission_run_id="run-a", skill_id="skill-a",
+        ))
+        self.assertEqual(first["status"], 502)
+        self.assertEqual(second["status"], 409)
+        self.assertEqual(len(runtime.calls), 1)
+        action = load_mission_runs(self.workspace)["items"][0]["actions"][0]
+        self.assertEqual(action["status"], "interrupted")
+        self.assertEqual(action["recovery_status"], "needs_review")
 
     def test_recipe_rejection_is_durably_recorded_without_success_evidence(self):
         runtime = _ReplayRuntime(error=ValueError("Recipe candidates cannot be replayed"))
