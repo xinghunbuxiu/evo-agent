@@ -201,7 +201,7 @@ class ExperienceReflectionRouteTests(unittest.TestCase):
                 "name": "Validate source result",
                 "domain": "python",
                 "description": "Validate the supplied result.",
-                "code": "def run(context):\\n    return context.get('ok') is True\\n",
+                "code": "def run(context):\n    return context.get('ok') is True\n",
             }),
             tenant_id="tenant-a", reflection_id=reflection_id,
         ))
@@ -218,7 +218,7 @@ class ExperienceReflectionRouteTests(unittest.TestCase):
                 "name": "No",
                 "domain": "python",
                 "description": "No",
-                "code": "def run(context):\\n    return context\\n",
+                "code": "def run(context):\n    return context\n",
             }),
             tenant_id="tenant-a", reflection_id=submitted["id"],
         ))

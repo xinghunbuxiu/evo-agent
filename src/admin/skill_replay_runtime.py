@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+import hashlib
 import logging
 import os
 import re
@@ -672,7 +673,7 @@ class SkillReplayRuntime:
             raise PermissionError("accepted Reflection candidate tenant binding mismatch")
         if synthesis.get("method") != "caller_supplied_candidate" or synthesis.get("static_contract_check") != "passed":
             raise ValueError("accepted Reflection candidate synthesis contract is invalid")
-        code_digest = __import__("hashlib").sha256(skill.code.encode("utf-8")).hexdigest()
+        code_digest = hashlib.sha256(skill.code.encode("utf-8")).hexdigest()
         if synthesis.get("code_sha256") != code_digest:
             raise ValueError("accepted Reflection candidate code digest mismatch")
 
@@ -709,7 +710,7 @@ class SkillReplayRuntime:
             recipe_payload = json.loads(recipe_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
-        recipe_digest = __import__("hashlib").sha256(
+        recipe_digest = hashlib.sha256(
             json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         if (
