@@ -154,6 +154,38 @@ def register_experience_reflection_routes(
             return error_response("Reflection 决策未能完成；请使用同一幂等键安全重试", 503)
         return success_response({"tenant_id": tenant_id, "decision": record.to_dict()}, "Reflection 复核决定已追加")
 
+    @app.post("/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/executable-candidate")
+    async def create_experience_reflection_executable_candidate(request: Request, tenant_id: str, reflection_id: str):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, tenant_id) != "tenant_admin":
+            return error_response("生成 Executable Skill 候选仅允许 tenant_admin", 403)
+        try:
+            data = await request.json()
+        except Exception:
+            return error_response("请求 JSON 无效", 400)
+        if not isinstance(data, dict):
+            return error_response("请求必须是 JSON 对象", 400)
+        try:
+            from admin.knowledge_runtime import create_accepted_reflection_executable_candidate
+
+            candidate = create_accepted_reflection_executable_candidate(
+                workspace, tenant_id, reflection_id, data,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status = 404 if "does not exist" in message else 409 if "already exists" in message or "changed" in message else 400
+            return error_response(message, status)
+        except (OSError, RuntimeError):
+            return error_response("Executable Skill 候选生成失败", 503)
+        return success_response(
+            {"tenant_id": tenant_id, "candidate": candidate},
+            "已生成绑定 Accepted Reflection 的 Draft Executable Skill 候选；尚未执行或发布",
+        )
+
     @app.post("/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/recipe")
     async def create_experience_reflection_recipe(request: Request, tenant_id: str, reflection_id: str):
         user = get_session_user(request)

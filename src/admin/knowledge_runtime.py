@@ -126,6 +126,195 @@ def create_accepted_reflection_recipe_skill(
     return _write_immutable_reflection_recipe(workspace, tenant_id, skill)
 
 
+
+def _validate_reflection_executable_code(code: object) -> tuple[ast.Module, str]:
+    """Perform a static entry-point check only; never execute synthesized code in Admin."""
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("executable candidate code is required")
+    try:
+        encoded = code.encode("utf-8", errors="strict")
+        if len(encoded) > 512 * 1024:
+            raise ValueError("executable candidate code exceeds 512 KiB")
+        tree = ast.parse(code, mode="exec")
+    except (UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        raise ValueError("executable candidate code must be valid bounded Python source") from exc
+
+    entries = []
+    for index, node in enumerate(tree.body):
+        if (
+            index == 0 and isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+        ):
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            entries.append(node)
+            continue
+        raise ValueError("executable candidate may contain only a module docstring and one module-level run(context) function")
+    if len(entries) != 1:
+        raise ValueError("executable candidate must define exactly one synchronous run(context) function")
+    entry = entries[0]
+    args = entry.args
+    if (
+        entry.decorator_list or args.posonlyargs or len(args.args) != 1
+        or args.args[0].arg != "context" or args.vararg is not None
+        or args.kwarg is not None or args.kwonlyargs or args.defaults
+        or any(value is not None for value in args.kw_defaults)
+    ):
+        raise ValueError("executable candidate run entry point must accept only one required context argument")
+    if not entry.body:
+        raise ValueError("executable candidate run(context) function must not be empty")
+    return tree, hashlib.sha256(encoded).hexdigest()
+
+
+def _write_immutable_executable_candidate(workspace: Path, tenant_id: str, skill: Skill) -> dict:
+    visible_dir, cache_dir = local_skill_dirs(workspace, tenant_id)
+    root = Path(workspace).resolve()
+    tenant_root = root / ".tenants" / tenant_id
+    for directory in (
+        root / ".tenants", tenant_root,
+        visible_dir.parent, visible_dir, cache_dir.parent, cache_dir,
+    ):
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError("executable Skill candidate directory is unsafe")
+        try:
+            directory.resolve(strict=True).relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("executable Skill candidate directory escapes workspace") from exc
+
+    payload = skill.to_dict()
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    paths = (visible_dir / f"{skill.id}.json", cache_dir / f"{skill.id}.json")
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("executable Skill candidate path is unsafe")
+        if path.exists():
+            if not path.is_file():
+                raise ValueError("executable Skill candidate path is not a regular file")
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError("existing executable Skill candidate is unreadable") from exc
+            if existing != payload:
+                raise ValueError("executable Skill candidate ID already exists with different immutable content")
+            continue
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+        except FileExistsError:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing != payload:
+                raise ValueError("executable Skill candidate ID already exists with different immutable content")
+    return {
+        "skill_id": skill.id,
+        "name": skill.name,
+        "domain": skill.domain,
+        "version": skill.version,
+        "trust_level": skill.trust_level.value,
+        "replay_eligible": True,
+        "replay_status": "awaiting_broker_replay",
+        "visible_path": str(paths[0]),
+        "cache_path": str(paths[1]),
+    }
+
+
+def create_accepted_reflection_executable_candidate(
+    workspace: Path,
+    tenant_id: str,
+    reflection_id: str,
+    candidate: dict,
+) -> dict:
+    """Bind caller-supplied synthesized Python to an accepted Reflection as a new draft.
+
+    This operation validates a static entry-point contract and persists an immutable
+    candidate. It does not call an LLM, execute code, contact Broker, or promote trust.
+    """
+    if not isinstance(candidate, dict):
+        raise ValueError("executable candidate must be an object")
+    allowed = {"name", "domain", "description", "code", "version"}
+    if set(candidate) - allowed or not {"name", "domain", "description", "code"}.issubset(candidate):
+        raise ValueError("executable candidate has unsupported or missing fields")
+
+    accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(reflection_id)
+    reflection = accepted["reflection"]
+    decision = accepted["decision"]
+    source = accepted["source_experience"]
+    reflection_payload = reflection.metadata["experience_reflection"]
+    decision_payload = decision.metadata["experience_reflection_decision"]
+
+    recipe_info = create_accepted_reflection_recipe_skill(workspace, tenant_id, reflection_id)
+    recipe_path = Path(recipe_info["visible_path"])
+    if recipe_path.is_symlink() or not recipe_path.is_file():
+        raise ValueError("accepted Reflection Recipe draft is missing or unsafe")
+    try:
+        recipe_payload = json.loads(recipe_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
+    if (
+        recipe_payload.get("id") != recipe_info["skill_id"]
+        or recipe_payload.get("trust_level") != "draft"
+        or recipe_payload.get("code") != ""
+        or not isinstance(recipe_payload.get("parameters"), dict)
+        or recipe_payload["parameters"].get("executable") is not False
+    ):
+        raise ValueError("accepted Reflection Recipe draft does not match its non-executable contract")
+
+    name = candidate.get("name")
+    domain = candidate.get("domain")
+    description = candidate.get("description")
+    version = candidate.get("version", "1.0.0")
+    if not isinstance(name, str) or not name.strip() or len(name) > 160:
+        raise ValueError("executable candidate name is invalid")
+    if not isinstance(domain, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", domain):
+        raise ValueError("executable candidate domain is invalid")
+    if not isinstance(description, str) or len(description) > 2000:
+        raise ValueError("executable candidate description is invalid")
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
+        raise ValueError("executable candidate version is invalid")
+    _, code_digest = _validate_reflection_executable_code(candidate.get("code"))
+
+    recipe_digest = hashlib.sha256(
+        json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    skill_id = "recipe-exec-" + hashlib.sha256(
+        f"{tenant_id}:{reflection.id}:{reflection_payload['revision']}:{version}:{code_digest}".encode("utf-8")
+    ).hexdigest()[:24]
+    provenance = {
+        "tenant_id": tenant_id,
+        "source_experience_id": source.id,
+        "source_experience_digest": reflection_payload["source_experience_digest"],
+        "reflection_id": reflection.id,
+        "reflection_revision": reflection_payload["revision"],
+        "decision_id": decision.id,
+        "reviewer": decision_payload["reviewer"],
+        "decision_at": decision_payload["decision_at"],
+        "recipe_skill_id": recipe_info["skill_id"],
+        "recipe_sha256": recipe_digest,
+    }
+    skill = Skill(
+        id=skill_id,
+        name=name.strip(),
+        domain=domain,
+        description=description,
+        code=candidate["code"],
+        parameters={
+            "execution_contract": {"kind": "python_run_context", "replay_eligible": True},
+            "recipe": recipe_payload["parameters"]["recipe"],
+            "provenance": provenance,
+            "synthesis": {
+                "method": "caller_supplied_candidate",
+                "code_sha256": code_digest,
+                "static_contract_check": "passed",
+            },
+        },
+        trust_level=SkillTrustLevel.DRAFT,
+        source="accepted_reflection_executable_candidate",
+        version=version,
+        created_at=decision_payload["decision_at"],
+        updated_at=decision_payload["decision_at"],
+    )
+    return _write_immutable_executable_candidate(Path(workspace), tenant_id, skill)
+
 def collect_task_verified_skills(tasks: list) -> list[dict]:
     items: list[dict] = []
     seen: set[str] = set()

@@ -184,6 +184,46 @@ class ExperienceReflectionRouteTests(unittest.TestCase):
         self.assertTrue(response["data"]["recipe"]["skill_id"].startswith("recipe-"))
         self.assertTrue(Path(response["data"]["recipe"]["visible_path"]).is_file())
 
+    def test_admin_can_create_executable_candidate_from_accepted_reflection(self):
+        submitted = self.submit()["data"]["reflection"]
+        reflection_id = submitted["id"]
+        self.role = "tenant_admin"
+        self.current_user = {"id": 2, "auth_provider": "password"}
+        decide = self.app.routes[("POST", "/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/decision")]
+        accepted = asyncio.run(decide(
+            make_request("POST", "decision", {"decision": "accepted"}, key="22222222-2222-4222-8222-222222222230"),
+            tenant_id="tenant-a", reflection_id=reflection_id,
+        ))
+        self.assertIn("decision", accepted["data"])
+        create_candidate = self.app.routes[("POST", "/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/executable-candidate")]
+        response = asyncio.run(create_candidate(
+            make_request("POST", "candidate", {
+                "name": "Validate source result",
+                "domain": "python",
+                "description": "Validate the supplied result.",
+                "code": "def run(context):\\n    return context.get('ok') is True\\n",
+            }),
+            tenant_id="tenant-a", reflection_id=reflection_id,
+        ))
+        candidate = response["data"]["candidate"]
+        self.assertEqual(candidate["trust_level"], "draft")
+        self.assertEqual(candidate["replay_status"], "awaiting_broker_replay")
+        self.assertTrue(Path(candidate["visible_path"]).is_file())
+
+    def test_member_cannot_create_executable_candidate(self):
+        submitted = self.submit()["data"]["reflection"]
+        create_candidate = self.app.routes[("POST", "/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/executable-candidate")]
+        response = asyncio.run(create_candidate(
+            make_request("POST", "candidate", {
+                "name": "No",
+                "domain": "python",
+                "description": "No",
+                "code": "def run(context):\\n    return context\\n",
+            }),
+            tenant_id="tenant-a", reflection_id=submitted["id"],
+        ))
+        self.assertEqual(response["status"], 403)
+
     def test_member_cannot_generate_recipe_skill(self):
         submitted = self.submit()["data"]["reflection"]
         create_recipe = self.app.routes[("POST", "/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/recipe")]

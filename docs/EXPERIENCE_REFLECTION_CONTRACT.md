@@ -107,7 +107,7 @@ Authorization requirements:
 
 An accepted Reflection may produce a Recipe Skill draft containing natural-language steps, applicability conditions, constraints and source provenance. It remains non-executable.
 
-Executable Skill synthesis is a separate operation that creates a new candidate ID and version. It must:
+Executable Skill synthesis is a separate operation exposed to tenant administrators at `POST /api/tenants/{tenant_id}/experience-reflections/{reflection_id}/executable-candidate`. The synthesis caller supplies the generated code; this API does not invoke an LLM. It creates a new candidate ID derived from the accepted Reflection revision, version, and code digest. It must:
 
 1. Bind the candidate to the accepted Reflection revision and original Experience digest.
 2. Produce the explicit executable contract required by Broker (Python module with synchronous module-level `run(context)`).
