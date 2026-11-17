@@ -260,16 +260,15 @@ def register_mission_routes(
                     409,
                 )
             action = {
-                "action_type": "published_skill_reuse",
+                "action_type": "skill_replay",
                 "status": "running",
                 "task_id": task_id,
                 "node_id": node_id,
-                "title": f"Reuse published Skill: {skill_id}",
+                "title": f"Skill Replay: {skill_id}",
                 "skill_id": skill_id,
-                "skill_binding": binding,
                 "idempotency_key": idempotency_key,
-                "created_at": now,
-                "detail": "正在通过 Broker 按租户、Skill ID、版本和 SHA-256 精确复用已发布 Artifact",
+                "created_at": datetime.now().astimezone().isoformat(),
+                "detail": "已通过 Mission API 授权，正在向 Broker 提交不可变 Skill 候选",
             }
             actions.append(action)
             mission_run["actions"] = actions
@@ -611,6 +610,18 @@ def register_mission_routes(
                     "该 Skill 在此 Mission 节点已有未完成或中断的 Replay；请先核验 Broker 与 Evidence Store",
                     409,
                 )
+            action = {
+                "action_type": "published_skill_reuse",
+                "status": "running",
+                "task_id": task_id,
+                "node_id": node_id,
+                "title": f"Reuse published Skill: {skill_id}",
+                "skill_id": skill_id,
+                "skill_binding": binding,
+                "idempotency_key": idempotency_key,
+                "created_at": now,
+                "detail": "正在通过 Broker 按租户、Skill ID、版本和 SHA-256 精确复用已发布 Artifact",
+            }
             actions.append(action)
             mission_run["actions"] = actions
             mission_run["updated_at"] = now

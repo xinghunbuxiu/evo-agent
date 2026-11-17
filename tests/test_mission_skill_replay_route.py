@@ -442,7 +442,12 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             "mission_context": {**binding["mission_context"], "task_id": second_task_id},
         }
         second = asyncio.run(handler(
-            request=_request({"node_id": "node-a", "skill_binding": second_binding}, idempotency_key=second_key),
+            request=_request(
+                {"node_id": "node-a", "skill_binding": {
+                    key: value for key, value in second_binding.items() if key != "mission_context"
+                }},
+                idempotency_key=second_key,
+            ),
             mission_run_id="run-a", skill_id="skill-a",
         ))
         self.assertEqual(first["status"], 502)
