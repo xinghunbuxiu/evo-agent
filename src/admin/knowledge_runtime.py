@@ -11,6 +11,116 @@ from pathlib import Path
 from typing import Callable
 
 from core import Experience, ExperienceStore, Skill, SkillRegistry, SkillTrustLevel
+from core.experience_reflection import ExperienceReflectionStore
+
+
+def _recipe_steps_from_findings(findings: dict) -> list[str]:
+    raw = findings.get("steps", findings.get("recommended_steps"))
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("accepted Reflection must contain explicit natural-language steps")
+    steps = [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    if not steps:
+        raise ValueError("accepted Reflection must contain at least one non-empty Recipe step")
+    return steps
+
+
+def _write_immutable_reflection_recipe(workspace: Path, tenant_id: str, skill: Skill) -> dict:
+    visible_dir, cache_dir = local_skill_dirs(workspace, tenant_id)
+    payload = skill.to_dict()
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    paths = (visible_dir / f"{skill.id}.json", cache_dir / f"{skill.id}.json")
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("Recipe Skill draft path is unsafe")
+        if path.exists():
+            if not path.is_file():
+                raise ValueError("Recipe Skill draft path is not a regular file")
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError("existing Recipe Skill draft is unreadable") from exc
+            if existing != payload:
+                raise ValueError("Recipe Skill ID already exists with different immutable content")
+            continue
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+        except FileExistsError:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing != payload:
+                raise ValueError("Recipe Skill ID already exists with different immutable content")
+    return {
+        "skill_id": skill.id,
+        "name": skill.name,
+        "domain": skill.domain,
+        "trust_level": skill.trust_level.value,
+        "visible_path": str(paths[0]),
+        "cache_path": str(paths[1]),
+    }
+
+
+def create_accepted_reflection_recipe_skill(
+    workspace: Path,
+    tenant_id: str,
+    reflection_id: str,
+) -> dict:
+    """Create an immutable, non-executable Recipe draft from an accepted Reflection."""
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("tenant_id is required")
+    if not isinstance(reflection_id, str) or not reflection_id.strip():
+        raise ValueError("reflection_id is required")
+    accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(
+        reflection_id
+    )
+    reflection = accepted["reflection"]
+    decision = accepted["decision"]
+    source = accepted["source_experience"]
+    reflection_payload = reflection.metadata["experience_reflection"]
+    decision_payload = decision.metadata["experience_reflection_decision"]
+    findings = reflection_payload["findings"]
+    steps = _recipe_steps_from_findings(findings)
+
+    recipe = {
+        "schema_version": "experience-recipe.v1",
+        "steps": steps,
+        "applicability_conditions": findings.get("applicability_conditions", []),
+        "constraints": findings.get("constraints", []),
+        "counterexamples": findings.get("counterexamples", []),
+        "open_questions": findings.get("open_questions", []),
+        "success_factors": findings.get("success_factors", []),
+        "failure_causes": findings.get("failure_causes", []),
+    }
+    skill_id = "recipe-" + __import__("hashlib").sha256(
+        f"{tenant_id}:{reflection.id}".encode("utf-8")
+    ).hexdigest()[:24]
+    skill = Skill(
+        id=skill_id,
+        name=str(findings.get("title") or f"{source.domain}_{source.task_type}_recipe")[:120],
+        domain=source.domain,
+        description=str(findings.get("observed_outcome") or source.output_summary)[:1000],
+        code="",
+        parameters={
+            "recipe": recipe,
+            "executable": False,
+            "provenance": {
+                "tenant_id": tenant_id,
+                "source_experience_id": source.id,
+                "source_experience_digest": reflection_payload["source_experience_digest"],
+                "reflection_id": reflection.id,
+                "reflection_revision": reflection_payload["revision"],
+                "decision_id": decision.id,
+                "reviewer": decision_payload["reviewer"],
+                "decision_at": decision_payload["decision_at"],
+            },
+        },
+        trust_level=SkillTrustLevel.DRAFT,
+        source="accepted_experience_reflection_recipe",
+        version="1.0.0",
+    )
+    return _write_immutable_reflection_recipe(workspace, tenant_id, skill)
 
 
 def collect_task_verified_skills(tasks: list) -> list[dict]:

@@ -153,3 +153,27 @@ def register_experience_reflection_routes(
         except (OSError, RuntimeError):
             return error_response("Reflection 决策未能完成；请使用同一幂等键安全重试", 503)
         return success_response({"tenant_id": tenant_id, "decision": record.to_dict()}, "Reflection 复核决定已追加")
+
+    @app.post("/api/tenants/{tenant_id}/experience-reflections/{reflection_id}/recipe")
+    async def create_experience_reflection_recipe(request: Request, tenant_id: str, reflection_id: str):
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if not authorize_tenant(user, tenant_id):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, tenant_id) != "tenant_admin":
+            return error_response("生成 Recipe Skill 草稿仅允许 tenant_admin", 403)
+        try:
+            from admin.knowledge_runtime import create_accepted_reflection_recipe_skill
+
+            recipe = create_accepted_reflection_recipe_skill(workspace, tenant_id, reflection_id)
+        except ValueError as exc:
+            message = str(exc)
+            status = 404 if "does not exist" in message else 409
+            return error_response(message, status)
+        except (OSError, RuntimeError):
+            return error_response("Recipe Skill 草稿生成失败", 503)
+        return success_response(
+            {"tenant_id": tenant_id, "recipe": recipe},
+            "已从已接受 Reflection 生成非可执行 Recipe Skill 草稿",
+        )

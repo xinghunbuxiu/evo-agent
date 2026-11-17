@@ -611,6 +611,46 @@ class ExperienceReflectionStore:
             self.experience_store.save(record)
             return record
 
+    def get_accepted_reflection(self, reflection_id: str) -> dict:
+        """Load an accepted Reflection with its exact source and decision provenance."""
+        target_id = self._safe_id(reflection_id, "reflection_id")
+        with _exclusive_reflection_lock(self.lock_path):
+            reflections = self._load_all_reflections()
+            reflection = next((item for item in reflections if item.id == target_id), None)
+            if reflection is None:
+                raise ValueError("Reflection does not exist in this tenant")
+            payload = reflection.metadata["experience_reflection"]
+            source = self._load_source(payload["source_experience_id"])
+            if canonical_experience_digest(source) != payload["source_experience_digest"]:
+                raise ValueError("source Experience digest changed; Reflection cannot seed a Recipe")
+
+            decisions = self._load_all_decisions()
+            matching = [
+                item for item in decisions
+                if item.metadata["experience_reflection_decision"].get("reflection_id") == target_id
+            ]
+            if len(matching) != 1:
+                raise ValueError(
+                    "Reflection must have exactly one terminal decision before Recipe generation"
+                )
+            decision = matching[0]
+            decision_payload = decision.metadata["experience_reflection_decision"]
+            if (
+                decision_payload.get("tenant_id") != self.tenant_id
+                or decision_payload.get("source_experience_id") != payload["source_experience_id"]
+                or decision_payload.get("source_experience_digest") != payload["source_experience_digest"]
+                or decision_payload.get("reflection_revision") != payload["revision"]
+                or decision_payload.get("reviewer") == payload["author"]
+            ):
+                raise ValueError("Reflection decision provenance does not match its source")
+            if decision_payload.get("decision") != "accepted":
+                raise ValueError("only an accepted Reflection may create a Recipe Skill draft")
+            return {
+                "reflection": reflection,
+                "decision": decision,
+                "source_experience": source,
+            }
+
     def list_reviewed_for_source(self, source_experience_id: str | None = None) -> list[dict]:
         source_id = (
             self._safe_id(source_experience_id, "source_experience_id")
