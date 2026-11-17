@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -93,7 +94,7 @@ def create_accepted_reflection_recipe_skill(
         "success_factors": findings.get("success_factors", []),
         "failure_causes": findings.get("failure_causes", []),
     }
-    skill_id = "recipe-" + __import__("hashlib").sha256(
+    skill_id = "recipe-" + hashlib.sha256(
         f"{tenant_id}:{reflection.id}".encode("utf-8")
     ).hexdigest()[:24]
     skill = Skill(
@@ -119,6 +120,8 @@ def create_accepted_reflection_recipe_skill(
         trust_level=SkillTrustLevel.DRAFT,
         source="accepted_experience_reflection_recipe",
         version="1.0.0",
+        created_at=decision_payload["decision_at"],
+        updated_at=decision_payload["decision_at"],
     )
     return _write_immutable_reflection_recipe(workspace, tenant_id, skill)
 
