@@ -67,6 +67,8 @@ from admin.intelligence_bootstrap_runtime import (
 from admin.mission_execution_runtime import (
     create_mission_execution_bindings,
 )
+from admin.mission_task_reflection_runtime import record_mission_task_reflection
+
 from admin.skill_replay_runtime import create_skill_replay_runtime
 from admin.growth_policy_runtime import (
     effective_platform_promotion_status as _effective_platform_promotion_status,
@@ -1884,6 +1886,7 @@ def create_app() -> FastAPI:
         resume_mission_dependency_nodes=_mission_action_runtime_ref.get("resume_dependency_nodes"),
         # The verifier reads declared artifacts inside the workspace; it never executes worker commands.
         independent_verifier=verify_workspace_artifacts,
+        record_task_experience_reflection=record_mission_task_reflection,
         organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]

@@ -1,6 +1,17 @@
 # Experience Reflection Contract
 
-Status: contract, tenant-bound append-only persistence, authenticated submit/list/decision APIs, tenant-scoped review queue UI, and admin-authorized Accepted-Reflection-to-Recipe draft generation are implemented. Recipe drafts remain non-executable; executable synthesis and Broker/Validator publication remain separate gates.
+Status: contract, tenant-bound append-only persistence, authenticated submit/list/decision APIs, tenant-scoped review queue UI, admin-authorized Accepted-Reflection-to-Recipe draft generation, and automatic Mission terminal-task Experience/Reflection drafting are implemented. Automatic drafts remain pending human review. Recipe drafts remain non-executable; executable synthesis and Broker/Validator publication remain separate gates.
+
+## 0. Automatic Mission terminal observation
+
+When a Mission queue task reaches a terminal state (success, completed, failed, or cancelled), the Mission refresh runtime now attempts to persist:
+
+1. A tenant-scoped `mission_task` Experience containing the task/run/node identity, terminal status and timestamp, a bounded worker summary/error, and any independently verified evidence attached by the Mission verifier.
+2. A pending Reflection revision linked to that Experience by its canonical SHA-256 digest and explicit evidence references.
+
+The source Experience and Reflection use deterministic task lineage and an idempotency key, so repeated Mission refreshes return the same records. A persistence error is recorded on the Mission action as retry-pending and does not rewrite task execution or acceptance status.
+
+These automatic drafts are factual observations, not model-authored conclusions: worker output is labeled as a worker report, and is not treated as independent verification. The author is the system actor `mission-system`; a tenant reviewer must still accept or reject the Reflection. No Skill is created or promoted by this automatic path.
 
 ## 1. Purpose and boundary
 
