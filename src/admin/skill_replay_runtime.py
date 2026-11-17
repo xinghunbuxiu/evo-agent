@@ -656,6 +656,71 @@ class SkillReplayRuntime:
         ):
             raise ValueError("Mission delivery acceptance evidence lineage is incomplete or inconsistent")
 
+    @staticmethod
+    def _validate_reflection_candidate_provenance(
+        workspace: Path, tenant_id: str, skill: Skill,
+    ) -> None:
+        """Re-verify the accepted Reflection chain before staging its executable draft."""
+        if skill.source != "accepted_reflection_executable_candidate":
+            raise ValueError("Skill is not an accepted Reflection executable candidate")
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        provenance = parameters.get("provenance")
+        synthesis = parameters.get("synthesis")
+        if not isinstance(provenance, Mapping) or not isinstance(synthesis, Mapping):
+            raise ValueError("accepted Reflection candidate provenance is missing")
+        if provenance.get("tenant_id") != tenant_id:
+            raise PermissionError("accepted Reflection candidate tenant binding mismatch")
+        if synthesis.get("method") != "caller_supplied_candidate" or synthesis.get("static_contract_check") != "passed":
+            raise ValueError("accepted Reflection candidate synthesis contract is invalid")
+        code_digest = __import__("hashlib").sha256(skill.code.encode("utf-8")).hexdigest()
+        if synthesis.get("code_sha256") != code_digest:
+            raise ValueError("accepted Reflection candidate code digest mismatch")
+
+        from core.experience_reflection import ExperienceReflectionStore, canonical_experience_digest
+
+        accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(
+            str(provenance.get("reflection_id") or ""),
+        )
+        reflection = accepted["reflection"]
+        decision = accepted["decision"]
+        source = accepted["source_experience"]
+        reflection_payload = reflection.metadata.get("experience_reflection", {})
+        decision_payload = decision.metadata.get("experience_reflection_decision", {})
+        expected = {
+            "tenant_id": tenant_id,
+            "source_experience_id": source.id,
+            "source_experience_digest": canonical_experience_digest(source),
+            "reflection_id": reflection.id,
+            "reflection_revision": reflection_payload.get("revision"),
+            "decision_id": decision.id,
+            "reviewer": decision_payload.get("reviewer"),
+            "decision_at": decision_payload.get("decision_at"),
+        }
+        if any(provenance.get(key) != value for key, value in expected.items()):
+            raise PermissionError("accepted Reflection candidate source or reviewer lineage changed")
+
+        recipe_skill_id = provenance.get("recipe_skill_id")
+        if not isinstance(recipe_skill_id, str) or not _ID_RE.fullmatch(recipe_skill_id):
+            raise ValueError("accepted Reflection Recipe binding is invalid")
+        recipe_path = Path(workspace) / ".tenants" / tenant_id / "skills" / "draft" / f"{recipe_skill_id}.json"
+        if recipe_path.is_symlink() or not recipe_path.is_file():
+            raise ValueError("accepted Reflection Recipe draft is missing or unsafe")
+        try:
+            recipe_payload = json.loads(recipe_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
+        recipe_digest = __import__("hashlib").sha256(
+            json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if (
+            recipe_payload.get("id") != recipe_skill_id
+            or recipe_payload.get("trust_level") != "draft"
+            or recipe_payload.get("code") != ""
+            or recipe_payload.get("source") != "accepted_experience_reflection_recipe"
+            or provenance.get("recipe_sha256") != recipe_digest
+        ):
+            raise PermissionError("accepted Reflection Recipe binding or digest changed")
+
     def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
                          node_id: str, task_id: str, skill_id: str,
                          on_candidate_bound: Callable[[dict], None] | None = None,
@@ -693,12 +758,15 @@ class SkillReplayRuntime:
             raise ValueError("loaded Skill identity does not match the requested candidate")
         self._validate_executable_contract(skill)
         parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
-        if (
-            str(parameters.get("mission_run_id") or "") != mission_run_id
-            or str(parameters.get("mission_node_id") or "") != node_id
-        ):
-            raise PermissionError("Skill candidate provenance does not match this Mission node")
-        self._validate_mission_delivery_acceptance(parameters)
+        if skill.source == "accepted_reflection_executable_candidate":
+            self._validate_reflection_candidate_provenance(self.workspace, tenant_id, skill)
+        else:
+            if (
+                str(parameters.get("mission_run_id") or "") != mission_run_id
+                or str(parameters.get("mission_node_id") or "") != node_id
+            ):
+                raise PermissionError("Skill candidate provenance does not match this Mission node")
+            self._validate_mission_delivery_acceptance(parameters)
 
         context = {
             "tenant_id": tenant_id,

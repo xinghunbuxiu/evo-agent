@@ -140,3 +140,8 @@ No Reflection state, confidence score, Recipe draft or worker-reported success c
 5. Add a separately authorized Recipe-to-executable synthesis workflow and retain the existing Broker/Validator/publishing gates.
 
 Do not implement steps 4–5 before the Reflection storage, authorization and lineage tests pass.
+
+
+### Replay eligibility for synthesized executable candidates
+
+An accepted Reflection executable candidate may enter Mission Skill Replay only after the Replay boundary re-reads the accepted Reflection and its source Experience, checks the reviewer/decision/revision lineage, verifies the tenant binding and code digest, and re-hashes the exact non-executable Recipe draft. A changed or missing source/Recipe binding fails closed before Broker staging. This check does not execute code or grant trust; Broker isolation, independent Validator attestation, and immutable Artifact publication remain mandatory.

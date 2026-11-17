@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.knowledge_runtime import create_accepted_reflection_executable_candidate
+from admin.skill_replay_runtime import SkillReplayRuntime
+from core import Skill
 from core import Experience, ExperienceStore
 from core.experience_reflection import ExperienceReflectionStore
 
@@ -117,6 +119,29 @@ class ExperienceReflectionExecutableCandidateTests(unittest.TestCase):
             self.create(bad)
         draft_dir = self.workspace / ".tenants" / self.tenant_id / "skills" / "draft"
         self.assertFalse(any(path.name.startswith("recipe-exec-") for path in draft_dir.glob("*.json")))
+
+
+    def test_replay_gate_revalidates_accepted_reflection_and_recipe_provenance(self):
+        result = self.create()
+        payload = json.loads(Path(result["visible_path"]).read_text(encoding="utf-8"))
+        skill = Skill.from_dict(payload)
+        SkillReplayRuntime._validate_reflection_candidate_provenance(
+            self.workspace, self.tenant_id, skill,
+        )
+        forged = Skill.from_dict(payload)
+        forged.parameters["provenance"]["reviewer"] = "attacker:9"
+        with self.assertRaisesRegex(PermissionError, "reviewer lineage changed"):
+            SkillReplayRuntime._validate_reflection_candidate_provenance(
+                self.workspace, self.tenant_id, forged,
+            )
+        recipe_path = Path(result["visible_path"]).parent / f"{payload['parameters']['provenance']['recipe_skill_id']}.json"
+        recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+        recipe["parameters"]["recipe"]["steps"].append("tampered")
+        recipe_path.write_text(json.dumps(recipe), encoding="utf-8")
+        with self.assertRaisesRegex(PermissionError, "Recipe binding or digest changed"):
+            SkillReplayRuntime._validate_reflection_candidate_provenance(
+                self.workspace, self.tenant_id, skill,
+            )
 
     def test_client_cannot_override_trust_or_execution_contract(self):
         forged = dict(self.candidate, trust_level="verified")

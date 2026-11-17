@@ -146,13 +146,15 @@ def _validate_reflection_executable_code(code: object) -> tuple[ast.Module, str]
             and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
         ):
             continue
-        if isinstance(node, ast.FunctionDef) and node.name == "run":
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run":
             entries.append(node)
             continue
         raise ValueError("executable candidate may contain only a module docstring and one module-level run(context) function")
     if len(entries) != 1:
         raise ValueError("executable candidate must define exactly one synchronous run(context) function")
     entry = entries[0]
+    if isinstance(entry, ast.AsyncFunctionDef):
+        raise ValueError("executable candidate must define exactly one synchronous run(context) function")
     args = entry.args
     if (
         entry.decorator_list or args.posonlyargs or len(args.args) != 1
