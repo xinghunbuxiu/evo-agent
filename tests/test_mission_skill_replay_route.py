@@ -406,8 +406,16 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             mission_run_id="run-a", skill_id="skill-a",
         ))
         second_key = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        second_task_id = __import__("uuid").uuid5(
+            __import__("uuid").NAMESPACE_URL,
+            "evo-agent:mission-published-skill-reuse:run-a:skill-a:node-a:" + second_key,
+        ).hex
+        second_binding = {
+            **binding,
+            "mission_context": {**binding["mission_context"], "task_id": second_task_id},
+        }
         second = asyncio.run(handler(
-            request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=second_key),
+            request=_request({"node_id": "node-a", "skill_binding": second_binding}, idempotency_key=second_key),
             mission_run_id="run-a", skill_id="skill-a",
         ))
         self.assertEqual(first["status"], 502)
