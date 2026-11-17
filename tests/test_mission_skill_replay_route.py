@@ -351,7 +351,7 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
             request=_request({"node_id": "node-a", "skill_binding": binding}, idempotency_key=key),
             mission_run_id="run-a", skill_id="skill-a",
         ))
-        self.assertEqual(response["status"], 409)
+        self.assertEqual(response["status"], 400)
         self.assertEqual(runtime.calls, [])
         self.assertEqual(load_mission_runs(self.workspace)["items"][0]["actions"], [])
 
