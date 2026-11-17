@@ -221,3 +221,19 @@ export function decideExperienceReflection(
     },
   )
 }
+
+export function createExperienceReflectionRecipe(tenantId: string, reflectionId: string) {
+  return request<{
+    tenant_id: string
+    recipe: {
+      skill_id: string
+      name: string
+      domain: string
+      trust_level: 'draft'
+      visible_path: string
+    }
+  }>(
+    `/api/tenants/${encodeURIComponent(tenantId)}/experience-reflections/${encodeURIComponent(reflectionId)}/recipe`,
+    { method: 'POST' },
+  )
+}

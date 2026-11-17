@@ -67,6 +67,17 @@
         <div>复核人：{{ item.decision.reviewer }} · 时间：{{ item.decision.decision_at }}</div>
         <div v-if="item.decision.reason" class="mt-1">理由：{{ item.decision.reason }}</div>
         <div class="mt-1 text-slate-400">审核记录独立追加，原 Reflection 未被覆盖。</div>
+        <div v-if="item.effective_state === 'accepted'" class="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg border border-teal-200 px-3 py-2 text-xs font-medium text-teal-800 hover:bg-teal-50 disabled:opacity-50"
+            :disabled="busyId === item.reflection.id"
+            @click="createRecipe(item)"
+          >
+            {{ busyId === item.reflection.id ? '生成中…' : '生成 Recipe Skill 草稿' }}
+          </button>
+          <span class="text-slate-500">只生成非可执行草稿；需要明确步骤，不会直接发布或提升信任等级。</span>
+        </div>
       </div>
 
       <div v-else class="mt-4 space-y-3 border-t border-slate-100 pt-4">
@@ -105,6 +116,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import {
+  createExperienceReflectionRecipe,
   decideExperienceReflection,
   getExperienceReflections,
   type ExperienceReflectionQueueItem,
@@ -155,6 +167,31 @@ const load = async () => {
     console.error(error)
   } finally {
     if (version === requestVersion) loading.value = false
+  }
+}
+
+const createRecipe = async (item: ExperienceReflectionQueueItem) => {
+  const reflectionId = item.reflection.id
+  busyId.value = reflectionId
+  message.value = ''
+  try {
+    const response = await createExperienceReflectionRecipe(
+      props.tenantId || 'default',
+      reflectionId,
+    )
+    if (!response.success) {
+      failed.value = true
+      message.value = response.message || 'Recipe Skill 草稿生成失败'
+      return
+    }
+    failed.value = false
+    message.value = `Recipe Skill 草稿已生成：${response.data?.recipe?.skill_id || reflectionId}`
+  } catch (error) {
+    failed.value = true
+    message.value = 'Recipe Skill 草稿生成失败，请刷新后重试'
+    console.error(error)
+  } finally {
+    busyId.value = ''
   }
 }
 
