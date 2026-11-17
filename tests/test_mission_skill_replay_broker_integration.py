@@ -16,11 +16,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from starlette.requests import Request
 
-from admin.knowledge_runtime import write_skill_candidate
+from admin.knowledge_runtime import (
+    create_accepted_reflection_executable_candidate,
+    write_skill_candidate,
+)
 from admin.mission_runtime import load_mission_runs, save_mission_runs
 from admin.routes.missions import register_mission_routes
 from admin.skill_replay_runtime import SkillReplayRuntime
-from core import Skill, SkillTrustLevel
+from core import Experience, ExperienceStore, Skill, SkillTrustLevel
+from core.experience_reflection import ExperienceReflectionStore
 from core.sandbox_broker import BrokerReplayStore, SandboxBrokerService
 from core.sandbox_broker_protocol import SKILL_REPLAY_OUTPUT_SCHEMA
 from core.sandbox_broker_transport import serve_listener
@@ -67,7 +71,9 @@ def _mission_replay_request():
 
 
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
-    def _run_mission_replay_integration(self, *, validator_accepts: bool):
+    def _run_mission_replay_integration(
+        self, *, validator_accepts: bool, reflection_candidate: bool = False,
+    ):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             workspace = root / "workspace"
@@ -93,36 +99,76 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             }
 
             code = "def run(context):\n    return {'ok': True}\n"
-            skill = Skill(
-                id="skill-integration",
-                name="Integration Skill",
-                domain="python",
-                description="Exercises the real Broker and Validator service logic",
-                code=code,
-                parameters={
-                    "execution_contract": {
-                        "kind": "python_run_context",
-                        "replay_eligible": True,
+            if reflection_candidate:
+                source = Experience(
+                    id="accepted-source-experience", domain="python",
+                    task_type="automation", input_summary="Replay an accepted procedure",
+                    output_summary="The deterministic result was independently reviewed",
+                    quality_score=0.0,
+                    metadata={"evidence_refs": ["task-source", "verifier-source"]},
+                )
+                ExperienceStore(workspace, tenant_id).save(source)
+                reflection_store = ExperienceReflectionStore(workspace, tenant_id)
+                reflection = reflection_store.append(
+                    source.id, author="member:integration",
+                    findings={
+                        "title": "Accepted reusable check",
+                        "observed_outcome": "The deterministic check completed",
+                        "steps": ["Read input", "Check expected value", "Return result"],
+                        "applicability_conditions": ["Input is a mapping"],
+                        "constraints": ["Use only supplied context"],
+                        "counterexamples": [], "open_questions": [],
                     },
-                    "mission_run_id": mission_context["mission_run_id"],
-                    "mission_node_id": mission_context["node_id"],
-                    "candidate_origin_task_id": "task-reconstruct",
-                    "evidence_ids": ["task-analyze", "task-reconstruct"],
-                    "validation_evidence": {
-                        "verdict": "pass",
-                        "analyze_task_id": "task-analyze",
-                        "reconstruct_task_id": "task-reconstruct",
+                    source_evidence_refs=["task-source", "verifier-source"],
+                    idempotency_key="integration-reflection-submit",
+                )
+                reflection_store.decide(
+                    reflection.id, reviewer="admin:integration", decision="accepted",
+                    idempotency_key="integration-reflection-accept",
+                )
+                candidate = create_accepted_reflection_executable_candidate(
+                    workspace, tenant_id, reflection.id, {
+                        "name": "Accepted Reflection integration Skill",
+                        "domain": "python",
+                        "description": "Exercises accepted Reflection through Broker and Validator",
+                        "code": code,
+                        "version": "1.0.0",
                     },
-                    "acceptance": {
-                        "evaluation_verdict": "pass",
-                        "has_target_dir": True,
-                        "components_min": 1,
+                )
+                skill = Skill.from_dict(json.loads(
+                    Path(candidate["visible_path"]).read_text(encoding="utf-8")
+                ))
+            else:
+                skill = Skill(
+                    id="skill-integration",
+                    name="Integration Skill",
+                    domain="python",
+                    description="Exercises the real Broker and Validator service logic",
+                    code=code,
+                    parameters={
+                        "execution_contract": {
+                            "kind": "python_run_context",
+                            "replay_eligible": True,
+                        },
+                        "mission_run_id": mission_context["mission_run_id"],
+                        "mission_node_id": mission_context["node_id"],
+                        "candidate_origin_task_id": "task-reconstruct",
+                        "evidence_ids": ["task-analyze", "task-reconstruct"],
+                        "validation_evidence": {
+                            "verdict": "pass",
+                            "analyze_task_id": "task-analyze",
+                            "reconstruct_task_id": "task-reconstruct",
+                        },
+                        "acceptance": {
+                            "evaluation_verdict": "pass",
+                            "has_target_dir": True,
+                            "components_min": 1,
+                        },
                     },
-                },
-                trust_level=SkillTrustLevel.DRAFT,
-                version="1.0.0",
-            )
-            write_skill_candidate(workspace, tenant_id, skill)
+                    trust_level=SkillTrustLevel.DRAFT,
+                    version="1.0.0",
+                )
+                write_skill_candidate(workspace, tenant_id, skill)
 
             digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
             validator = SkillValidatorService(
@@ -404,6 +450,11 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
 
     def test_validator_policy_rejection_keeps_mission_interrupted_and_never_publishes(self):
         self._run_mission_replay_integration(validator_accepts=False)
+
+    def test_accepted_reflection_candidate_runs_through_broker_validator_and_artifact_store(self):
+        self._run_mission_replay_integration(
+            validator_accepts=True, reflection_candidate=True,
+        )
 
 
 
