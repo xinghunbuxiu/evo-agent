@@ -746,12 +746,16 @@ class SkillReplayRuntime:
         recipe_digest = hashlib.sha256(
             json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+        recipe_parameters = recipe_payload.get("parameters") if isinstance(recipe_payload, dict) else None
+        recipe_definition = recipe_parameters.get("recipe") if isinstance(recipe_parameters, dict) else None
         if (
-            recipe_payload.get("id") != recipe_skill_id
+            not isinstance(recipe_payload, dict)
+            or not isinstance(recipe_parameters, dict)
+            or recipe_payload.get("id") != recipe_skill_id
             or recipe_payload.get("trust_level") != "draft"
             or recipe_payload.get("code") != ""
             or recipe_payload.get("source") != "accepted_experience_reflection_recipe"
-            or parameters.get("recipe") != recipe_payload.get("parameters", {}).get("recipe")
+            or parameters.get("recipe") != recipe_definition
             or provenance.get("recipe_sha256") != recipe_digest
         ):
             raise PermissionError("accepted Reflection Recipe binding or digest changed")
