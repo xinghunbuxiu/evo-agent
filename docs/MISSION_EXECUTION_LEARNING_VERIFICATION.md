@@ -578,3 +578,16 @@ invalid request, untrusted Broker evidence, or corrupt cached response remains
 `indeterminate`/operator-review territory. Such outcomes must not be rewritten
 as a policy rejection, retried with a new request identity, or used to publish
 an Artifact.
+
+## Broker-published Skill catalog boundary (2026-11-18)
+
+`SkillArtifactStore.list_published()` is the broker-side discovery primitive for independently validated immutable Skill artifacts.
+
+- Discovery is scoped to one explicit tenant identity. A missing tenant returns an empty catalog; another tenant's artifacts are never included.
+- Only immutable published artifact files are eligible. Draft candidate files are excluded.
+- Every catalog entry is reloaded through the exact artifact loader, including content SHA-256, artifact identity, trust level, and independent Validator Ed25519 attestation verification. A malformed or unsafe published entry fails the catalog closed rather than being silently advertised.
+- The response contains metadata only (`skill_id`, `skill_version`, `content_sha256`, `trust_level`, `validator_id`, and `policy_id`). It does not return Skill source or original Mission lineage.
+- Pagination is explicit (`limit` 1–100 and bounded `offset`) and ordering is deterministic by Skill ID and version.
+- Catalog membership is discovery only. It does not grant execution permission. Mission must still pin an exact version and digest, attach a new Mission execution context, and call the existing Broker replay path. The Broker continues to re-load and verify the exact binding before execution.
+
+This commit adds the trusted storage primitive and regression coverage. It does not yet expose a socket RPC or automatically bind catalog results in Mission planning; those are separate integration steps and must retain Broker-side tenant authorization and signed response verification.
