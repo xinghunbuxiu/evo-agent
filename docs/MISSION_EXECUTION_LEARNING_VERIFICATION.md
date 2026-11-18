@@ -511,3 +511,48 @@ Content-Type: application/json
 `execution_succeeded=true` 只表示 Broker 隔离执行成功，不表示业务目标已通过验收。Replay 失败但 Broker 签名有效时，也会作为失败观察保存并进入待反思状态；传输失败或签名验证失败则不会创建成功 Experience。如果 Broker 证据已持久化、但 Experience 投影失败，Mission 操作记录会保留异常携带的 Evidence 引用，避免丢失已落盘证据的追踪入口。
 
 **当前仍未开放自动晋升。** 独立 Validator 必须针对完全相同的 tenant、Skill ID、版本和内容 SHA-256 完成验收，并使用 Artifact Store 信任的 Validator 私钥签名；Broker 在发布时重新验证该签名后，才允许将候选发布为 verified。Recipe 候选仍保留为知识资产，不进入 Python Replay。
+
+## Talent Center Worker Growth → Learning Task lifecycle (2026-11-18)
+
+Worker Growth recommendations can now be adopted through the existing
+`POST /api/autonomy/tasks/assign` endpoint. Adoption is tenant-runtime scoped,
+requires the exact employee and recommendation source, and creates a deterministic
+Learning Task ID. Repeating the adoption returns the existing task. The task begins
+as `assigned`; adoption itself does not dispatch work or authorize automatic retry.
+
+The Worker Growth task lifecycle is now:
+
+```text
+suggested recommendation
+  -> talent officer adopts
+  -> assigned Learning Task
+  -> POST /api/autonomy/tasks/start (worker_id bound)
+  -> in_progress
+  -> POST /api/autonomy/tasks/submit (worker_id + execution_event_id + result + reflection)
+  -> submitted
+  -> POST /api/autonomy/tasks/verify (signed verifier attestation)
+  -> POST /api/autonomy/tasks/approve (talent officer review)
+  -> approved + experience card
+```
+
+The start endpoint records the assigned Worker identity and moves the task state to
+`in_progress`; it is a lifecycle/claim record, **not yet a queue dispatch or proof
+that an external process actually ran**. Worker Growth submission is accepted only
+from that same Worker binding and must supply an execution event ID. A generic task's
+existing submission path remains unchanged.
+
+The verification endpoint accepts only a signed attestation with source
+`learning_task_independent_verifier`. The signature and exact tenant, Learning Task,
+employee, executing Worker, and execution-event bindings are rechecked. The attestation
+must contain a non-empty list of boolean check results, and the overall passed/failed
+verdict must agree with those checks. Once attached, the verifier evidence is immutable.
+Approval of a Worker Growth Learning Task is blocked unless its stored attestation
+still verifies and has status `passed`; an absent, forged, mismatched, failed, or
+tampered attestation fails closed. The resulting experience card retains the verifier
+attestation SHA-256 as evidence provenance.
+
+This is an application-level signed-evidence gate, not yet a separately deployed
+Validator service. The current HMAC verifier key is workspace-local; the deployment
+must protect it from Worker processes and callers. The start endpoint does not yet
+dispatch a real worker/queue job, and failed verification does not yet have a
+first-class remediation/retry endpoint. Those are separate follow-up increments.
