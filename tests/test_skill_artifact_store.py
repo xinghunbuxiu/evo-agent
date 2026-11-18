@@ -577,7 +577,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
         self.assertEqual(item["skill_version"], self.skill.version)
         self.assertEqual(
             item["content_sha256"],
-            self._publish_binding()["content_sha256"],
+            binding["content_sha256"],
         )
         self.assertEqual(item["trust_level"], "verified")
         self.assertEqual(item["validator_id"], "independent-validator")
