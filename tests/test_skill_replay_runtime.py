@@ -174,7 +174,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         }
         broker_envelope = {"signed": "broker-envelope"}
         verify_broker.return_value = {"execution_succeeded": True}
-        verify_validator.return_value = {"validation_id": "validation-a"}
+        verify_validator.return_value = {"passed": True, "validation_id": "validation-a"}
         result = runtime.verify_recovery_responses(
             mission_context=context,
             skill_binding=binding,
@@ -449,7 +449,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         }
         validate.return_value = {
             "schema_version": "mission.skill-validation-attestation.v1",
-            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "passed": True, "validation_id": "validation-1", "validator_id": "validator-independent",
             "policy_id": "policy-1",
         }
         promote.return_value = {
@@ -536,7 +536,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         }
         validate.return_value = {
             "schema_version": "mission.skill-validation-attestation.v1",
-            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "passed": True, "validation_id": "validation-1", "validator_id": "validator-independent",
             "policy_id": "policy-1",
         }
         promote.side_effect = RuntimeError("Broker response lost after possible publication")
@@ -798,7 +798,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         execution_id = "22222222-2222-4222-8222-222222222222"
         validation_id = "33333333-3333-4333-8333-333333333333"
         validation_attestation = {
-            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "passed": True, "validation_id": "validation-1", "validator_id": "validator-independent",
             "policy_id": "policy-1", "policy_sha256": "a" * 64,
             "checks_sha256": "b" * 64,
         }
@@ -894,7 +894,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         }
         binding = build_skill_replay_binding(skill, context)
         validation_attestation = {
-            "validation_id": "validation-1", "validator_id": "validator-independent",
+            "passed": True, "validation_id": "validation-1", "validator_id": "validator-independent",
             "policy_id": "policy-1", "policy_sha256": "a" * 64,
             "checks_sha256": "b" * 64,
         }
