@@ -481,6 +481,43 @@ def register_mission_routes(
             pass
         return error_response(error_message, error_status)
 
+    @app.get("/api/missions/published-skills")
+    async def list_published_mission_skills(
+        request: Request, tenant_id: str | None = None, limit: int = 100, offset: int = 0,
+    ):
+        """List independently validated published Skill metadata for one authorized tenant."""
+        user = get_session_user(request)
+        if not user:
+            return error_response("未登录", 401)
+        if skill_replay_runtime is None or not callable(
+            getattr(skill_replay_runtime, "list_published_skills", None)
+        ):
+            return error_response("Published Skill Catalog Broker 尚未配置", 503)
+        normalized_tenant = str(tenant_id or "").strip()
+        if not normalized_tenant:
+            return error_response("必须指定 tenant_id", 400)
+        if not authorize_tenant(user, normalized_tenant):
+            return error_response("无权访问该租户", 403)
+        if tenant_role(user, normalized_tenant) not in {"tenant_admin", "member"}:
+            return error_response("只有租户管理员或成员可以查看已发布 Skill 目录", 403)
+        if isinstance(limit, bool) or not 1 <= limit <= 100 or isinstance(offset, bool) or not 0 <= offset <= 100000:
+            return error_response("目录分页参数无效", 400)
+        try:
+            catalog = await asyncio.to_thread(
+                skill_replay_runtime.list_published_skills,
+                tenant_id=normalized_tenant,
+                limit=limit,
+                offset=offset,
+            )
+            if not isinstance(catalog, dict) or set(catalog) != {"items", "total", "limit", "offset"}:
+                raise RuntimeError("Broker returned an invalid Skill catalog")
+            return success_response(
+                {"tenant_id": normalized_tenant, **catalog},
+                "已读取经过独立 Validator 验证的 Published Skill 目录",
+            )
+        except Exception:
+            return error_response("Published Skill Catalog 暂不可用；未返回未经验证的目录数据", 502)
+
     @app.post("/api/missions/{mission_run_id}/skills/{skill_id}/reuse-published")
     async def reuse_published_mission_skill(request: Request, mission_run_id: str, skill_id: str):
         """Execute one exact, independently validated published artifact in a later Mission."""
