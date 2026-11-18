@@ -375,7 +375,7 @@ class SkillReplayRuntime:
                     expected_identity=expected_identity,
                 )
                 validation_attestation = attestation
-                result["validator"] = "verified"
+                result["validator"] = "verified" if attestation.get("passed") is True else "rejected"
                 result["validation_id"] = attestation.get("validation_id")
             except Exception:
                 result["validator"] = "invalid"
@@ -1008,7 +1008,7 @@ class SkillReplayRuntime:
                     },
                 )
                 validation = {
-                    "status": "passed",
+                    "status": "passed" if validation_attestation.get("passed") is True else "rejected",
                     "validation_id": validation_attestation["validation_id"],
                     "validator_id": validation_attestation["validator_id"],
                     "policy_id": validation_attestation["policy_id"],
@@ -1026,46 +1026,49 @@ class SkillReplayRuntime:
                     evidence_ref=replay.get("evidence"),
                 ) from exc
             else:
-                try:
-                    promotion_request_id = _deterministic_request_id("promotion", {
-                        "mission_context": context,
-                        "skill_id": skill.id,
-                        "skill_version": skill.version,
-                        "content_sha256": binding["content_sha256"],
-                        "validation_attestation": validation_attestation,
-                    })
-                    if on_promotion_request_bound is not None:
-                        if not callable(on_promotion_request_bound):
-                            raise ValueError("on_promotion_request_bound must be callable")
-                        on_promotion_request_bound({
-                            "promotion_request_id": promotion_request_id,
+                if validation_attestation.get("passed") is True:
+                    try:
+                        promotion_request_id = _deterministic_request_id("promotion", {
+                            "mission_context": context,
+                            "skill_id": skill.id,
+                            "skill_version": skill.version,
+                            "content_sha256": binding["content_sha256"],
+                            "validation_attestation": validation_attestation,
                         })
-                    receipt = promote_skill_candidate_via_broker(
-                        self.socket_path,
-                        self.workspace_id,
-                        mission_context=context,
-                        skill_id=skill.id,
-                        skill_version=skill.version,
-                        content_sha256=binding["content_sha256"],
-                        trust_level=_VALIDATED_TRUST_LEVEL,
-                        validation_attestation=validation_attestation,
-                        public_key=self.broker_public_key,
-                        expected_key_id=self.broker_key_id,
-                        request_id=promotion_request_id,
-                    )
-                    promotion = {
-                        "status": "published",
-                        "artifact": receipt["artifact"],
-                        "validation_provenance": receipt.get("validation_provenance"),
-                    }
-                except Exception as exc:
-                    # Broker publication is create-once and may have committed
-                    # before the response was lost. Keep the Mission action in
-                    # manual recovery rather than recording a terminal failure.
-                    raise SkillReplayOutcomeIndeterminate(
-                        "Artifact Store publication outcome is not durably confirmed",
-                        evidence_ref=replay.get("evidence"),
-                    ) from exc
+                        if on_promotion_request_bound is not None:
+                            if not callable(on_promotion_request_bound):
+                                raise ValueError("on_promotion_request_bound must be callable")
+                            on_promotion_request_bound({
+                                "promotion_request_id": promotion_request_id,
+                            })
+                        receipt = promote_skill_candidate_via_broker(
+                            self.socket_path,
+                            self.workspace_id,
+                            mission_context=context,
+                            skill_id=skill.id,
+                            skill_version=skill.version,
+                            content_sha256=binding["content_sha256"],
+                            trust_level=_VALIDATED_TRUST_LEVEL,
+                            validation_attestation=validation_attestation,
+                            public_key=self.broker_public_key,
+                            expected_key_id=self.broker_key_id,
+                            request_id=promotion_request_id,
+                        )
+                        promotion = {
+                            "status": "published",
+                            "artifact": receipt["artifact"],
+                            "validation_provenance": receipt.get("validation_provenance"),
+                        }
+                    except Exception as exc:
+                        # Broker publication is create-once and may have committed
+                        # before the response was lost. Keep the Mission action in
+                        # manual recovery rather than recording a terminal failure.
+                        raise SkillReplayOutcomeIndeterminate(
+                            "Artifact Store publication outcome is not durably confirmed",
+                            evidence_ref=replay.get("evidence"),
+                        ) from exc
+                else:
+                    promotion = {"status": "blocked", "reason": "validator_policy_rejected"}
         LOGGER.info(
             "Mission Skill Replay recorded mission_run_id=%s node_id=%s skill_id=%s execution_succeeded=%s evidence_id=%s validation_status=%s promotion_status=%s",
             mission_run_id, node_id, skill.id,
