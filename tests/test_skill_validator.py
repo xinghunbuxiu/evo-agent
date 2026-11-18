@@ -276,15 +276,43 @@ class SkillValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(SkillValidatorError, "Broker replay attestation"):
             self.service.validate(forged)
 
-    def test_rejects_policy_failure_without_signing(self):
-        request = dict(self.request, broker_attestation=self._broker_attestation({"ok": False, "count": 3}))
-        with self.assertRaisesRegex(SkillValidatorError, "acceptance policy"):
-            self.service.validate(request)
+    def test_policy_failure_is_signed_and_durably_rejected(self):
+        broker_attestation = self._broker_attestation({"ok": False, "count": 3})
+        request = dict(self.request, broker_attestation=broker_attestation)
+        response = self.service.validate(request)
+        expected_identity = self._expected_identity()
+        expected_identity["broker_request_id"] = broker_attestation["request_id"]
+        expected_identity["broker_attestation_sha256"] = broker_response_sha256(broker_attestation)
+        attestation = verify_validation_response(
+            response, public_key=self.validator_key.public_key().public_bytes_raw(),
+            expected_key_id="validator-key-1", expected_request_id=request["request_id"],
+            expected_identity=expected_identity,
+        )
+        self.assertFalse(attestation["passed"])
+        self.assertFalse(all(item["passed"] for item in response["checks"]))
+        self.assertEqual(
+            self.request_store.lookup(
+                request["request_id"], workspace_id=self.workspace_id,
+                mission_context=self.context,
+            )["status"],
+            "completed",
+        )
+        self.assertEqual(self.service.validate(request), response)
 
-    def test_rejects_execution_success_without_required_business_output(self):
-        request = dict(self.request, broker_attestation=self._broker_attestation({"count": 3}))
-        with self.assertRaisesRegex(SkillValidatorError, "acceptance policy"):
-            self.service.validate(request)
+    def test_missing_business_output_is_signed_as_rejection(self):
+        broker_attestation = self._broker_attestation({"count": 3})
+        request = dict(self.request, broker_attestation=broker_attestation)
+        response = self.service.validate(request)
+        expected_identity = self._expected_identity()
+        expected_identity["broker_request_id"] = broker_attestation["request_id"]
+        expected_identity["broker_attestation_sha256"] = broker_response_sha256(broker_attestation)
+        attestation = verify_validation_response(
+            response, public_key=self.validator_key.public_key().public_bytes_raw(),
+            expected_key_id="validator-key-1", expected_request_id=request["request_id"],
+            expected_identity=expected_identity,
+        )
+        self.assertFalse(attestation["passed"])
+        self.assertTrue(any(not item["passed"] for item in response["checks"]))
 
     def test_rejects_mismatched_tenant_or_skill_binding(self):
         # A changed validation payload is a new immutable request and needs a new ID.
