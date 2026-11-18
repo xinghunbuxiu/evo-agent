@@ -1017,10 +1017,10 @@ class SkillReplayRuntime:
                     "checks_sha256": validation_attestation.get("checks_sha256"),
                 }
             except Exception as exc:
-                # The Validator claims the request before evaluating it. A lost
-                # response or rejected policy can therefore leave a durable
-                # indeterminate claim; do not collapse that into a terminal
-                # rejection or continue to publication.
+                # The Validator claims the request before evaluating it.
+                # A lost response, invalid request, untrusted Broker evidence,
+                # or service failure remains indeterminate. Policy failures
+                # return a signed, durable rejection and do not enter this path.
                 raise SkillReplayOutcomeIndeterminate(
                     "independent Validator outcome is not durably confirmed",
                     evidence_ref=replay.get("evidence"),
