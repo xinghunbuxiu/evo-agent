@@ -446,7 +446,7 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
     def test_mission_replay_persists_experience_and_publishes_validator_attested_artifact(self):
         self._run_mission_replay_integration(validator_accepts=True)
 
-    def test_validator_policy_rejection_keeps_mission_interrupted_and_never_publishes(self):
+    def test_validator_policy_rejection_is_terminal_and_never_publishes(self):
         self._run_mission_replay_integration(validator_accepts=False)
 
     def test_accepted_reflection_candidate_runs_through_broker_validator_and_artifact_store(self):
