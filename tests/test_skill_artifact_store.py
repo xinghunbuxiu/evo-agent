@@ -559,5 +559,96 @@ class SkillArtifactStoreTests(unittest.TestCase):
             )
 
 
+    def test_catalog_lists_only_verified_published_metadata_for_requested_tenant(self):
+        self._publish_binding()
+        draft = SimpleNamespace(
+            id="skill_draft_only",
+            version="0.1.0",
+            code="def run(context):\n    return context\n",
+            trust_level="draft",
+        )
+        self.store.stage_candidate(tenant_id="tenant-one", skill=draft)
+
+        catalog = self.store.list_published(tenant_id="tenant-one")
+        self.assertEqual(catalog["total"], 1)
+        self.assertEqual(len(catalog["items"]), 1)
+        item = catalog["items"][0]
+        self.assertEqual(item["skill_id"], self.skill.id)
+        self.assertEqual(item["skill_version"], self.skill.version)
+        self.assertEqual(
+            item["content_sha256"],
+            self._publish_binding()["content_sha256"],
+        )
+        self.assertEqual(item["trust_level"], "verified")
+        self.assertEqual(item["validator_id"], "independent-validator")
+        self.assertNotIn("code", item)
+        self.assertNotIn("mission_run_id", item)
+
+    def test_catalog_is_tenant_scoped_and_missing_tenant_is_empty(self):
+        self._publish_binding()
+        other_context = {
+            "tenant_id": "tenant-two",
+            "mission_run_id": "mission-two",
+            "node_id": "node-two",
+            "task_id": "task-two",
+        }
+        other_skill = SimpleNamespace(
+            id="skill_tenant_two",
+            version="2.0.0",
+            code="def run(context):\n    return context\n",
+            trust_level="verified",
+        )
+        attestation = self._attestation(
+            other_skill,
+            tenant_id="tenant-two",
+            mission_context=other_context,
+        )
+        self._publish(
+            tenant_id="tenant-two",
+            skill=other_skill,
+            validation_attestation=attestation,
+            mission_context=other_context,
+        )
+
+        first = self.store.list_published(tenant_id="tenant-one")
+        second = self.store.list_published(tenant_id="tenant-two")
+        missing = self.store.list_published(tenant_id="tenant-missing")
+        self.assertEqual([item["skill_id"] for item in first["items"]], [self.skill.id])
+        self.assertEqual([item["skill_id"] for item in second["items"]], [other_skill.id])
+        self.assertEqual(missing["items"], [])
+        self.assertEqual(missing["total"], 0)
+
+    def test_catalog_reverifies_artifact_signature_and_rejects_tampering(self):
+        self._publish_binding()
+        path = self.root / "tenant-one" / self.skill.id / "1.2.0.json"
+        os.chmod(path, 0o600)
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        artifact["validation_attestation"]["passed"] = False
+        path.write_text(json.dumps(artifact), encoding="utf-8")
+        os.chmod(path, 0o400)
+        with self.assertRaisesRegex(SkillArtifactStoreError, "did not pass"):
+            self.store.list_published(tenant_id="tenant-one")
+
+    def test_catalog_pagination_and_limits_are_explicit(self):
+        for skill_id, version in (("skill_b", "1.0.0"), ("skill_a", "1.0.0")):
+            skill = SimpleNamespace(
+                id=skill_id, version=version,
+                code=f"def run(context):\\n    return {skill_id!r}\\n",
+                trust_level="verified",
+            )
+            attestation = self._attestation(skill)
+            self._publish(
+                skill=skill,
+                validation_attestation=attestation,
+            )
+        first = self.store.list_published(tenant_id="tenant-one", limit=1, offset=0)
+        second = self.store.list_published(tenant_id="tenant-one", limit=1, offset=1)
+        self.assertEqual(first["total"], 2)
+        self.assertEqual(first["items"][0]["skill_id"], "skill_a")
+        self.assertEqual(second["items"][0]["skill_id"], "skill_b")
+        with self.assertRaisesRegex(SkillArtifactStoreError, "limit"):
+            self.store.list_published(tenant_id="tenant-one", limit=101)
+
+
 if __name__ == "__main__":
     unittest.main()
