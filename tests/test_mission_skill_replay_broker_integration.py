@@ -315,13 +315,13 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     mission_run_id=mission_context["mission_run_id"],
                     skill_id=skill.id,
                 ))
-                if validator_accepts:
-                    self.assertIn("data", response, response)
-                    operation = response["data"]
-                else:
-                    self.assertIn("error", response, response)
-                    self.assertEqual(response.get("status"), 502, response)
-                    operation = None
+                self.assertIn("data", response, response)
+                operation = response["data"]
+                if not validator_accepts:
+                    self.assertEqual(operation["validation"]["status"], "rejected")
+                    self.assertEqual(operation["promotion"], {
+                        "status": "blocked", "reason": "validator_policy_rejected",
+                    })
             finally:
                 broker_stop.set()
                 validator_stop.set()
@@ -335,23 +335,21 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             self.assertFalse(validator_thread.is_alive())
 
             if not validator_accepts:
-                self.assertIn("error", response, response)
-                self.assertEqual(response.get("status"), 502, response)
+                self.assertEqual(operation["validation"]["status"], "rejected")
+                self.assertEqual(operation["promotion"]["status"], "blocked")
+                self.assertEqual(operation["promotion"]["reason"], "validator_policy_rejected")
                 mission_state = load_mission_runs(workspace)
                 mission = mission_state["items"][0]
                 replay_action = next(
                     item for item in mission["actions"]
                     if item.get("action_type") == "skill_replay"
                 )
-                self.assertEqual(replay_action["status"], "interrupted")
-                self.assertEqual(replay_action["recovery_status"], "needs_review")
-                self.assertEqual(
-                    replay_action["recovery_reason"],
-                    "skill_replay_outcome_indeterminate",
-                )
-                self.assertIsNone(replay_action.get("execution_succeeded"))
-                self.assertIsInstance(replay_action.get("evidence_ref"), dict)
+                self.assertEqual(replay_action["status"], "completed")
+                self.assertEqual(replay_action["validation_status"], "rejected")
+                self.assertEqual(replay_action["promotion_status"], "blocked")
+                self.assertTrue(replay_action["execution_succeeded"])
                 self.assertTrue(replay_action.get("evidence_id"))
+                self.assertTrue(replay_action.get("experience_id"))
                 self.assertTrue(replay_action.get("validation_request_id"))
                 self.assertIsNone(replay_action.get("promotion_request_id"))
                 candidate_path = (
