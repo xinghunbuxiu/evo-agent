@@ -36,6 +36,8 @@ SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA = "mission.skill-candidate-stage-response.
 SKILL_CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
 SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA = "mission.skill-candidate-promotion-request.v1"
 SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA = "mission.skill-candidate-promotion-response.v2"
+SKILL_CATALOG_REQUEST_SCHEMA = "mission.skill-catalog-request.v1"
+SKILL_CATALOG_RESPONSE_SCHEMA = "mission.skill-catalog-response.v1"
 SKILL_VALIDATION_PROVENANCE_SCHEMA = "mission.skill-validation-provenance.v1"
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -340,6 +342,8 @@ __all__ = [
     "BROKER_RESPONSE_SCHEMA",
     "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
     "SKILL_REPLAY_OUTPUT_SCHEMA",
+    "SKILL_CATALOG_REQUEST_SCHEMA",
+    "SKILL_CATALOG_RESPONSE_SCHEMA",
     "SKILL_REPLAY_PROFILE_ID",
     "SKILL_VALIDATION_PROVENANCE_SCHEMA",
     "broker_response_sha256",
