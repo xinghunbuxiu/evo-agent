@@ -68,6 +68,7 @@ from admin.mission_execution_runtime import (
     create_mission_execution_bindings,
 )
 from admin.mission_task_reflection_runtime import record_mission_task_reflection
+from admin.trainer_coaching_runtime import record_task_failed_coaching as _record_task_failed_coaching
 
 from admin.skill_replay_runtime import create_skill_replay_runtime
 from admin.growth_policy_runtime import (
@@ -1862,6 +1863,40 @@ def create_app() -> FastAPI:
         )
         return response
 
+    def _record_task_failure_coaching(
+        *,
+        workspace: Path,
+        tenant_id: str,
+        mission_run: dict,
+        action: dict,
+        task,
+        learning_task_id: str | None = None,
+    ):
+        runtime = _load_autonomy_runtime(workspace, tenant_id=tenant_id)
+        members_payload = runtime.get("child_members") if isinstance(runtime, dict) else {}
+        members = members_payload.get("items") if isinstance(members_payload, dict) else []
+        coached_member = _resolve_member_for_mission(
+            mission_run, members if isinstance(members, list) else []
+        )
+        if not isinstance(coached_member, dict):
+            return None
+        task_payload = {
+            "task_id": str(getattr(task, "id", "") or action.get("task_id") or "").strip(),
+            "title": action.get("title"),
+            "task_type": action.get("task_type"),
+            "error": str(getattr(task, "error", "") or action.get("detail") or "").strip(),
+        }
+        card = _record_task_failed_coaching(
+            runtime,
+            coached_member=coached_member,
+            task=task_payload,
+            failure_reason=task_payload["error"],
+            learning_task_id=learning_task_id,
+        )
+        if card is not None:
+            _save_autonomy_runtime(workspace, runtime, tenant_id=tenant_id)
+        return card
+
     _mission_execution = create_mission_execution_bindings(
         load_learning_tasks=_load_learning_tasks,
         save_learning_tasks=_save_learning_tasks,
@@ -1887,6 +1922,7 @@ def create_app() -> FastAPI:
         # The verifier reads declared artifacts inside the workspace; it never executes worker commands.
         independent_verifier=verify_workspace_artifacts,
         record_task_experience_reflection=record_mission_task_reflection,
+        record_task_failure_coaching=_record_task_failure_coaching,
         organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]

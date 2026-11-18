@@ -38,6 +38,7 @@ def create_mission_execution_bindings(
     organization_registry: OrganizationRegistry | None = None,
     independent_verifier: Callable[..., dict | None] | None = None,
     record_task_experience_reflection: Callable[..., dict | None] | None = None,
+    record_task_failure_coaching: Callable[..., dict | None] | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -713,6 +714,20 @@ def create_mission_execution_bindings(
                             "dispatch_authorization": current.get("mission_runtime_authorization"),
                         })
                         existing_failure_learning.add(failure_key)
+                        if callable(record_task_failure_coaching):
+                            try:
+                                coaching = record_task_failure_coaching(
+                                    workspace=workspace,
+                                    tenant_id=tenant_id,
+                                    mission_run=mission_run,
+                                    action=current,
+                                    task=task,
+                                    learning_task_id=learning_task_id,
+                                )
+                                if isinstance(coaching, dict):
+                                    current["trainer_coaching"] = coaching
+                            except Exception as exc:
+                                current["trainer_coaching_error_type"] = type(exc).__name__
                 elif task_status == "running":
                     current["status"] = "running"
                     counts["running"] += 1
