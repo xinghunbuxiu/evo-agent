@@ -29,6 +29,7 @@ from admin.intake_runtime import mark_intake_delivered_from_task, mark_intake_in
 from admin.routes.collaboration_routes import register_collaboration_routes
 from admin.routes.intake_routes import register_intake_routes
 from admin.routes.work_nodes_routes import register_work_nodes_routes
+from admin.task_center_runtime import adopt_worker_growth_recommendation
 from admin.worker_route_runtime import (
     build_generic_automation_job_runtime,
     build_operation_job_runtime,
@@ -1932,31 +1933,72 @@ def register_system_runtime_routes(
             ),
             None,
         ) if recommendation_id else None
-        now_iso = datetime.now().isoformat()
-        task_id = f"task:{member_id}:{int(datetime.now().timestamp() * 1000)}"
-        task = upsert_task(task_center, {
-            "task_id": task_id,
-            "member_id": member_id,
-            "assigned_by_member_id": "talent_development_officer",
-            "title": title,
-            "objective": objective,
-            "deliverables": deliverable_items,
-            "status": "assigned",
-            "assigned_at": now_iso,
-            "started_at": None,
-            "submitted_at": None,
-            "approved_at": None,
-            "result_summary": None,
-            "reflection": None,
-            "review_note": None,
-            "metadata": {
-                **(payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}),
-                **({"recommendation_id": recommendation_id} if recommendation_id else {}),
-            },
-        })
-        if isinstance(selected_recommendation, dict):
-            selected_recommendation["status"] = "adopted"
-            selected_recommendation["adopted_at"] = now_iso
+        now_iso = datetime.now().astimezone().isoformat()
+        selected_metadata = (
+            selected_recommendation.get("metadata")
+            if isinstance(selected_recommendation, dict) and isinstance(selected_recommendation.get("metadata"), dict)
+            else {}
+        )
+        is_worker_growth = selected_metadata.get("source") == "talent_center_worker_growth"
+        if recommendation_id and not isinstance(selected_recommendation, dict):
+            return error_response("指定的任务建议不存在", 404)
+        if is_worker_growth:
+            if (
+                title != str(selected_recommendation.get("title") or "").strip()
+                or objective != str(selected_recommendation.get("objective") or "").strip()
+            ):
+                return error_response("Worker Growth 任务内容必须与原始建议一致", 400)
+            try:
+                adoption = adopt_worker_growth_recommendation(
+                    task_center,
+                    recommendation_id=recommendation_id,
+                    member_id=member_id,
+                    assigned_by_member_id="talent_development_officer",
+                    now=now_iso,
+                )
+            except ValueError as exc:
+                return error_response(str(exc), 409)
+            task = adoption["task"]
+            task_id = str(task.get("task_id") or "")
+            deliverable_items = list(task.get("deliverables") or [])
+            if not adoption["created"]:
+                return success_response(
+                    {"task": task, "idempotent": True},
+                    "该 Worker Growth 建议已采纳，返回原 Learning Task",
+                )
+            training_plan = target_member.get("training_plan") if isinstance(target_member.get("training_plan"), dict) else {}
+            target_member["training_plan"] = {
+                **training_plan,
+                "stage": "training_assigned",
+                "owner_member_id": "talent_development_officer",
+                "next_action": f"Learning Task {task_id} 已分配；等待员工开始训练并提交结果",
+            }
+            runtime["child_members"] = members
+        else:
+            task_id = f"task:{member_id}:{int(datetime.now().timestamp() * 1000)}"
+            task = upsert_task(task_center, {
+                "task_id": task_id,
+                "member_id": member_id,
+                "assigned_by_member_id": "talent_development_officer",
+                "title": title,
+                "objective": objective,
+                "deliverables": deliverable_items,
+                "status": "assigned",
+                "assigned_at": now_iso,
+                "started_at": None,
+                "submitted_at": None,
+                "approved_at": None,
+                "result_summary": None,
+                "reflection": None,
+                "review_note": None,
+                "metadata": {
+                    **(payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}),
+                    **({"recommendation_id": recommendation_id} if recommendation_id else {}),
+                },
+            })
+            if isinstance(selected_recommendation, dict):
+                selected_recommendation["status"] = "adopted"
+                selected_recommendation["adopted_at"] = now_iso
         relationship_center = runtime.get("relationship_center", {}) if isinstance(runtime.get("relationship_center"), dict) else {}
         append_relationship_message(
             relationship_center,
