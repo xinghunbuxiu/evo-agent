@@ -80,6 +80,11 @@ def attach_learning_task_attestation(
     """Attach only a signed verifier attestation bound to the submitted task."""
     validated = validate_learning_task_attestation(workspace, tenant_id, task, attestation)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    existing = metadata.get("independent_verification")
+    if isinstance(existing, dict):
+        if existing.get("sha256") == validated["sha256"]:
+            return existing
+        raise ValueError("independent verification evidence is immutable once attached")
     task["metadata"] = {
         **metadata,
         "independent_verification": validated,

@@ -108,6 +108,15 @@ class LearningTaskVerificationRuntimeTests(unittest.TestCase):
                 self.workspace, self.tenant_id, self.task, inconsistent,
             )
 
+    def test_attached_verification_evidence_is_immutable(self):
+        first = self._attestation()
+        attach_learning_task_attestation(self.workspace, self.tenant_id, self.task, first)
+        repeated = attach_learning_task_attestation(self.workspace, self.tenant_id, self.task, first)
+        self.assertEqual(repeated["sha256"], self.task["metadata"]["independent_verification"]["sha256"])
+        replacement = self._attestation(verifier_version="2")
+        with self.assertRaisesRegex(ValueError, "immutable once attached"):
+            attach_learning_task_attestation(self.workspace, self.tenant_id, self.task, replacement)
+
     def test_verification_requires_submitted_worker_growth_task(self):
         self.task["status"] = "in_progress"
         with self.assertRaisesRegex(ValueError, "must be submitted"):
