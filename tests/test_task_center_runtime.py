@@ -6,7 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from admin.task_center_runtime import (  # noqa: E402
-    adopt_worker_growth_recommendation,\n    has_open_formal_task,
+    adopt_worker_growth_recommendation,
+    has_open_formal_task,
     has_suggested_recommendation,
     upsert_task,
     upsert_task_recommendation,
