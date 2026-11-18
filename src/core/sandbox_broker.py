@@ -39,6 +39,8 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_CATALOG_REQUEST_SCHEMA,
+    SKILL_CATALOG_RESPONSE_SCHEMA,
 )
 from .skill_artifact_store import ARTIFACT_SCHEMA
 from .sandbox_runner import RunnerProcessOutput
@@ -661,6 +663,52 @@ class SandboxBrokerService:
         }
         self.replay_store.complete(request_id, request, response)
         return response
+
+    def list_published_skills(self, request: object) -> dict:
+        """Return tenant-authorized, Validator-verified Skill metadata only."""
+        fields = {"schema_version", "request_id", "workspace_id", "tenant_id", "limit", "offset"}
+        if not isinstance(request, dict) or set(request) != fields:
+            raise BrokerRequestRejected("Skill catalog request has unsupported or missing fields")
+        if request.get("schema_version") != SKILL_CATALOG_REQUEST_SCHEMA:
+            raise BrokerRequestRejected("unsupported Skill catalog request schema")
+        request_id = request.get("request_id")
+        if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
+            raise BrokerRequestRejected("Skill catalog request_id is invalid")
+        workspace_id = request.get("workspace_id")
+        if not isinstance(workspace_id, str) or workspace_id not in self.workspace_roots:
+            raise BrokerRequestRejected("workspace_id is not registered with this broker")
+        tenant_id = request.get("tenant_id")
+        if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+            raise BrokerRequestRejected("Skill catalog tenant_id is invalid")
+        self._authorize_workspace_tenant(workspace_id, tenant_id)
+        if self.skill_artifact_store is None or not callable(
+            getattr(self.skill_artifact_store, "list_published", None)
+        ):
+            raise BrokerRequestRejected("Broker Skill Artifact Store catalog is unavailable")
+        limit = request.get("limit")
+        offset = request.get("offset")
+        try:
+            catalog = self.skill_artifact_store.list_published(
+                tenant_id=tenant_id, limit=limit, offset=offset,
+            )
+        except Exception as exc:
+            raise BrokerRequestRejected("Broker could not verify the tenant Skill catalog") from exc
+        signed_payload = {
+            "schema_version": SKILL_CATALOG_RESPONSE_SCHEMA,
+            "request_id": request_id,
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+            "catalog": catalog,
+        }
+        signature = self.signing_key.sign(_canonical_json(signed_payload))
+        return {
+            **signed_payload,
+            "signature": {
+                "algorithm": BROKER_SIGNATURE_ALGORITHM,
+                "key_id": self.key_id,
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
 
     def lookup_replay_status(self, request: object) -> dict:
         fields={"schema_version","request_id","workspace_id","mission_context"}
