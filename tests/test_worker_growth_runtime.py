@@ -76,6 +76,27 @@ class WorkerGrowthRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(recommendation["training_mode"], "remediation")
 
+    def test_canonical_child_members_container_is_updated(self):
+        recommendation = build_worker_growth_recommendation(
+            employee=self.employee,
+            mission_run=self.mission,
+            node=self.node,
+            outcome={"status": "failed"},
+        )
+        runtime = {
+            "child_members": {
+                "selected_member_id": "employee-1",
+                "items": [{"member_id": "employee-1", "training_plan": {}}],
+            },
+            "task_center": {"recommendations": []},
+        }
+        apply_worker_growth_recommendation(runtime=runtime, recommendation=recommendation)
+        self.assertEqual(
+            runtime["child_members"]["items"][0]["training_plan"]["stage"],
+            "remediation_planned",
+        )
+        self.assertEqual(len(runtime["task_center"]["recommendations"]), 1)
+
     def test_missing_employee_cannot_receive_growth_writeback(self):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             apply_worker_growth_recommendation(

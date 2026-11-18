@@ -69,6 +69,7 @@ from admin.mission_execution_runtime import (
 )
 from admin.mission_task_reflection_runtime import record_mission_task_reflection
 from admin.trainer_coaching_runtime import record_task_failed_coaching as _record_task_failed_coaching
+from admin.worker_growth_runtime import apply_worker_growth_recommendation, build_worker_growth_recommendation
 
 from admin.skill_replay_runtime import create_skill_replay_runtime
 from admin.growth_policy_runtime import (
@@ -1897,6 +1898,79 @@ def create_app() -> FastAPI:
             _save_autonomy_runtime(workspace, runtime, tenant_id=tenant_id)
         return card
 
+    def _record_task_worker_growth(
+        *,
+        workspace: Path,
+        tenant_id: str,
+        mission_run: dict,
+        action: dict,
+        task,
+    ):
+        runtime = _load_autonomy_runtime(workspace, tenant_id=tenant_id)
+        members_payload = runtime.get("child_members") if isinstance(runtime, dict) else {}
+        members = members_payload.get("items") if isinstance(members_payload, dict) else []
+        # Resolve ownership from this action only. A multi-worker Mission must
+        # never attribute one worker's outcome to another employee.
+        scoped_mission = dict(mission_run)
+        scoped_mission["actions"] = [action]
+        employee = _resolve_member_for_mission(
+            scoped_mission, members if isinstance(members, list) else []
+        )
+        if not isinstance(employee, dict):
+            return {"status": "skipped", "reason": "employee_owner_not_unambiguous"}
+        node_id = str(action.get("node_id") or "").strip()
+        plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+        nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+        node = next(
+            (item for item in nodes if isinstance(item, dict) and str(item.get("id") or "").strip() == node_id),
+            None,
+        )
+        if not isinstance(node, dict):
+            return {"status": "skipped", "reason": "mission_node_not_found"}
+        task_status = str(getattr(getattr(task, "status", None), "value", getattr(task, "status", "")) or "").lower()
+        action_status = str(action.get("status") or "").lower()
+        outcome_status = "failed" if action_status in {"verification_failed", "failed"} else task_status
+        if outcome_status not in {"success", "completed", "failed", "cancelled"}:
+            outcome_status = "failed" if action_status == "verification_failed" else task_status
+        result = task.result if isinstance(getattr(task, "result", None), dict) else {}
+        failure_reasons = [
+            str(value).strip()
+            for value in [
+                getattr(task, "error", ""),
+                action.get("detail") if action_status in {"verification_failed", "failed"} else "",
+                result.get("error"),
+            ]
+            if str(value or "").strip()
+        ]
+        verification = action.get("independent_verification")
+        verification_status = (
+            str(verification.get("status") or "").strip().lower()
+            if isinstance(verification, dict) else ""
+        )
+        recommendation = build_worker_growth_recommendation(
+            employee=employee,
+            mission_run=mission_run,
+            node=node,
+            outcome={
+                "status": outcome_status,
+                "failure_reasons": failure_reasons,
+                "independent_verification": {"status": verification_status},
+            },
+        )
+        worker_id = str(action.get("organization_worker_id") or "").strip()
+        claim = action.get("worker_claim") if isinstance(action.get("worker_claim"), dict) else {}
+        recommendation["worker_id"] = worker_id or str(claim.get("worker_id") or "").strip() or recommendation.get("worker_id")
+        apply_worker_growth_recommendation(runtime=runtime, recommendation=recommendation)
+        runtime["tenant_id"] = tenant_id
+        _save_autonomy_runtime(workspace, runtime, tenant_id=tenant_id)
+        return {
+            "status": "created",
+            "recommendation_id": recommendation["recommendation_id"],
+            "member_id": recommendation["member_id"],
+            "training_mode": recommendation["training_mode"],
+            "independent_verification_status": verification_status or "unavailable",
+        }
+
     _mission_execution = create_mission_execution_bindings(
         load_learning_tasks=_load_learning_tasks,
         save_learning_tasks=_save_learning_tasks,
@@ -1923,6 +1997,7 @@ def create_app() -> FastAPI:
         independent_verifier=verify_workspace_artifacts,
         record_task_experience_reflection=record_mission_task_reflection,
         record_task_failure_coaching=_record_task_failure_coaching,
+        record_task_worker_growth=_record_task_worker_growth,
         organization_registry=organization_registry,
     )
     _refresh_mission_run_runtime = _mission_execution["refresh_mission_run"]

@@ -112,8 +112,16 @@ def apply_worker_growth_recommendation(
     if not member_id:
         raise ValueError("growth recommendation member_id is required")
 
-    members = runtime.get("child_members")
-    if not isinstance(members, list):
+    members_payload = runtime.get("child_members")
+    if isinstance(members_payload, dict):
+        members = members_payload.get("items")
+        if not isinstance(members, list):
+            raise ValueError("Talent Center child_members.items are missing")
+        members_container = members_payload
+    elif isinstance(members_payload, list):
+        members = members_payload
+        members_container = None
+    else:
         raise ValueError("Talent Center child_members are missing")
 
     target = next(
@@ -165,7 +173,11 @@ def apply_worker_growth_recommendation(
         **(runtime.get("task_center") if isinstance(runtime.get("task_center"), dict) else {}),
         "recommendations": recommendations[-80:],
     }
-    runtime["child_members"] = members
+    if members_container is not None:
+        members_container["items"] = members
+        runtime["child_members"] = members_container
+    else:
+        runtime["child_members"] = members
     return runtime
 
 

@@ -39,6 +39,7 @@ def create_mission_execution_bindings(
     independent_verifier: Callable[..., dict | None] | None = None,
     record_task_experience_reflection: Callable[..., dict | None] | None = None,
     record_task_failure_coaching: Callable[..., dict | None] | None = None,
+    record_task_worker_growth: Callable[..., dict | None] | None = None,
 ):
     def extract_node_role_reflection_context(mission_run: dict, node_id: str) -> dict:
         if not isinstance(mission_run, dict):
@@ -564,6 +565,33 @@ def create_mission_execution_bindings(
                         action=current,
                         task=task,
                     )
+                if task_status in {"success", "completed", "failed", "cancelled"}:
+                    growth_state = current.get("worker_growth")
+                    if (
+                        callable(record_task_worker_growth)
+                        and not (
+                            isinstance(growth_state, dict)
+                            and growth_state.get("status") == "created"
+                        )
+                    ):
+                        try:
+                            growth_result = record_task_worker_growth(
+                                workspace=workspace,
+                                tenant_id=tenant_id,
+                                mission_run=mission_run,
+                                action=current,
+                                task=task,
+                            )
+                            if isinstance(growth_result, dict):
+                                current["worker_growth"] = growth_result
+                        except Exception as exc:
+                            # Growth writeback is retried on the next refresh and
+                            # must not alter the task's execution/acceptance state.
+                            current["worker_growth"] = {
+                                "status": "retry_pending",
+                                "reason": "worker_growth_persistence_failed",
+                                "error_type": type(exc).__name__,
+                            }
                 if task_status in {"success", "completed", "failed", "cancelled"}:
                     reflection_state = current.get("experience_reflection")
                     if (
