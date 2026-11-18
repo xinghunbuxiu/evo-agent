@@ -38,6 +38,9 @@ export interface KnowledgeSkill {
   source?: string
   path?: string
   version?: string
+  content_sha256?: string
+  replay_eligible?: boolean
+  execution_contract?: Record<string, unknown>
   description?: string
   usage_count?: number
   success_rate?: number

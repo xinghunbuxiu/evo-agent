@@ -524,6 +524,20 @@ export function continueMission(missionRunId: string) {
  * The caller must create one UUID per intentional Replay attempt and retain it
  * while retrying that same HTTP request. A new UUID means a new attempt.
  */
+export function reusePublishedMissionSkill(
+  missionRunId: string,
+  skillId: string,
+  nodeId: string,
+  binding: { schema_version: string; skill_id: string; skill_version: string; content_sha256: string; trust_level: string },
+  idempotencyKey: string,
+) {
+  if (!idempotencyKey.trim()) throw new Error('Published Skill reuse requires a stable Idempotency-Key')
+  return request<Record<string, unknown>>(
+    `/api/missions/${encodeURIComponent(missionRunId)}/skills/${encodeURIComponent(skillId)}/reuse-published`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ node_id: nodeId, skill_binding: binding }) }
+  )
+}
+
 export function replayMissionSkill(
   missionRunId: string,
   skillId: string,

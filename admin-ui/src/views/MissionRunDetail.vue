@@ -110,6 +110,17 @@
       </div>
     </section>
 
+    <section v-if="missionRun && publishedSkills.length" class="rounded-2xl border border-teal-200 bg-teal-50/60 p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-sm font-semibold text-teal-950">已发布 Skill · 可复用</div><div class="mt-1 text-xs text-teal-800">只允许复用已独立验收的固定版本；不会重新发布，也不会把自然语言 Recipe 当代码执行。</div></div><span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-teal-800">{{ publishedSkills.length }} 个</span></div>
+      <div class="mt-3 grid gap-3 md:grid-cols-2">
+        <div v-for="skill in publishedSkills" :key="String(skill.id) + '@' + String(skill.version)" class="rounded-xl border border-teal-100 bg-white p-3">
+          <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="truncate text-sm font-semibold text-slate-900">{{ skill.name || skill.id }}</div><div class="mt-1 break-all font-mono text-[11px] text-slate-500">{{ skill.id }}@{{ skill.version || '?' }}</div></div><span class="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700">verified</span></div>
+          <div class="mt-2 break-all text-xs text-slate-500">{{ skill.domain || 'unknown' }} · SHA256 {{ skill.content_sha256 || '未提供' }}</div>
+          <div class="mt-3 flex flex-wrap gap-2"><button v-for="node in missionRun.plan.nodes.filter((item) => item.status === 'reuse_existing' && item.recommended_skill_ids?.includes(skill.id || ''))" :key="String(skill.id) + ':' + node.id" type="button" class="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50" :disabled="publishedReuseBusyKey === String(node.id) + ':' + String(skill.id)" @click="reusePublishedSkill(String(node.id), skill)">{{ publishedReuseBusyKey === String(node.id) + ':' + String(skill.id) ? '复用中…' : '复用到 ' + (node.title || node.id) }}</button></div>
+        </div>
+      </div>
+    </section>
+
     <MissionRunDetailPanel
       v-else-if="missionRun"
       :run="missionRun"
@@ -136,6 +147,7 @@ import { useRoute, useRouter } from 'vue-router'
 import MissionRunDetailPanel from '../components/MissionRunDetailPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
+import { getKnowledgeSkills, type KnowledgeSkill } from '../api/knowledge'
 import {
   approveMissionStaffing,
   continueMission,
@@ -144,6 +156,7 @@ import {
   listMissionSkillReplayRecoveryReviews,
   resumeMissionSkillReplayPromotion,
   replayMissionSkill,
+  reusePublishedMissionSkill,
   type MissionRun,
   type MissionStaffingOptions,
   type MissionSkillReplayRecoveryItem,
@@ -161,6 +174,8 @@ const replayBusyKey = ref('')
 const staffingOptions = ref<MissionStaffingOptions | null>(null)
 const staffingBusyKey = ref('')
 const recoveryItems = ref<MissionSkillReplayRecoveryItem[]>([])
+const publishedSkills = ref<KnowledgeSkill[]>([])
+const publishedReuseBusyKey = ref('')
 const recoveryBusyKey = ref('')
 const message = ref('')
 const success = ref(false)
@@ -250,6 +265,13 @@ const loadMissionRun = async () => {
     staffingOptions.value = null
     recoveryItems.value = []
     if (missionRun.value?.tenant_id) {
+      try {
+        const knowledge = await getKnowledgeSkills(missionRun.value.tenant_id)
+        publishedSkills.value = (knowledge.data?.skills || []).filter((skill) => skill.trust_level === 'verified' && skill.replay_eligible === true && Boolean(skill.id && skill.version && skill.content_sha256))
+      } catch (skillError) {
+        publishedSkills.value = []
+        console.warn('Failed to load published executable Skills:', skillError)
+      }
       try {
         const reviews = await listMissionSkillReplayRecoveryReviews(missionRun.value.tenant_id, 200)
         recoveryItems.value = (reviews.data?.items || []).filter(
@@ -365,6 +387,27 @@ const approveCurrentStaffing = async (payload: {
   } finally {
     staffingBusyKey.value = ''
   }
+}
+
+const reusePublishedSkill = async (nodeId: string, skill: KnowledgeSkill) => {
+  const current = missionRun.value
+  const skillId = String(skill.id || '').trim()
+  const version = String(skill.version || '').trim()
+  const digest = String(skill.content_sha256 || '').trim()
+  if (!current || !nodeId || !skillId || !version || !digest || publishedReuseBusyKey.value) return
+  if (!window.confirm('确认将已发布 ' + skillId + '@' + version + ' 复用到节点 ' + nodeId + '？这会在 Broker 中执行固定 Artifact，不会重新发布。')) return
+  publishedReuseBusyKey.value = nodeId + ':' + skillId
+  message.value = ''
+  try {
+    const response = await reusePublishedMissionSkill(current.mission_run_id, skillId, nodeId, { schema_version: 'mission.skill-replay-binding.v1', skill_id: skillId, skill_version: version, content_sha256: digest, trust_level: String(skill.trust_level || 'verified') }, crypto.randomUUID())
+    success.value = Boolean(response.success)
+    message.value = response.message || (response.success ? '已复用并记录新的执行证据。' : '已发布 Skill 复用未成功。')
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '已发布 Skill 复用结果不确定，请先刷新 Mission 状态。'
+    await loadMissionRun()
+  } finally { publishedReuseBusyKey.value = '' }
 }
 
 const replayCurrentSkill = async (payload: { skillId: string; nodeId: string }) => {

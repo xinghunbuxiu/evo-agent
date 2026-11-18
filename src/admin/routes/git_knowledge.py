@@ -4,6 +4,7 @@ Git knowledge / 企业知识仓相关接口。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -132,6 +133,19 @@ def register_git_knowledge_routes(
                         "success_rate": skill_data.get("success_rate"),
                         "created_at": skill_data.get("created_at"),
                         "updated_at": skill_data.get("updated_at") or skill_data.get("created_at"),
+                        "version": skill_data.get("version"),
+                        "content_sha256": (
+                            hashlib.sha256(str(skill_data.get("code") or "").encode("utf-8", errors="strict")).hexdigest()
+                            if isinstance(skill_data.get("code"), str) and skill_data.get("code")
+                            else None
+                        ),
+                        "replay_eligible": (
+                            trust_level in {"verified", "cloud"}
+                            and isinstance(parameters.get("execution_contract"), dict)
+                            and parameters["execution_contract"].get("kind") == "python_run_context"
+                            and parameters["execution_contract"].get("replay_eligible") is True
+                        ),
+                        "execution_contract": parameters.get("execution_contract"),
                         "provenance": provenance,
                     })
                 except Exception:
