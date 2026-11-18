@@ -515,6 +515,93 @@ def request_broker(
     return response
 
 
+def list_published_skills_via_broker(
+    socket_path: str, *, workspace_id: str, tenant_id: str,
+    public_key: bytes, expected_key_id: str,
+    limit: int = 100, offset: int = 0, request_id: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> dict:
+    """Fetch metadata-only tenant catalog and verify the Broker signature."""
+    if not isinstance(workspace_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", workspace_id):
+        raise ValueError("workspace_id is invalid")
+    if not isinstance(tenant_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", tenant_id):
+        raise ValueError("tenant_id is invalid")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("catalog limit must be between 1 and 100")
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 100000:
+        raise ValueError("catalog offset is invalid")
+    request_id = str(request_id or uuid.uuid4()).lower()
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", request_id):
+        raise ValueError("request_id must be a UUID")
+    request = {
+        "schema_version": SKILL_CATALOG_REQUEST_SCHEMA,
+        "request_id": request_id,
+        "workspace_id": workspace_id,
+        "tenant_id": tenant_id,
+        "limit": limit,
+        "offset": offset,
+    }
+    response = request_broker(socket_path, request, timeout_seconds=timeout_seconds)
+    if set(response) != {
+        "schema_version", "request_id", "workspace_id", "tenant_id", "catalog", "signature",
+    }:
+        raise BrokerTransportError("Broker Skill catalog response is malformed or rejected")
+    if (
+        response.get("schema_version") != "mission.skill-catalog-response.v1"
+        or response.get("request_id") != request_id
+        or response.get("workspace_id") != workspace_id
+        or response.get("tenant_id") != tenant_id
+    ):
+        raise BrokerTransportError("Broker Skill catalog response identity does not match request")
+    catalog = response.get("catalog")
+    if not isinstance(catalog, dict) or set(catalog) != {"items", "total", "limit", "offset"}:
+        raise BrokerTransportError("Broker Skill catalog payload is malformed")
+    items = catalog.get("items")
+    if (
+        not isinstance(items, list) or len(items) > limit
+        or isinstance(catalog.get("total"), bool) or not isinstance(catalog.get("total"), int)
+        or catalog["total"] < 0
+        or catalog.get("limit") != limit or catalog.get("offset") != offset
+    ):
+        raise BrokerTransportError("Broker Skill catalog pagination metadata is invalid")
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {
+            "skill_id", "skill_version", "content_sha256", "trust_level", "validator_id", "policy_id",
+        }:
+            raise BrokerTransportError("Broker Skill catalog item is malformed")
+        if (
+            not isinstance(item.get("skill_id"), str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", item["skill_id"])
+            or not isinstance(item.get("skill_version"), str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", item["skill_version"])
+            or not isinstance(item.get("content_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", item["content_sha256"])
+            or item.get("trust_level") not in {"verified", "cloud"}
+            or not isinstance(item.get("validator_id"), str)
+            or not isinstance(item.get("policy_id"), str)
+        ):
+            raise BrokerTransportError("Broker Skill catalog item identity is invalid")
+    signature = response.get("signature")
+    if not isinstance(signature, dict) or set(signature) != {"algorithm", "key_id", "value"}:
+        raise BrokerTransportError("Broker Skill catalog signature metadata is invalid")
+    if signature.get("algorithm") != "ed25519" or signature.get("key_id") != expected_key_id:
+        raise BrokerTransportError("Broker Skill catalog signer is not trusted")
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(
+            base64.b64decode(signature["value"], validate=True),
+            json.dumps({
+                "schema_version": response["schema_version"],
+                "request_id": request_id,
+                "workspace_id": workspace_id,
+                "tenant_id": tenant_id,
+                "catalog": catalog,
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+    except (ValueError, TypeError, KeyError, InvalidSignature) as exc:
+        raise BrokerTransportError("Broker Skill catalog signature verification failed") from exc
+    return catalog
+
+
 def request_broker_replay_status(
     socket_path: str, *, request_id: str, workspace_id: str,
     mission_context: dict[str, str], timeout_seconds: float = 10.0,
@@ -540,6 +627,7 @@ __all__ = [
     "serve_listener",
     "request_broker",
     "request_broker_replay_status",
+    "list_published_skills_via_broker",
     "execute_via_broker",
     "execute_via_broker_attested",
     "stage_skill_candidate_via_broker",
