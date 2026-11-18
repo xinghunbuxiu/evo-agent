@@ -956,5 +956,98 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(self.store.lookup(self.request_id,workspace_id="project-test",mission_context=self.request["mission_context"]),{"status":"completed","response":response})
 
 
+    def test_broker_catalog_is_tenant_authorized_and_signed(self):
+        artifact_root = Path(self.temp.name) / "catalog-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-catalog-key",
+        )
+        skill = SimpleNamespace(
+            id="skill-catalog-demo",
+            version="1.2.0",
+            code="def run(context):\n    return {'ok': True}\n",
+            trust_level="verified",
+        )
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-catalog",
+            "node_id": "node-catalog",
+            "task_id": "task-catalog",
+        }
+        statement = {
+            "schema_version": VALIDATION_ATTESTATION_SCHEMA,
+            "validation_id": "validation-catalog",
+            "validator_id": "independent-validator",
+            "policy_id": "test-policy-v1",
+            "policy_sha256": "a" * 64,
+            "workspace_id": "project-test",
+            **context,
+            "broker_request_id": "00000000-0000-4000-8000-000000000001",
+            "broker_attestation_sha256": "b" * 64,
+            "checks_sha256": "c" * 64,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": hashlib.sha256(skill.code.encode("utf-8")).hexdigest(),
+            "trust_level": "verified",
+            "passed": True,
+        }
+        attestation = {
+            **statement,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "validator-catalog-key",
+                "value": base64.b64encode(validator_key.sign(json.dumps(
+                    statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode("utf-8"))).decode("ascii"),
+            },
+        }
+        artifact_store.publish(
+            tenant_id="tenant-test",
+            skill=skill,
+            validation_attestation=attestation,
+            workspace_id="project-test",
+            mission_context=context,
+            broker_request_id=statement["broker_request_id"],
+            broker_attestation_sha256=statement["broker_attestation_sha256"],
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+        )
+        request = {
+            "schema_version": "mission.skill-catalog-request.v1",
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "project-test",
+            "tenant_id": "tenant-test",
+            "limit": 10,
+            "offset": 0,
+        }
+        response = service.list_published_skills(request)
+        signed_payload = {
+            key: response[key]
+            for key in ("schema_version", "request_id", "workspace_id", "tenant_id", "catalog")
+        }
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps(
+                signed_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            ).encode("utf-8"),
+        )
+        self.assertEqual(response["catalog"]["total"], 1)
+        self.assertEqual(response["catalog"]["items"][0]["skill_id"], skill.id)
+        self.assertNotIn("code", response["catalog"]["items"][0])
+        request["tenant_id"] = "tenant-other"
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized"):
+            service.list_published_skills(request)
+
+
 if __name__ == "__main__":
     unittest.main()
