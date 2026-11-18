@@ -1,6 +1,7 @@
 """Tests for bounded Unix socket framing and kernel peer authorization."""
 import base64
 import json
+import os
 import socket
 import struct
 import sys
@@ -151,6 +152,30 @@ class SandboxBrokerTransportTests(unittest.TestCase):
                     limit=10,
                     request_id=payload["request_id"],
                 )
+
+    def test_socket_dispatch_routes_skill_catalog_schema(self):
+        self.request = {
+            "schema_version": "mission.skill-catalog-request.v1",
+            "request_id": str(uuid.uuid4()),
+            "workspace_id": "test-workspace",
+            "tenant_id": "tenant-test",
+            "limit": 10,
+            "offset": 0,
+        }
+        self.service.list_published_skills = lambda request: {
+            "schema_version": "mission.skill-catalog-response.v1",
+            "request_id": request["request_id"],
+            "workspace_id": request["workspace_id"],
+            "tenant_id": request["tenant_id"],
+            "catalog": {"items": [], "total": 0, "limit": 10, "offset": 0},
+            "signature": {"algorithm": "ed25519", "key_id": "test-key", "value": "stub"},
+        }
+        response, errors, thread = self._exchange([os.getuid()])
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(response["schema_version"], "mission.skill-catalog-response.v1")
+        self.assertEqual(response["tenant_id"], "tenant-test")
 
     def test_listener_rejects_boolean_or_duplicate_uid_configuration(self):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
