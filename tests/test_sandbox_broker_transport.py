@@ -1,4 +1,5 @@
 """Tests for bounded Unix socket framing and kernel peer authorization."""
+import base64
 import json
 import socket
 import struct
@@ -6,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import uuid
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from core.sandbox_broker_transport import (
     handle_broker_connection,
     request_broker,
     request_broker_replay_status,
+    list_published_skills_via_broker,
     serve_listener,
     stage_skill_candidate_via_broker,
 )
@@ -92,6 +95,62 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             return None, errors, thread
         finally:
             client.close()
+
+    def test_signed_skill_catalog_client_verifies_identity_and_signature(self):
+        catalog = {
+            "items": [{
+                "skill_id": "skill-example",
+                "skill_version": "1.0.0",
+                "content_sha256": "a" * 64,
+                "trust_level": "verified",
+                "validator_id": "independent-validator",
+                "policy_id": "policy-v1",
+            }],
+            "total": 1,
+            "limit": 10,
+            "offset": 0,
+        }
+        payload = {
+            "schema_version": "mission.skill-catalog-response.v1",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "workspace_id": "test-workspace",
+            "tenant_id": "tenant-test",
+            "catalog": catalog,
+        }
+        response = {
+            **payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "test-key",
+                "value": base64.b64encode(self.key.sign(json.dumps(
+                    payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode("utf-8"))).decode("ascii"),
+            },
+        }
+        with patch("core.sandbox_broker_transport.request_broker", return_value=response):
+            result = list_published_skills_via_broker(
+                "/tmp/broker.sock",
+                workspace_id="test-workspace",
+                tenant_id="tenant-test",
+                public_key=self.key.public_key().public_bytes_raw(),
+                expected_key_id="test-key",
+                limit=10,
+                request_id=payload["request_id"],
+            )
+        self.assertEqual(result, catalog)
+
+        tampered = {**response, "tenant_id": "tenant-other"}
+        with patch("core.sandbox_broker_transport.request_broker", return_value=tampered):
+            with self.assertRaisesRegex(BrokerTransportError, "identity"):
+                list_published_skills_via_broker(
+                    "/tmp/broker.sock",
+                    workspace_id="test-workspace",
+                    tenant_id="tenant-test",
+                    public_key=self.key.public_key().public_bytes_raw(),
+                    expected_key_id="test-key",
+                    limit=10,
+                    request_id=payload["request_id"],
+                )
 
     def test_listener_rejects_boolean_or_duplicate_uid_configuration(self):
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
