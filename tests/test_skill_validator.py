@@ -314,6 +314,39 @@ class SkillValidatorTests(unittest.TestCase):
         self.assertFalse(attestation["passed"])
         self.assertTrue(any(not item["passed"] for item in response["checks"]))
 
+    def test_signed_policy_rejection_cannot_publish_artifact(self):
+        broker_attestation = self._broker_attestation({"ok": False, "count": 3})
+        request = dict(self.request, broker_attestation=broker_attestation)
+        response = self.service.validate(request)
+        expected_identity = self._expected_identity()
+        expected_identity["broker_request_id"] = broker_attestation["request_id"]
+        expected_identity["broker_attestation_sha256"] = broker_response_sha256(broker_attestation)
+        attestation = verify_validation_response(
+            response, public_key=self.validator_key.public_key().public_bytes_raw(),
+            expected_key_id="validator-key-1", expected_request_id=request["request_id"],
+            expected_identity=expected_identity,
+        )
+        artifact_root = self.root / "rejected-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=self.validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-key-1",
+        )
+        with self.assertRaisesRegex(ValueError, "did not pass"):
+            store.publish(
+                tenant_id="tenant-a",
+                skill=type("Skill", (), {
+                    "id": "skill-demo", "version": "1.0.0",
+                    "code": self.source_code, "trust_level": "verified",
+                })(),
+                validation_attestation=attestation,
+                workspace_id=self.workspace_id,
+                mission_context=self.context,
+                broker_request_id=broker_attestation["request_id"],
+                broker_attestation_sha256=broker_response_sha256(broker_attestation),
+            )
+
     def test_rejects_mismatched_tenant_or_skill_binding(self):
         # A changed validation payload is a new immutable request and needs a new ID.
         request = dict(
