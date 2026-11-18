@@ -292,6 +292,7 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         }
         broker_envelope = {"signed": "broker-envelope"}
         validation_attestation = {
+            "passed": True,
             "validation_id": "validation-a",
             "validator_id": "validator-a",
             "policy_id": "policy-a",
