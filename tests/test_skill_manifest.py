@@ -129,6 +129,12 @@ class SkillManifestTests(unittest.TestCase):
         with self.assertRaises(SkillManifestError):
             normalize_skill_manifest(manifest)
 
+    def test_accepts_equivalent_padded_runtime_version_bounds(self):
+        manifest = valid_manifest()
+        manifest["compatibility"]["min_version"] = "3.11"
+        manifest["compatibility"]["max_version"] = "3.11.0"
+        self.assertEqual(normalize_skill_manifest(manifest)["compatibility"]["min_version"], "3.11")
+
     def test_rejects_unsupported_compatibility_fields_and_inverted_range(self):
         manifest = valid_manifest()
         manifest["compatibility"]["platform"] = "android"
@@ -153,6 +159,12 @@ class SkillManifestTests(unittest.TestCase):
             normalize_skill_manifest(manifest)
         manifest = valid_manifest()
         manifest["input_schema"]["required"] = ["missing"]
+        with self.assertRaises(SkillManifestError):
+            normalize_skill_manifest(manifest)
+
+    def test_input_schema_root_must_be_context_object(self):
+        manifest = valid_manifest()
+        manifest["input_schema"] = {"type": "string"}
         with self.assertRaises(SkillManifestError):
             normalize_skill_manifest(manifest)
 
@@ -197,11 +209,7 @@ class SkillManifestTests(unittest.TestCase):
         manifest["description"] = "x" * 1024
         manifest["name"] = "n" * 128
         manifest["task_types"] = [f"task.{i}" for i in range(32)]
-        manifest["output_schema"] = {
-            "type": "object",
-            "properties": {f"field_{i}": {"type": "string", "description": "d" * 256} for i in range(64)},
-            "required": [], "additionalProperties": False,
-        }
+        manifest["output_schema"] = {"type": "string", "enum": ["x" * 1024 + str(i) for i in range(64)]}
         with self.assertRaises(SkillManifestError):
             normalize_skill_manifest(manifest)
 
