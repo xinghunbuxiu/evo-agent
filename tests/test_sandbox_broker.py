@@ -472,6 +472,43 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertTrue(result["execution_succeeded"])
         self.assertEqual(len(self.calls), 1)
 
+    def test_generic_test_runner_is_tenant_isolated_before_replay_claim(self):
+        foreign_context = {
+            **self.request["mission_context"],
+            "tenant_id": "tenant-other",
+        }
+        foreign_request = build_broker_request(
+            "project-test",
+            self.spec,
+            mission_context=foreign_context,
+            request_id=self.request_id,
+        )
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+            self.service.handle_request(foreign_request)
+        self.assertEqual(self.calls, [])
+
+        # The rejected cross-tenant attempt must not consume the request ID.
+        response = self.service.handle_request(self.request)
+        self.assertTrue(response["result"]["execution_succeeded"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_generic_test_runner_fails_closed_without_workspace_tenant_allowlist(self):
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+        )
+        with self.assertRaisesRegex(BrokerRequestRejected, "not authorized for this workspace"):
+            service.handle_request(self.request)
+        self.assertEqual(self.calls, [])
+
+        # A denied request without an allowlist is not claimed or replayable.
+        response = self.service.handle_request(self.request)
+        self.assertTrue(response["result"]["execution_succeeded"])
+        self.assertEqual(len(self.calls), 1)
+
     def _trusted_skill_service(self, *, trust_level="verified"):
         artifact_root = Path(self.temp.name) / "trusted-artifacts"
         artifact_root.mkdir(mode=0o700)
@@ -870,6 +907,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.service.handle_request(self.request)
         restarted = SandboxBrokerService(
             workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
             replay_store=BrokerReplayStore(self.db),
             executor=self._execute,
             signing_key=self.key,

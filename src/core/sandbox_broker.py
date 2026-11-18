@@ -688,14 +688,19 @@ class SandboxBrokerService:
         if root is None:
             raise BrokerRequestRejected("workspace_id is not registered with this broker")
         binding = validated["skill_binding"]
+        # The workspace tenant allowlist protects every execution profile, not
+        # only Skill Replay. Generic unittest/pytest requests still execute
+        # workspace-controlled code and must not become a cross-tenant path.
+        # Authorize before claiming the request so a rejected tenant cannot
+        # consume an idempotency key or learn a cached execution outcome.
+        self._authorize_workspace_tenant(
+            workspace_id, validated["mission_context"]["tenant_id"],
+        )
         if binding is not None:
             if self.skill_artifact_store is None or not callable(self.skill_replay_executor):
                 raise BrokerRequestRejected(
                     "trusted Skill Artifact Store or isolated Skill Replay executor is not configured"
                 )
-            self._authorize_workspace_tenant(
-                workspace_id, validated["mission_context"]["tenant_id"],
-            )
         cached_response = self.replay_store.claim(request_id, validated)
         if cached_response is not None:
             return cached_response
