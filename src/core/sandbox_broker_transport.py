@@ -32,6 +32,7 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    SKILL_CATALOG_REQUEST_SCHEMA,
 )
 from .execution_profiles import ExecutionProfileSpec
 
@@ -142,6 +143,8 @@ def handle_broker_connection(
         connection.settimeout(330.0)
         if isinstance(request, dict) and request.get("schema_version") == "mission.broker-replay-status-request.v1":
             response = service.lookup_replay_status(request)
+        elif isinstance(request, dict) and request.get("schema_version") == SKILL_CATALOG_REQUEST_SCHEMA:
+            response = service.list_published_skills(request)
         elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
             response = service.stage_skill_candidate(request)
         elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
