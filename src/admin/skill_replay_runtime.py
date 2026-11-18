@@ -33,6 +33,7 @@ from core.sandbox_broker_transport import (
     promote_skill_candidate_via_broker,
     stage_skill_candidate_via_broker,
     request_broker_replay_status,
+    list_published_skills_via_broker,
 )
 from core.skill_validator import (
     VALIDATION_REQUEST_SCHEMA, verify_validation_response,
@@ -170,6 +171,18 @@ class SkillReplayRuntime:
             broker_key_id=broker_key_id,
             evidence_store=evidence_store,
             experience_workspace=self.workspace,
+        )
+
+    def list_published_skills(self, *, tenant_id: str, limit: int = 100, offset: int = 0) -> dict:
+        """Discover signed, metadata-only published Skills for one tenant."""
+        return list_published_skills_via_broker(
+            self.socket_path,
+            workspace_id=self.workspace_id,
+            tenant_id=tenant_id,
+            public_key=self.broker_public_key,
+            expected_key_id=self.broker_key_id,
+            limit=limit,
+            offset=offset,
         )
 
     @staticmethod
