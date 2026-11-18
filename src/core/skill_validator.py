@@ -551,8 +551,9 @@ class SkillValidatorService:
         if not isinstance(replay_output, dict) or replay_output.get("success") is not True:
             raise SkillValidatorError("Skill Replay did not produce a successful structured output")
         results = _check_output(replay_output.get("value"), policy["checks"])
-        if not results or not all(item["passed"] for item in results):
-            raise SkillValidatorError("Skill output failed the independent acceptance policy")
+        if not results:
+            raise SkillValidatorError("independent acceptance policy produced no check results")
+        passed = all(item["passed"] for item in results)
 
         policy_sha256 = hashlib.sha256(_canonical_json(policy)).hexdigest()
         broker_digest = broker_response_sha256(broker_attestation)
@@ -575,7 +576,7 @@ class SkillValidatorService:
             "skill_version": version,
             "content_sha256": digest,
             "trust_level": trust,
-            "passed": True,
+            "passed": passed,
         }
         signature = self.signing_key.sign(_canonical_json(statement))
         attestation = {
@@ -609,8 +610,11 @@ def verify_validation_response(
     attestation = response.get("attestation")
     if not isinstance(attestation, dict) or set(attestation) != _ATTESTATION_FIELDS:
         raise SkillValidatorError("Validator attestation has unsupported or missing fields")
-    if attestation.get("schema_version") != VALIDATION_ATTESTATION_SCHEMA or attestation.get("passed") is not True:
-        raise SkillValidatorError("Validator did not attest a passed validation")
+    if (
+        attestation.get("schema_version") != VALIDATION_ATTESTATION_SCHEMA
+        or not isinstance(attestation.get("passed"), bool)
+    ):
+        raise SkillValidatorError("Validator attestation verdict is invalid")
     for field in ("validation_id", "validator_id"):
         _identity(attestation.get(field), field)
     _identity(attestation.get("policy_id"), "policy_id")
@@ -628,10 +632,12 @@ def verify_validation_response(
         not isinstance(item, dict) or set(item) != {"check_index", "type", "passed"}
         or item.get("check_index") != index
         or item.get("type") not in _ALLOWED_CHECKS
-        or item.get("passed") is not True
+        or not isinstance(item.get("passed"), bool)
         for index, item in enumerate(checks)
     ):
-        raise SkillValidatorError("Validator response contains failed or malformed policy checks")
+        raise SkillValidatorError("Validator response contains malformed policy checks")
+    if attestation["passed"] is not all(item["passed"] for item in checks):
+        raise SkillValidatorError("Validator verdict does not agree with its policy checks")
     checks_sha256 = hashlib.sha256(_canonical_json({"checks": checks})).hexdigest()
     if checks_sha256 != attestation["checks_sha256"]:
         raise SkillValidatorError("Validator check results do not match the signed attestation")
