@@ -556,3 +556,25 @@ Validator service. The current HMAC verifier key is workspace-local; the deploym
 must protect it from Worker processes and callers. The start endpoint does not yet
 dispatch a real worker/queue job, and failed verification does not yet have a
 first-class remediation/retry endpoint. Those are separate follow-up increments.
+
+
+## Validator terminal rejection semantics (2026-11-18)
+
+The independent Validator now signs and durably stores both passing and failing
+policy verdicts after it has verified the Broker execution attestation and
+resolved the exact tenant/Skill/version/content policy. The signed attestation
+contains the boolean verdict and the complete ordered check results; the
+response verifier requires the overall verdict to equal the conjunction of
+those checks. Retries of the same request ID and digest return the original
+signed response.
+
+A signed `passed=false` policy result is a terminal `rejected` outcome. Mission
+records the rejection and blocks Artifact Store publication. It is not treated
+as a transport error and cannot be used as promotion evidence: the Artifact
+Store still accepts only a signed attestation whose verdict is `passed=true`.
+
+A missing response, interrupted validation before a signed result is committed,
+invalid request, untrusted Broker evidence, or corrupt cached response remains
+`indeterminate`/operator-review territory. Such outcomes must not be rewritten
+as a policy rejection, retried with a new request identity, or used to publish
+an Artifact.
