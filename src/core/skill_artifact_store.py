@@ -541,6 +541,130 @@ class SkillArtifactStore:
             "trust_level": "draft",
         }
 
+    def list_published(
+        self, *, tenant_id: str, limit: int = 100, offset: int = 0,
+    ) -> dict[str, Any]:
+        """List verified published metadata for exactly one tenant.
+
+        This is a discovery surface, not an execution grant. Every returned
+        entry is reloaded through the same immutable binding and Validator
+        signature checks used by replay. Draft candidates are never listed.
+        """
+        tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise SkillArtifactStoreError("catalog limit must be between 1 and 100")
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 100000:
+            raise SkillArtifactStoreError("catalog offset is invalid")
+
+        tenant_dir = self.root / tenant
+        try:
+            tenant_info = tenant_dir.lstat()
+        except FileNotFoundError:
+            return {"items": [], "total": 0, "limit": limit, "offset": offset}
+        except OSError as exc:
+            raise SkillArtifactStoreError("tenant Skill catalog is unavailable") from exc
+        if (
+            not stat.S_ISDIR(tenant_info.st_mode)
+            or stat.S_ISLNK(tenant_info.st_mode)
+            or tenant_info.st_uid not in {0, os.geteuid()}
+            or tenant_info.st_mode & 0o077
+        ):
+            raise SkillArtifactStoreError("tenant Skill catalog directory is unsafe")
+
+        entries: list[dict[str, str]] = []
+        try:
+            skill_dirs = sorted(tenant_dir.iterdir(), key=lambda item: item.name)
+            for skill_dir in skill_dirs:
+                skill_id = _identity(skill_dir.name, "skill_id", _ID_RE)
+                info = skill_dir.lstat()
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or stat.S_ISLNK(info.st_mode)
+                    or info.st_uid not in {0, os.geteuid()}
+                    or info.st_mode & 0o077
+                ):
+                    raise SkillArtifactStoreError("tenant Skill catalog contains an unsafe directory")
+                for artifact_path in sorted(skill_dir.iterdir(), key=lambda item: item.name):
+                    if not artifact_path.name.endswith(".json") or artifact_path.name.endswith(".candidate.json"):
+                        continue
+                    version = artifact_path.name[:-5]
+                    _identity(version, "skill_version", _VERSION_RE)
+                    artifact_info = artifact_path.lstat()
+                    if (
+                        not stat.S_ISREG(artifact_info.st_mode)
+                        or stat.S_ISLNK(artifact_info.st_mode)
+                        or artifact_info.st_uid not in {0, os.geteuid()}
+                        or artifact_info.st_mode & 0o222
+                        or artifact_info.st_size > 2 * 1024 * 1024
+                    ):
+                        raise SkillArtifactStoreError("tenant Skill catalog contains an unsafe artifact")
+                    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                    fd = os.open(artifact_path, flags)
+                    try:
+                        opened_info = os.fstat(fd)
+                        if (
+                            not stat.S_ISREG(opened_info.st_mode)
+                            or opened_info.st_ino != artifact_info.st_ino
+                            or opened_info.st_dev != artifact_info.st_dev
+                            or opened_info.st_size > 2 * 1024 * 1024
+                        ):
+                            raise SkillArtifactStoreError("tenant Skill catalog artifact changed during read")
+                        chunks = []
+                        remaining = 2 * 1024 * 1024 + 1
+                        while remaining:
+                            chunk = os.read(fd, min(65536, remaining))
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            remaining -= len(chunk)
+                        raw = b"".join(chunks)
+                    finally:
+                        os.close(fd)
+                    if len(raw) > 2 * 1024 * 1024:
+                        raise SkillArtifactStoreError("tenant Skill catalog artifact exceeds its size limit")
+                    try:
+                        payload = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise SkillArtifactStoreError("tenant Skill catalog artifact is malformed") from exc
+                    attestation = payload.get("validation_attestation") if isinstance(payload, dict) else None
+                    if not isinstance(attestation, dict):
+                        raise SkillArtifactStoreError("published Skill catalog artifact lacks Validator attestation")
+                    context = {
+                        "tenant_id": attestation.get("tenant_id"),
+                        "mission_run_id": attestation.get("mission_run_id"),
+                        "node_id": attestation.get("node_id"),
+                        "task_id": attestation.get("task_id"),
+                    }
+                    binding = {
+                        "schema_version": "mission.skill-replay-binding.v1",
+                        "skill_id": skill_id,
+                        "skill_version": version,
+                        "content_sha256": payload.get("content_sha256"),
+                        "trust_level": payload.get("trust_level"),
+                        "mission_context": context,
+                    }
+                    loaded = self.load_for_binding(binding)
+                    entries.append({
+                        "skill_id": loaded.id,
+                        "skill_version": loaded.version,
+                        "content_sha256": loaded.content_sha256,
+                        "trust_level": loaded.trust_level,
+                        "validator_id": attestation["validator_id"],
+                        "policy_id": attestation["policy_id"],
+                    })
+        except SkillArtifactStoreError:
+            raise
+        except OSError as exc:
+            raise SkillArtifactStoreError("tenant Skill catalog could not be read safely") from exc
+
+        entries.sort(key=lambda item: (item["skill_id"], item["skill_version"]))
+        return {
+            "items": entries[offset:offset + limit],
+            "total": len(entries),
+            "limit": limit,
+            "offset": offset,
+        }
+
     def load_for_binding(self, binding: Any) -> SimpleNamespace:
         """Load and independently verify the exact artifact named by a replay binding."""
         if not isinstance(binding, Mapping) or set(binding) != _BINDING_FIELDS:
