@@ -560,7 +560,7 @@ class SkillArtifactStoreTests(unittest.TestCase):
 
 
     def test_catalog_lists_only_verified_published_metadata_for_requested_tenant(self):
-        self._publish_binding()
+        binding = self._publish_binding()
         draft = SimpleNamespace(
             id="skill_draft_only",
             version="0.1.0",
