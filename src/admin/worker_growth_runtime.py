@@ -95,6 +95,13 @@ def build_worker_growth_recommendation(
             "source": "talent_center_worker_growth",
             "source_outcome_status": status,
             "independent_verification_status": verified_status or "unavailable",
+            "training_mode": training_mode,
+            "priority": priority,
+            "role": role,
+            "worker_id": worker_id or None,
+            "source_mission_run_id": mission_run_id,
+            "source_node_id": node_id,
+            "failure_reasons": failure_reasons,
             "automatic_retry": False,
         },
     }
@@ -136,7 +143,10 @@ def apply_worker_growth_recommendation(
         raise ValueError("growth recommendation employee does not exist")
 
     training_plan = target.get("training_plan") if isinstance(target.get("training_plan"), dict) else {}
-    recommendations = runtime.get("task_center", {}).get("recommendations")
+    task_center = runtime.get("task_center")
+    if not isinstance(task_center, dict):
+        task_center = {}
+    recommendations = task_center.get("recommendations")
     if not isinstance(recommendations, list):
         recommendations = []
 
@@ -162,15 +172,15 @@ def apply_worker_growth_recommendation(
             else "active_training"
         ),
         "owner_member_id": "talent_development_officer",
-        "latest_growth_recommendation_id": rec_id,
-        "latest_growth_objective": recommendation.get("objective"),
-        "latest_growth_reason": recommendation.get("reason"),
-        "latest_growth_at": recommendation.get("created_at"),
-        "next_action": "育成师审核推荐并安排训练任务；未审核前不得自动重放原任务。",
+        "next_action": (
+            f"待育成师审核成长建议 {rec_id}："
+            f"{_text(recommendation.get('objective'), 360)}；"
+            "未审核前不得自动重放原任务。"
+        ),
     }
 
     runtime["task_center"] = {
-        **(runtime.get("task_center") if isinstance(runtime.get("task_center"), dict) else {}),
+        **task_center,
         "recommendations": recommendations[-80:],
     }
     if members_container is not None:

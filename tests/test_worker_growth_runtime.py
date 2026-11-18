@@ -97,6 +97,20 @@ class WorkerGrowthRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(len(runtime["task_center"]["recommendations"]), 1)
 
+    def test_growth_metadata_retains_worker_and_mission_lineage(self):
+        recommendation = build_worker_growth_recommendation(
+            employee=self.employee,
+            mission_run=self.mission,
+            node=self.node,
+            outcome={"status": "failed", "failure_reasons": ["missing edge case"]},
+        )
+        metadata = recommendation["metadata"]
+        self.assertEqual(metadata["source_mission_run_id"], "mission-1")
+        self.assertEqual(metadata["source_node_id"], "node-1")
+        self.assertEqual(metadata["worker_id"], "worker-1")
+        self.assertEqual(metadata["training_mode"], "remediation")
+        self.assertFalse(metadata["automatic_retry"])
+
     def test_missing_employee_cannot_receive_growth_writeback(self):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             apply_worker_growth_recommendation(
