@@ -303,7 +303,11 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         verify_validator.return_value = validation_attestation
         provenance = {
             "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
-            **validation_attestation,
+            "validation_id": validation_attestation["validation_id"],
+            "validator_id": validation_attestation["validator_id"],
+            "policy_id": validation_attestation["policy_id"],
+            "policy_sha256": validation_attestation["policy_sha256"],
+            "checks_sha256": validation_attestation["checks_sha256"],
             "broker_request_id": "11111111-1111-4111-8111-111111111111",
             "broker_attestation_sha256": broker_response_sha256(broker_envelope),
         }
