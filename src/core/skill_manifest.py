@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -38,7 +39,7 @@ _COMPATIBILITY_FIELDS = {"runtime", "min_version", "max_version"}
 _SCHEMA_KEYS = {
     "type", "properties", "required", "additionalProperties", "items",
     "enum", "const", "minimum", "maximum", "minLength", "maxLength",
-    "minItems", "maxItems", "pattern", "title", "description",
+    "minItems", "maxItems", "title", "description",
 }
 _SCHEMA_TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
 
@@ -169,14 +170,7 @@ def _validate_schema(value: Any, field: str) -> dict[str, Any]:
                 raise SkillManifestError(f"{path} string bounds are invalid")
             result["minLength"] = minimum
             result["maxLength"] = maximum
-            if "pattern" in node:
-                pattern = _text(node["pattern"], f"{path}.pattern", maximum=256)
-                try:
-                    re.compile(pattern)
-                except re.error as exc:
-                    raise SkillManifestError(f"{path}.pattern is invalid") from exc
-                result["pattern"] = pattern
-        elif any(key in node for key in ("minLength", "maxLength", "pattern")):
+        elif any(key in node for key in ("minLength", "maxLength")):
             raise SkillManifestError(f"{path} string keywords require type=string")
 
         if kind in {"integer", "number"}:
@@ -185,7 +179,7 @@ def _validate_schema(value: Any, field: str) -> dict[str, Any]:
                     number = node[key]
                     if isinstance(number, bool) or not isinstance(number, (int, float)):
                         raise SkillManifestError(f"{path}.{key} must be numeric")
-                    if isinstance(number, float) and not __import__("math").isfinite(number):
+                    if isinstance(number, float) and not math.isfinite(number):
                         raise SkillManifestError(f"{path}.{key} must be finite")
                     result[key] = number
             if "minimum" in result and "maximum" in result and result["minimum"] > result["maximum"]:
@@ -239,8 +233,15 @@ def normalize_skill_manifest(value: Any) -> dict[str, Any]:
         raise SkillManifestError("compatibility runtime is unsupported")
     minimum = _identity(compatibility.get("min_version"), "compatibility.min_version", _RUNTIME_VERSION_RE)
     maximum = _identity(compatibility.get("max_version"), "compatibility.max_version", _RUNTIME_VERSION_RE)
-    if tuple(map(int, minimum.split("."))) > tuple(map(int, maximum.split("."))):
+    min_parts = tuple(map(int, minimum.split(".")))
+    max_parts = tuple(map(int, maximum.split(".")))
+    width = max(len(min_parts), len(max_parts))
+    if min_parts + (0,) * (width - len(min_parts)) > max_parts + (0,) * (width - len(max_parts)):
         raise SkillManifestError("compatibility runtime version range is inverted")
+
+    input_schema = _validate_schema(value.get("input_schema"), "input_schema")
+    if input_schema["type"] != "object":
+        raise SkillManifestError("input_schema root must describe the run(context) object")
 
     normalized = {
         "schema_version": MANIFEST_SCHEMA,
@@ -251,7 +252,7 @@ def normalize_skill_manifest(value: Any) -> dict[str, Any]:
         "capability_type": capability,
         "description": description,
         "task_types": task_types,
-        "input_schema": _validate_schema(value.get("input_schema"), "input_schema"),
+        "input_schema": input_schema,
         "output_schema": _validate_schema(value.get("output_schema"), "output_schema"),
         "runtime_contract": {
             "id": RUNTIME_CONTRACT_PYTHON_RUN_CONTEXT_V1,
