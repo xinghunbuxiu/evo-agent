@@ -190,6 +190,64 @@ class MissionSkillReplayRouteTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_published_skill_catalog_requires_tenant_access_and_returns_metadata(self):
+        runtime = _ReplayRuntime()
+        runtime.catalog_calls = []
+        runtime.list_published_skills = lambda **kwargs: (
+            runtime.catalog_calls.append(kwargs)
+            or {
+                "items": [{
+                    "skill_id": "skill-a",
+                    "skill_version": "1.0.0",
+                    "content_sha256": "a" * 64,
+                    "trust_level": "verified",
+                    "validator_id": "validator-a",
+                    "policy_id": "policy-a",
+                }],
+                "total": 1,
+                "limit": kwargs["limit"],
+                "offset": kwargs["offset"],
+            }
+        )
+        app = RouteApp()
+        _register(app, self.workspace, runtime)
+        handler = app.routes[("GET", "/api/missions/published-skills")]
+        response = asyncio.run(handler(
+            request=_get_request(),
+            tenant_id="tenant-a",
+            limit=20,
+            offset=0,
+        ))
+        self.assertEqual(response["data"]["items"][0]["skill_id"], "skill-a")
+        self.assertEqual(runtime.catalog_calls, [{
+            "tenant_id": "tenant-a", "limit": 20, "offset": 0,
+        }])
+
+    def test_published_skill_catalog_rejects_cross_tenant_and_viewer(self):
+        runtime = _ReplayRuntime()
+        runtime.list_published_skills = lambda **kwargs: self.fail("catalog must not be called")
+        app = RouteApp()
+        _register(app, self.workspace, runtime, authorized=False)
+        handler = app.routes[("GET", "/api/missions/published-skills")]
+        response = asyncio.run(handler(
+            request=_get_request(tenant_id="tenant-b"),
+            tenant_id="tenant-b",
+            limit=20,
+            offset=0,
+        ))
+        self.assertEqual(response["status"], 403)
+
+        app = RouteApp()
+        _register(app, self.workspace, runtime, role="viewer")
+        handler = app.routes[("GET", "/api/missions/published-skills")]
+        response = asyncio.run(handler(
+            request=_get_request(),
+            tenant_id="tenant-a",
+            limit=20,
+            offset=0,
+        ))
+        self.assertEqual(response["status"], 403)
+
     def test_authorized_replay_persists_broker_evidence_lineage(self):
         runtime = _ReplayRuntime()
         app = RouteApp()
