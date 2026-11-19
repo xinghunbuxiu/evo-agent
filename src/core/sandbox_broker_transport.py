@@ -29,15 +29,19 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
     SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+    SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
     SKILL_CATALOG_REQUEST_SCHEMA,
 )
 from .execution_profiles import ExecutionProfileSpec
+from .skill_manifest import normalize_skill_manifest, manifest_sha256
 
 
-MAX_REQUEST_BYTES = 320 * 1024
+MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 _FRAME = struct.Struct("!I")
 
@@ -270,6 +274,8 @@ def stage_skill_candidate_via_broker(
     skill_version: str,
     code: str,
     public_key: bytes,
+    manifest: dict | None = None,
+    expected_manifest_sha256: str | None = None,
     expected_key_id: str,
     request_id: str | None = None,
     timeout_seconds: float = 30.0,
@@ -295,8 +301,21 @@ def stage_skill_candidate_via_broker(
     code_bytes = code.encode("utf-8", errors="strict")
     if len(code_bytes) > 256 * 1024:
         raise ValueError("candidate code exceeds the 256 KiB limit")
+    manifest_v2 = manifest is not None
+    if manifest_v2:
+        try:
+            normalized_manifest = normalize_skill_manifest(manifest)
+        except ValueError as exc:
+            raise ValueError("candidate Manifest is invalid") from exc
+        if normalized_manifest["skill_id"] != skill_id or normalized_manifest["skill_version"] != skill_version:
+            raise ValueError("candidate Manifest identity does not match Skill")
+        calculated_manifest_sha256 = manifest_sha256(normalized_manifest)
+        if expected_manifest_sha256 != calculated_manifest_sha256:
+            raise ValueError("candidate Manifest digest does not match canonical content")
+    elif expected_manifest_sha256 is not None:
+        raise ValueError("Manifest digest requires a v2 candidate Manifest")
     request = {
-        "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+        "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
         "request_id": request_id or str(uuid.uuid4()),
         "workspace_id": workspace_id,
         "mission_context": context,
@@ -304,22 +323,27 @@ def stage_skill_candidate_via_broker(
         "skill_version": skill_version,
         "code": code,
     }
+    if manifest_v2:
+        request["manifest"] = normalized_manifest
+        request["manifest_sha256"] = calculated_manifest_sha256
     response = request_broker(socket_path, request, timeout_seconds=timeout_seconds)
     expected_artifact = {
-        "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+        "schema_version": SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_ARTIFACT_SCHEMA,
         "tenant_id": tenant_id,
         "skill_id": skill_id,
         "skill_version": skill_version,
         "content_sha256": hashlib.sha256(code_bytes).hexdigest(),
         "trust_level": "draft",
     }
+    if manifest_v2:
+        expected_artifact["manifest_sha256"] = calculated_manifest_sha256
     if not isinstance(response, dict) or set(response) != {
         "schema_version", "request_id", "workspace_id", "mission_context",
         "candidate_artifact", "signature",
     }:
         raise BrokerTransportError("Broker candidate stage response is malformed or rejected")
     if (
-        response.get("schema_version") != SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA
+        response.get("schema_version") != (SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA)
         or response.get("request_id") != request["request_id"]
         or response.get("workspace_id") != workspace_id
         or response.get("mission_context") != context
