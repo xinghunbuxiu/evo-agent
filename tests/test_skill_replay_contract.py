@@ -67,7 +67,7 @@ class SkillReplayContractTests(unittest.TestCase):
         self.assertEqual(verify_skill_replay_binding(binding, skill), binding)
         changed_skill = make_skill(
             name="Python Review", domain="python", capability_type="general_dev",
-            description="Review Python tasks",
+            description="substituted",
             parameters={"manifest": dict(manifest, description="substituted")},
         )
         with self.assertRaisesRegex(SkillReplayBindingError, "changed"):
