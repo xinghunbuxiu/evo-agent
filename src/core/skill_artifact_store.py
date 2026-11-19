@@ -589,6 +589,54 @@ class SkillArtifactStore:
             "trust_level": "draft",
         }
 
+    def load_candidate_manifest(
+        self, *, tenant_id: str, skill_id: str, skill_version: str,
+        content_sha256: str, manifest_sha256: str,
+    ) -> SimpleNamespace:
+        """Load a staged v2 candidate only when both immutable digests match."""
+        tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        skill = _identity(skill_id, "skill_id", _ID_RE)
+        version = _identity(skill_version, "skill_version", _VERSION_RE)
+        code_digest = _identity(content_sha256, "content_sha256", _DIGEST_RE)
+        manifest_digest = _identity(manifest_sha256, "manifest_sha256", _DIGEST_RE)
+        path = self._artifact_path(tenant, skill, version, create=False, candidate_manifest=True)
+        try:
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o222
+                or info.st_size > 2 * 1024 * 1024):
+                raise SkillArtifactStoreError("staged v2 candidate is unsafe or oversized")
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+        except SkillArtifactStoreError:
+            raise
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SkillArtifactStoreError("staged v2 candidate is unavailable or malformed") from exc
+        fields = {"schema_version", "tenant_id", "skill_id", "skill_version",
+                  "trust_level", "content_sha256", "manifest_sha256", "manifest", "code"}
+        if not isinstance(artifact, dict) or set(artifact) != fields:
+            raise SkillArtifactStoreError("staged v2 candidate has unsupported or missing fields")
+        if (artifact["schema_version"] != CANDIDATE_ARTIFACT_V2_SCHEMA
+            or artifact["tenant_id"] != tenant or artifact["skill_id"] != skill
+            or artifact["skill_version"] != version or artifact["trust_level"] != "draft"):
+            raise SkillArtifactStoreError("staged v2 candidate identity does not match request")
+        code = artifact["code"]
+        if not isinstance(code, str) or not code.strip():
+            raise SkillArtifactStoreError("staged v2 candidate code is invalid")
+        actual_code_digest = hashlib.sha256(code.encode("utf-8", errors="strict")).hexdigest()
+        try:
+            normalized_manifest = normalize_skill_manifest(artifact["manifest"])
+        except ValueError as exc:
+            raise SkillArtifactStoreError("staged v2 candidate Manifest is invalid") from exc
+        actual_manifest_digest = manifest_sha256(normalized_manifest)
+        if (actual_code_digest != code_digest or artifact["content_sha256"] != code_digest
+            or actual_manifest_digest != manifest_digest or artifact["manifest_sha256"] != manifest_digest
+            or normalized_manifest["skill_id"] != skill or normalized_manifest["skill_version"] != version
+            or normalized_manifest != artifact["manifest"]):
+            raise SkillArtifactStoreError("staged v2 candidate digest or Manifest identity mismatch")
+        return SimpleNamespace(id=skill, version=version, code=code, trust_level="draft",
+                               tenant_id=tenant, content_sha256=code_digest,
+                               manifest=normalized_manifest, manifest_sha256=manifest_digest)
+
     def list_published(
         self, *, tenant_id: str, limit: int = 100, offset: int = 0,
     ) -> dict[str, Any]:
