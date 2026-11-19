@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,25 @@ class AdminDatabaseAuthTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 database._load_local_store()
 
+
+    def test_concurrent_local_registrations_do_not_lose_updates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "users.json"
+            legacy = Path(temp) / "missing.json"
+            databases = [
+                Database(local_store_path=path, legacy_store_path=legacy, backend="local")
+                for _ in range(8)
+            ]
+            registrations = list(zip(databases, [f"user-{index}" for index in range(8)]))
+            with ThreadPoolExecutor(max_workers=len(databases)) as executor:
+                results = list(executor.map(
+                    lambda item: item[0]._create_local_user(item[1], "password-123"),
+                    registrations,
+                ))
+            self.assertEqual(results.count(True), len(databases))
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(stored["users"]), len(databases))
+            self.assertEqual(len({user["id"] for user in stored["users"]}), len(databases))
 
     def test_backend_is_selected_once_and_local_can_be_explicit(self):
         with patch("admin.database.MYSQL_AVAILABLE", True), patch.dict(os.environ, {"EVO_AUTH_BACKEND": "local"}):

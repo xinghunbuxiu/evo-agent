@@ -5,6 +5,8 @@ MySQL 数据库模块 - 用户登录管理
 
 import os
 import base64
+import fcntl
+from contextlib import contextmanager
 import hashlib
 import hmac
 import json
@@ -210,7 +212,21 @@ class Database:
             return
         self._save_local_store({"users": []})
 
-    def _load_local_store(self) -> Dict[str, Any]:
+    @contextmanager
+    def _local_store_lock(self):
+        """跨进程串行化本地账号文件的读改写与首次迁移。"""
+        self._local_store_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_path = self._local_store_path.with_name(f"{self._local_store_path.name}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _load_local_store_unlocked(self) -> Dict[str, Any]:
+        """调用方必须持有本地存储锁。"""
         self._ensure_local_store()
         try:
             data = json.loads(self._local_store_path.read_text(encoding="utf-8"))
@@ -219,6 +235,10 @@ class Database:
         if not isinstance(data, dict) or not isinstance(data.get("users"), list):
             raise RuntimeError("Local auth store has an invalid schema; refusing to reset account data")
         return data
+
+    def _load_local_store(self) -> Dict[str, Any]:
+        with self._local_store_lock():
+            return self._load_local_store_unlocked()
 
     def _save_local_store(self, data: Dict[str, Any]):
         if not isinstance(data, dict) or not isinstance(data.get("users"), list):
@@ -246,37 +266,39 @@ class Database:
         return next((u for u in store.get("users", []) if u.get("username") == username), None)
 
     def _create_local_user(self, username: str, password: str) -> bool:
-        store = self._load_local_store()
-        if any(u.get("username") == username for u in store.get("users", [])):
-            return False
-        next_id = max((u.get("id", 0) for u in store.get("users", [])), default=0) + 1
-        store["users"].append({
-            "id": next_id,
-            "username": username,
-            "password_hash": hash_password(password),
-            "name": username,
-            "login_type": "password",
-        })
-        self._save_local_store(store)
-        return True
+        with self._local_store_lock():
+            store = self._load_local_store_unlocked()
+            if any(u.get("username") == username for u in store.get("users", [])):
+                return False
+            next_id = max((u.get("id", 0) for u in store.get("users", [])), default=0) + 1
+            store["users"].append({
+                "id": next_id,
+                "username": username,
+                "password_hash": hash_password(password),
+                "name": username,
+                "login_type": "password",
+            })
+            self._save_local_store(store)
+            return True
 
     def _verify_local_password(self, username: str, password: str) -> Optional[Dict[str, Any]]:
-        store = self._load_local_store()
-        user = next((item for item in store["users"] if item.get("username") == username), None)
-        if not user:
-            return None
-        matched, needs_upgrade = verify_password_hash(password, user.get("password_hash"))
-        if not matched:
-            return None
-        if needs_upgrade:
-            user["password_hash"] = hash_password(password)
-            self._save_local_store(store)
-        return {
-            "id": user["id"],
-            "auth_provider": "password",
-            "login": user["username"],
-            "name": user.get("name") or username,
-        }
+        with self._local_store_lock():
+            store = self._load_local_store_unlocked()
+            user = next((item for item in store["users"] if item.get("username") == username), None)
+            if not user:
+                return None
+            matched, needs_upgrade = verify_password_hash(password, user.get("password_hash"))
+            if not matched:
+                return None
+            if needs_upgrade:
+                user["password_hash"] = hash_password(password)
+                self._save_local_store(store)
+            return {
+                "id": user["id"],
+                "auth_provider": "password",
+                "login": user["username"],
+                "name": user.get("name") or username,
+            }
     
     def _hash_token(self, token: str) -> str:
         """对 Token 进行哈希存储（安全）"""
