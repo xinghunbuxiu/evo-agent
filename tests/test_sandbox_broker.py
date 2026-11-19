@@ -145,6 +145,7 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(staged.code, code)
         self.assertEqual(staged.manifest, manifest)
         self.assertEqual(staged.manifest_sha256, manifest_sha256(manifest))
+        self.assertEqual(artifact_store.list_published(tenant_id="tenant-test")["items"], [])
         tampered = dict(request, request_id=str(uuid.uuid4()), manifest_sha256="0" * 64)
         with self.assertRaisesRegex(BrokerRequestRejected, "Manifest digest"):
             service.stage_skill_candidate(tampered)
