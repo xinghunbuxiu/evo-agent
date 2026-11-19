@@ -627,7 +627,7 @@ class SkillArtifactStore:
             normalized_manifest = normalize_skill_manifest(artifact["manifest"])
         except ValueError as exc:
             raise SkillArtifactStoreError("staged v2 candidate Manifest is invalid") from exc
-        actual_manifest_digest = manifest_sha256(normalized_manifest)
+        actual_manifest_digest = compute_skill_manifest_sha256(normalized_manifest)
         if (actual_code_digest != code_digest or artifact["content_sha256"] != code_digest
             or actual_manifest_digest != manifest_digest or artifact["manifest_sha256"] != manifest_digest
             or normalized_manifest["skill_id"] != skill or normalized_manifest["skill_version"] != version
