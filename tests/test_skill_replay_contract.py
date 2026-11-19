@@ -44,6 +44,35 @@ class SkillReplayContractTests(unittest.TestCase):
         self.assertEqual(binding["mission_context"], MISSION)
         self.assertEqual(verify_skill_replay_binding(binding, skill), binding)
 
+    def test_manifest_binding_v2_pins_canonical_manifest_digest(self):
+        from core.skill_manifest import manifest_sha256
+        manifest = {
+            "schema_version": "mission.skill-manifest.v1",
+            "skill_id": "skill-python-review", "skill_version": "2.4.1",
+            "name": "Python Review", "domain": "python",
+            "capability_type": "general_dev", "description": "Review Python tasks",
+            "task_types": ["code.review"],
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
+            "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run", "call_signature": "run(context)"},
+            "compatibility": {"runtime": "python", "min_version": "3.11.0", "max_version": "3.14.0"},
+        }
+        skill = make_skill(
+            name="Python Review", domain="python", capability_type="general_dev",
+            description="Review Python tasks", parameters={"manifest": manifest},
+        )
+        binding = build_skill_replay_binding(skill, MISSION)
+        self.assertEqual(binding["schema_version"], "mission.skill-replay-binding.v2")
+        self.assertEqual(binding["manifest_sha256"], manifest_sha256(manifest))
+        self.assertEqual(verify_skill_replay_binding(binding, skill), binding)
+        changed_skill = make_skill(
+            name="Python Review", domain="python", capability_type="general_dev",
+            description="Review Python tasks",
+            parameters={"manifest": dict(manifest, description="substituted")},
+        )
+        with self.assertRaisesRegex(SkillReplayBindingError, "changed"):
+            verify_skill_replay_binding(binding, changed_skill)
+
     def test_changed_content_is_rejected(self):
         binding = build_skill_replay_binding(make_skill(), MISSION)
         with self.assertRaisesRegex(SkillReplayBindingError, "changed"):
