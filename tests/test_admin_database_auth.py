@@ -19,7 +19,7 @@ class AdminDatabaseAuthTests(unittest.TestCase):
         second = hash_password("correct horse battery staple")
         self.assertNotEqual(first, second)
         self.assertTrue(first.startswith("pbkdf2_sha256$"))
-        self.assertEqual(len(first), 4)
+        self.assertEqual(len(first.split("$")), 4)
         self.assertEqual(verify_password_hash("correct horse battery staple", first), (True, False))
         self.assertEqual(verify_password_hash("wrong password", first), (False, False))
 
