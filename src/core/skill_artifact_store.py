@@ -21,9 +21,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
+from .skill_manifest import normalize_skill_manifest, manifest_sha256
+
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v2"
 CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
+CANDIDATE_ARTIFACT_V2_SCHEMA = "mission.skill-candidate-artifact.v2"
 VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v3"
 VALIDATION_SIGNATURE_ALGORITHM = "ed25519"
 _ATTESTATION_FIELDS = {
@@ -292,7 +295,7 @@ class SkillArtifactStore:
 
     def _artifact_path(
         self, tenant_id: str, skill_id: str, version: str, *, create: bool,
-        candidate: bool = False,
+        candidate: bool = False, candidate_manifest: bool = False,
     ) -> Path:
         tenant = _identity(tenant_id, "tenant_id", _ID_RE)
         skill = _identity(skill_id, "skill_id", _ID_RE)
@@ -318,7 +321,7 @@ class SkillArtifactStore:
             # level (tenant first, then Skill directory). Re-fsync existing
             # entries too, so a retry after an earlier fsync failure can recover.
             _fsync_directory(directory.parent)
-        suffix = ".candidate.json" if candidate else ".json"
+        suffix = ".candidate.v2.json" if candidate_manifest else (".candidate.json" if candidate else ".json")
         return skill_dir / f"{revision}{suffix}"
 
     def publish(
