@@ -121,7 +121,9 @@ jobs:
       - name: Install runtime dependencies
         run: |
           set -o pipefail
-          .venv/bin/python -m pip install -r requirements.txt 2>&1 | tee dependency-install-output.txt
+          # VPS outbound bandwidth to files.pythonhosted.org can be intermittent.
+          # Retry slow wheel downloads without skipping or weakening dependencies.
+          .venv/bin/python -m pip --timeout 120 --retries 10 install -r requirements.txt 2>&1 | tee dependency-install-output.txt
       - name: Run regression suite
         run: |
           set -o pipefail

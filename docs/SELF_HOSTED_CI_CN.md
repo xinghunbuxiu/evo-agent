@@ -4,11 +4,11 @@
 
 原工作流使用 GitHub 托管的 `ubuntu-latest`。已将当前 PR 分支的 `.github/workflows/python-tests.yml` 改为使用仓库级 Linux VPS runner；在 VPS runner 注册并显示 Online 之前，新的测试 job 无法执行。安装步骤见下文。
 
-原回归步骤保持不变：
+回归工作流使用 runner 已安装的 Python 创建独立虚拟环境，不在 job 中下载 Python 运行时。依赖安装使用 pip 120 秒网络超时和 10 次重试，以容忍 VPS 到 Python 包分发站点的短时抖动；依赖仍完整安装，不跳过任何包。随后执行仓库统一回归入口：
 
-1. Python 3.11
-2. `python -m pip install -r requirements.txt`
-3. `python -m unittest discover -s tests -v`
+1. `python3 -m venv .venv`
+2. `.venv/bin/python -m pip --timeout 120 --retries 10 install -r requirements.txt`
+3. `.venv/bin/python scripts/run_regression_with_tree.py`
 
 截至 2026-10-24，PR #1 之前最新记录的 Actions run #226 为失败；对应 job 没有暴露任何 steps，日志下载返回 404。这个证据**不能证明测试代码失败，也不能证明测试通过**。此前多个 run 有同样的无步骤失败表现。runner 上线后必须重新执行回归套件，才能判断实际测试结果。
 
