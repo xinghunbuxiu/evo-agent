@@ -145,7 +145,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS users (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     username VARCHAR(100) UNIQUE,
-                    password_hash VARCHAR(64),
+                    password_hash VARCHAR(255),
                     gitee_id INT UNIQUE,
                     login VARCHAR(100),
                     name VARCHAR(100),
@@ -158,31 +158,68 @@ class Database:
                     INDEX idx_gitee_id (gitee_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            # Existing deployments may still have the legacy 64-character column.
+            cursor.execute(
+                """SELECT CHARACTER_MAXIMUM_LENGTH AS max_length
+                   FROM information_schema.COLUMNS
+                   WHERE TABLE_SCHEMA = DATABASE()
+                     AND TABLE_NAME = 'users'
+                     AND COLUMN_NAME = 'password_hash'"""
+            )
+            column = cursor.fetchone()
+            max_length = (
+                column.get("max_length") if isinstance(column, dict)
+                else column[0] if column else None
+            )
+            if max_length is not None and int(max_length) < 255:
+                cursor.execute("ALTER TABLE users MODIFY password_hash VARCHAR(255) NULL")
             conn.commit()
-    
+
     def _ensure_local_store(self):
-        """初始化本地账号存储（无 MySQL 时兜底）"""
+        """初始化本地认证文件；旧仓库路径只读迁移，不删除源文件。"""
         if self._local_store_path.is_file():
             return
-        self._local_store_path.parent.mkdir(parents=True, exist_ok=True)
-        self._local_store_path.write_text(
-            json.dumps({"users": []}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if self._legacy_local_store_path != self._local_store_path and self._legacy_local_store_path.is_file():
+            try:
+                legacy_data = json.loads(self._legacy_local_store_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("Legacy local auth store cannot be read; refusing to replace it") from exc
+            if not isinstance(legacy_data, dict) or not isinstance(legacy_data.get("users"), list):
+                raise RuntimeError("Legacy local auth store has an invalid schema; refusing to replace it")
+            self._save_local_store(legacy_data)
+            return
+        self._save_local_store({"users": []})
 
     def _load_local_store(self) -> Dict[str, Any]:
         self._ensure_local_store()
         try:
-            return json.loads(self._local_store_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {"users": []}
+            data = json.loads(self._local_store_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Local auth store is unreadable; refusing to reset account data") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("users"), list):
+            raise RuntimeError("Local auth store has an invalid schema; refusing to reset account data")
+        return data
 
     def _save_local_store(self, data: Dict[str, Any]):
-        self._local_store_path.parent.mkdir(parents=True, exist_ok=True)
-        self._local_store_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if not isinstance(data, dict) or not isinstance(data.get("users"), list):
+            raise ValueError("Local auth store must contain a users list")
+        self._local_store_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._local_store_path.parent,
+                prefix=f".{self._local_store_path.name}.", delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(payload)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, self._local_store_path)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     def _find_local_user(self, username: str) -> Optional[Dict[str, Any]]:
         store = self._load_local_store()
@@ -204,9 +241,16 @@ class Database:
         return True
 
     def _verify_local_password(self, username: str, password: str) -> Optional[Dict[str, Any]]:
-        user = self._find_local_user(username)
-        if not user or user.get("password_hash") != hash_password(password):
+        store = self._load_local_store()
+        user = next((item for item in store["users"] if item.get("username") == username), None)
+        if not user:
             return None
+        matched, needs_upgrade = verify_password_hash(password, user.get("password_hash"))
+        if not matched:
+            return None
+        if needs_upgrade:
+            user["password_hash"] = hash_password(password)
+            self._save_local_store(store)
         return {
             "id": user["id"],
             "auth_provider": "password",
@@ -347,24 +391,35 @@ class Database:
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                password_hash = hash_password(password)
                 cursor.execute(
-                    """SELECT id, username, name FROM users 
-                        WHERE username = %s AND password_hash = %s AND login_type = 'password'
-                    """,
-                    (username, password_hash)
+                    """SELECT id, username, name, password_hash FROM users
+                       WHERE username = %s AND login_type = 'password'""",
+                    (username,)
                 )
                 result = cursor.fetchone()
-                print(f"[Debug] 查询结果: {result}")
-                if result:
-                    # DictCursor 返回字典
-                    return {
-                        "id": result["id"] if isinstance(result, dict) else result[0],
-                        "auth_provider": "password",
-                        "login": result["username"] if isinstance(result, dict) else result[1],
-                        "name": (result["name"] if isinstance(result, dict) else result[2]) or username,
-                    }
-                return None
+                if not result:
+                    return None
+                if isinstance(result, dict):
+                    user_id, login, name, stored_hash = (
+                        result["id"], result["username"], result["name"], result["password_hash"]
+                    )
+                else:
+                    user_id, login, name, stored_hash = result[0], result[1], result[2], result[3]
+                matched, needs_upgrade = verify_password_hash(password, stored_hash)
+                if not matched:
+                    return None
+                if needs_upgrade:
+                    cursor.execute(
+                        "UPDATE users SET password_hash = %s WHERE id = %s",
+                        (hash_password(password), user_id),
+                    )
+                    conn.commit()
+                return {
+                    "id": user_id,
+                    "auth_provider": "password",
+                    "login": login,
+                    "name": name or username,
+                }
         except Exception as e:
             print(f"[DB Error] 验证密码失败: {e}")
             import traceback
