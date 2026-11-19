@@ -37,12 +37,16 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
     SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+    SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
     SKILL_CATALOG_REQUEST_SCHEMA,
     SKILL_CATALOG_RESPONSE_SCHEMA,
 )
 from .skill_artifact_store import ARTIFACT_SCHEMA
+from .skill_manifest import normalize_skill_manifest, manifest_sha256
 from .sandbox_runner import RunnerProcessOutput
 
 
@@ -408,14 +412,40 @@ class SandboxBrokerService:
 
     def stage_skill_candidate(self, request: object) -> dict:
         """Accept one draft Python Skill into Broker-owned storage and sign its receipt."""
+        if not isinstance(request, dict):
+            raise BrokerRequestRejected("Skill candidate stage request has unsupported or missing fields")
+        request_schema = request.get("schema_version")
+        manifest_v2 = request_schema == SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA
         fields = {
             "schema_version", "request_id", "workspace_id", "mission_context",
             "skill_id", "skill_version", "code",
         }
-        if not isinstance(request, dict) or set(request) != fields:
+        if manifest_v2:
+            fields.update({"manifest", "manifest_sha256"})
+        if set(request) != fields:
             raise BrokerRequestRejected("Skill candidate stage request has unsupported or missing fields")
-        if request.get("schema_version") != SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
+        if request_schema not in {
+            SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA, SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
+        }:
             raise BrokerRequestRejected("unsupported Skill candidate stage request schema")
+        manifest = None
+        if manifest_v2:
+            try:
+                manifest = normalize_skill_manifest(request.get("manifest"))
+            except ValueError as exc:
+                raise BrokerRequestRejected("Skill candidate Manifest is invalid") from exc
+            if (
+                manifest.get("skill_id") != request.get("skill_id")
+                or manifest.get("skill_version") != request.get("skill_version")
+            ):
+                raise BrokerRequestRejected("Skill candidate Manifest identity does not match request")
+            supplied_manifest_digest = request.get("manifest_sha256")
+            if (
+                not isinstance(supplied_manifest_digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", supplied_manifest_digest)
+                or supplied_manifest_digest != manifest_sha256(manifest)
+            ):
+                raise BrokerRequestRejected("Skill candidate Manifest digest does not match canonical content")
         request_id = request.get("request_id")
         if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
             raise BrokerRequestRejected("Skill candidate stage request_id is invalid")
@@ -515,19 +545,23 @@ class SandboxBrokerService:
         try:
             identity = self.skill_artifact_store.stage_candidate(
                 tenant_id=context["tenant_id"], skill=candidate,
+                manifest=manifest,
+                expected_manifest_sha256=request.get("manifest_sha256") if manifest_v2 else None,
             )
         except Exception as exc:
             raise BrokerRequestRejected("Broker could not stage Skill candidate") from exc
         artifact = {
-            "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+            "schema_version": SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_ARTIFACT_SCHEMA,
             "tenant_id": context["tenant_id"],
             "skill_id": identity["skill_id"],
             "skill_version": identity["skill_version"],
             "content_sha256": identity["content_sha256"],
             "trust_level": "draft",
         }
+        if manifest_v2:
+            artifact["manifest_sha256"] = identity["manifest_sha256"]
         signed_payload = {
-            "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+            "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
             "request_id": request_id,
             "workspace_id": workspace_id,
             "mission_context": context,
