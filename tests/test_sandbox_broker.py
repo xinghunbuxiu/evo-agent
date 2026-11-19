@@ -24,12 +24,14 @@ from core.sandbox_broker import (
 from core.sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     build_broker_request,
     verify_broker_response,
 )
 from core.sandbox_runner import RunnerProcessOutput
 from core.execution_profiles import ExecutionProfileSpec, resolve_execution_profile
+from core.skill_manifest import manifest_sha256
 
 
 class SandboxBrokerServiceTests(unittest.TestCase):
@@ -79,6 +81,74 @@ class SandboxBrokerServiceTests(unittest.TestCase):
             network_access=False,
         )
 
+
+    def test_broker_stages_manifest_candidate_v2_and_rejects_digest_tampering(self):
+        artifact_root = Path(self.temp.name) / "broker-owned-manifest-candidates"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root,
+            validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store,
+            executor=self._execute,
+            signing_key=self.key,
+            key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {
+            "tenant_id": "tenant-test", "mission_run_id": "mission-manifest",
+            "node_id": "node-manifest", "task_id": "task-manifest",
+        }
+        code = "def run(context):\n    return {'ok': True}\n"
+        manifest = {
+            "schema_version": "mission.skill-manifest.v1",
+            "skill_id": "skill-manifest-demo", "skill_version": "1.0.0",
+            "name": "Manifest Demo", "domain": "python",
+            "capability_type": "general_dev", "description": "Execute a bounded Python task",
+            "task_types": ["code.review"],
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
+            "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run", "call_signature": "run(context)"},
+            "compatibility": {"runtime": "python", "min_version": "3.11.0", "max_version": "3.14.0"},
+        }
+        request = {
+            "schema_version": SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
+            "request_id": str(uuid.uuid4()), "workspace_id": "project-test",
+            "mission_context": context, "skill_id": "skill-manifest-demo",
+            "skill_version": "1.0.0", "code": code, "manifest": manifest,
+            "manifest_sha256": manifest_sha256(manifest),
+        }
+        response = service.stage_skill_candidate(request)
+        artifact = response["candidate_artifact"]
+        self.assertEqual(artifact["schema_version"], "mission.skill-candidate-artifact.v2")
+        self.assertEqual(artifact["manifest_sha256"], manifest_sha256(manifest))
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps({
+                key: response[key] for key in (
+                    "schema_version", "request_id", "workspace_id",
+                    "mission_context", "candidate_artifact",
+                )
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+        staged = artifact_store.load_candidate_manifest(
+            tenant_id="tenant-test", skill_id="skill-manifest-demo",
+            skill_version="1.0.0", content_sha256=artifact["content_sha256"],
+            manifest_sha256=artifact["manifest_sha256"],
+        )
+        self.assertEqual(staged.code, code)
+        self.assertEqual(staged.manifest, manifest)
+        self.assertEqual(staged.manifest_sha256, manifest_sha256(manifest))
+        tampered = dict(request, request_id=str(uuid.uuid4()), manifest_sha256="0" * 64)
+        with self.assertRaisesRegex(BrokerRequestRejected, "Manifest digest"):
+            service.stage_skill_candidate(tampered)
+        self.assertEqual(self.skill_calls, [])
 
     def test_broker_stages_only_executable_draft_and_signs_candidate_receipt(self):
         artifact_root = Path(self.temp.name) / "broker-owned-candidates"
