@@ -87,13 +87,15 @@ def register_auth_routes(
     @app.get("/api/db/status")
     async def db_status():
         try:
+            if db.backend != "mysql":
+                return error_response("当前认证后端为本地文件，未启用 MySQL", 409)
             if not mysql_available:
-                return error_response("pymysql 未安装", 500)
+                return error_response("认证后端配置为 MySQL，但 pymysql 未安装", 503)
 
             db.init_tables()
-            return success_response({"mysql_host": db.host, "mysql_available": True})
+            return success_response({"auth_backend": db.backend, "mysql_host": db.host, "mysql_available": True})
         except Exception as exc:
-            return error_response(str(exc), 500)
+            return error_response(str(exc), 503)
 
     @app.post("/api/logout")
     async def logout(request: Request):

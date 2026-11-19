@@ -1181,17 +1181,17 @@ def create_app() -> FastAPI:
     ))
     _load_sessions()
     
-    # 自动初始化 MySQL 表（如果不存在）
-    if MYSQL_AVAILABLE:
+    # 初始化实例选定的认证后端；MySQL 故障不切换到本地文件。
+    if db.backend == "mysql":
         try:
             db.init_tables()
             print(f"✅ MySQL 已连接: {db.host}:{db.port}/{db.db_name}")
-        except Exception as e:
-            print(f"⚠️ MySQL 连接失败: {e}")
-            print(f"   请检查 DB_HOST/DB_PASSWORD 配置")
+        except Exception as exc:
+            print(f"⚠️ MySQL 认证后端不可用: {type(exc).__name__}")
+            print("   密码登录/注册将返回服务不可用；不会回退到本地账号文件")
     else:
-        print("⚠️ pymysql 未安装，用户登录将使用本地文件模式")
-        print("   如需 MySQL，运行: pip3 install pymysql")
+        db.init_tables()
+        print(f"✅ 本地认证文件模式: {db._local_store_path}")
     
     config = get_distributed_config(workspace)
     task_queue = get_task_queue(workspace, max_workers=2)
