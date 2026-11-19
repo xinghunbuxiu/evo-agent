@@ -50,7 +50,8 @@ class AdminDatabaseAuthTests(unittest.TestCase):
             database = Database(local_store_path=current_path, legacy_store_path=legacy_path)
 
             self.assertIsNone(database._verify_local_password("legacy-user", "wrong-password"))
-            self.assertFalse(current_path.exists())
+            copied_before_login = json.loads(current_path.read_text(encoding="utf-8"))
+            self.assertEqual(copied_before_login["users"][0]["password_hash"], legacy_hash)
             result = database._verify_local_password("legacy-user", password)
 
             self.assertEqual(result["id"], 7)
