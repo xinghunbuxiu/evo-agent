@@ -1198,7 +1198,7 @@ def create_app() -> FastAPI:
         print("⚠️ pymysql 未安装，用户登录将使用本地文件模式")
         print("   如需 MySQL，运行: pip3 install pymysql")
     
-    config = get_distributed_config()
+    config = get_distributed_config(workspace)
     task_queue = get_task_queue(workspace, max_workers=2)
     task_queue.start()
     
