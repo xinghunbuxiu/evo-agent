@@ -39,6 +39,7 @@
 - `src/admin/mission_execution_runtime.py` 约 1,290 行，多个执行/学习阶段职责需要进一步划分。
 - `src/admin/runtime_state.py` 约 1,106 行，跨业务状态模型集中在一个文件。
 - `executors/toutiao/data/` 下存在约 544 个已跟踪数据文件，主要为草稿样本；运行数据、演示数据和正式配置的仓库归属需要分开。
+- `executors/toutiao/README.md` 明确称当前为执行器骨架；`browser_backend.py` 的发布辅助仅打开编辑页、尝试填入内容并截图，返回 `browser_assisted`，不能视为平台已真实发布。此能力必须明确标为人工辅助/实验能力，不能作为真实发布成功证据。
 - 根目录与 `src/.config/` 同时存在 Evo 配置文件，配置来源优先级和唯一权威位置需要统一。
 - `ARCHITECTURE.md` 中的目录、存储和运行方式描述与当前实现不完全一致，不能继续作为当前代码结构的准确说明。
 - 仓库中存在被跟踪的本地认证数据文件 `.local_admin_users.json`；本地账号数据不应作为产品默认数据提交。
