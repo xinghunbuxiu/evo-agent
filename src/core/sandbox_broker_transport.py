@@ -149,7 +149,10 @@ def handle_broker_connection(
             response = service.lookup_replay_status(request)
         elif isinstance(request, dict) and request.get("schema_version") == SKILL_CATALOG_REQUEST_SCHEMA:
             response = service.list_published_skills(request)
-        elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA:
+        elif isinstance(request, dict) and request.get("schema_version") in {
+            SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
+            SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
+        }:
             response = service.stage_skill_candidate(request)
         elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
             response = service.promote_skill_candidate(request)
