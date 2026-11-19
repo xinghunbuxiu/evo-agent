@@ -150,4 +150,22 @@ D. Mission runtime exact binding and replay.
 E. Planner discovery, matching trace, and safe fallback.
 F. Experience feedback and regression end-to-end.
 
-### Slice A — implemented and regression-verified (2026-11-19)\n\n- Added `src/core/skill_manifest.py` with strict `mission.skill-manifest.v1` validation, canonical JSON serialization, and SHA-256 digest calculation.\n- The first runtime contract is explicitly limited to Python `run(context)`; unsupported runtime contracts fail closed.\n- Input/output schema declarations use a bounded JSON Schema subset. Unknown keywords and dynamic references are rejected; depth, node count, property count, array size, string bounds, and total Manifest bytes are limited.\n- Added `tests/test_skill_manifest.py` for identity/field validation, schema limits, runtime compatibility, deterministic canonicalization, and digest independence from executable code.\n- Verified on PR HEAD `c34558b739cff9cab85c13446d0d5a93b8933995`: Python Regression #1662 and #1663 passed; Admin UI Build #428 passed.\n- Scope is intentionally isolated: candidate staging, Validator attestations, Artifact Store publication, Catalog, and Planner do not consume Manifest data yet.\n\n### Slice B — in progress\n\n- Next implementation work is to carry the canonical Manifest and digest through a versioned candidate-stage contract, persist them immutably in Broker-owned staging, and bind the digest into Validator request/policy/attestation verification. Legacy v1 bindings remain unchanged.\n\nEach slice must include tests and update this document with implemented status. Automatic Skill reuse is not complete until A–F pass.
+### Slice A — implemented and regression-verified (2026-11-19)\n\n- Added `src/core/skill_manifest.py` with strict `mission.skill-manifest.v1` validation, canonical JSON serialization, and SHA-256 digest calculation.\n- The first runtime contract is explicitly limited to Python `run(context)`; unsupported runtime contracts fail closed.\n- Input/output schema declarations use a bounded JSON Schema subset. Unknown keywords and dynamic references are rejected; depth, node count, property count, array size, string bounds, and total Manifest bytes are limited.\n- Added `tests/test_skill_manifest.py` for identity/field validation, schema limits, runtime compatibility, deterministic canonicalization, and digest independence from executable code.\n- Verified on PR HEAD `c34558b739cff9cab85c13446d0d5a93b8933995`: Python Regression #1662 and #1663 passed; Admin UI Build #428 passed.\n- Scope is intentionally isolated: candidate staging, Validator attestations, Artifact Store publication, Catalog, and Planner do not consume Manifest data yet.\n\n### Slice B — in progress
+
+Implemented candidate-stage portion:
+
+- Added explicit mission.skill-candidate-stage-request.v2, mission.skill-candidate-stage-response.v2, and mission.skill-candidate-artifact.v2 contracts. The v1 stage contract remains unchanged.
+- The v2 request carries the Manifest and caller-computed manifest_sha256; the Broker normalizes the Manifest, checks its Skill ID/version, recomputes the canonical digest, and rejects any mismatch.
+- Broker-owned staging stores the canonical Manifest, code, content_sha256, and manifest_sha256 in a separate create-once .candidate.v2.json artifact. V2 readback revalidates both digests and the Manifest identity.
+- The signed Broker receipt includes the v2 artifact schema and Manifest digest. The Unix-socket transport helper supports the v2 request and verifies the exact signed receipt.
+- Added Broker and socket-transport regression coverage for canonical digest binding, tampered digest rejection, immutable readback, and exclusion of v2 Draft candidates from the published Catalog.
+
+Still outstanding before Slice B is complete:
+
+- Bind manifest_sha256 into the Validator request schema, exact acceptance-policy identity, signed attestation, and response verification.
+- Preserve strict v1 Validator behavior without accepting v2 fields on a v1 request.
+- Extend tests for cross-tenant, cross-version, and changed-Manifest attestation replay.
+
+CI for the implementation is pending on the current PR head; this slice is not marked regression-verified yet.
+
+Each slice must include tests and update this document with implemented status. Automatic Skill reuse is not complete until A–F pass.
