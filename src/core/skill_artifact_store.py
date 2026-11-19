@@ -429,7 +429,11 @@ class SkillArtifactStore:
             "trust_level": trust,
         }
 
-    def stage_candidate(self, *, tenant_id: str, skill: Any) -> dict[str, str]:
+    def stage_candidate(
+        self, *, tenant_id: str, skill: Any,
+        manifest: Mapping[str, Any] | None = None,
+        expected_manifest_sha256: str | None = None,
+    ) -> dict[str, str]:
         """Stage an immutable draft for isolated replay; this does not validate or publish it.
 
         Candidate artifacts are stored separately from verified artifacts and can
@@ -450,6 +454,47 @@ class SkillArtifactStore:
             raise SkillArtifactStoreError("only draft Skills may be staged as replay candidates")
         normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
         digest = hashlib.sha256(code_bytes).hexdigest()
+        if manifest is not None:
+            try:
+                normalized_manifest = normalize_skill_manifest(manifest)
+            except ValueError as exc:
+                raise SkillArtifactStoreError("candidate Skill Manifest is invalid") from exc
+            if normalized_manifest["skill_id"] != skill_id or normalized_manifest["skill_version"] != version:
+                raise SkillArtifactStoreError("candidate Skill Manifest identity does not match the staged Skill")
+            actual_manifest_digest = manifest_sha256(normalized_manifest)
+            if (
+                not isinstance(expected_manifest_sha256, str)
+                or not _DIGEST_RE.fullmatch(expected_manifest_sha256)
+                or expected_manifest_sha256 != actual_manifest_digest
+            ):
+                raise SkillArtifactStoreError("candidate Manifest digest does not match canonical content")
+            artifact_v2 = {
+                "schema_version": CANDIDATE_ARTIFACT_V2_SCHEMA,
+                "tenant_id": normalized_tenant, "skill_id": skill_id,
+                "skill_version": version, "trust_level": "draft",
+                "content_sha256": digest, "manifest_sha256": actual_manifest_digest,
+                "manifest": normalized_manifest, "code": code,
+            }
+            payload_v2 = _canonical_json(artifact_v2)
+            path_v2 = self._artifact_path(
+                normalized_tenant, skill_id, version, create=True, candidate_manifest=True,
+            )
+            try:
+                _write_create_once(path_v2, payload_v2, collision_message="Skill candidate v2 already exists")
+            except SkillArtifactStoreError as exc:
+                if "already exists" not in str(exc):
+                    raise
+                _existing_create_once_matches(
+                    path_v2, payload_v2,
+                    collision_message="Skill candidate v2 already exists with different content",
+                )
+            return {
+                "tenant_id": normalized_tenant, "skill_id": skill_id,
+                "skill_version": version, "content_sha256": digest,
+                "manifest_sha256": actual_manifest_digest, "trust_level": "draft",
+            }
+        if expected_manifest_sha256 is not None:
+            raise SkillArtifactStoreError("Manifest digest requires a v2 candidate Manifest")
         artifact = {
             "schema_version": CANDIDATE_ARTIFACT_SCHEMA,
             "tenant_id": normalized_tenant,
