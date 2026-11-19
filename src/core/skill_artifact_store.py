@@ -21,7 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
-from .skill_manifest import normalize_skill_manifest, manifest_sha256
+from .skill_manifest import normalize_skill_manifest, manifest_sha256 as compute_skill_manifest_sha256
 
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v2"
@@ -461,7 +461,7 @@ class SkillArtifactStore:
                 raise SkillArtifactStoreError("candidate Skill Manifest is invalid") from exc
             if normalized_manifest["skill_id"] != skill_id or normalized_manifest["skill_version"] != version:
                 raise SkillArtifactStoreError("candidate Skill Manifest identity does not match the staged Skill")
-            actual_manifest_digest = manifest_sha256(normalized_manifest)
+            actual_manifest_digest = compute_skill_manifest_sha256(normalized_manifest)
             if (
                 not isinstance(expected_manifest_sha256, str)
                 or not _DIGEST_RE.fullmatch(expected_manifest_sha256)
