@@ -681,7 +681,7 @@ class SkillArtifactStore:
                 ):
                     raise SkillArtifactStoreError("tenant Skill catalog contains an unsafe directory")
                 for artifact_path in sorted(skill_dir.iterdir(), key=lambda item: item.name):
-                    if not artifact_path.name.endswith(".json") or artifact_path.name.endswith(".candidate.json"):
+                    if not artifact_path.name.endswith(".json") or artifact_path.name.endswith((".candidate.json", ".candidate.v2.json")):
                         continue
                     version = artifact_path.name[:-5]
                     _identity(version, "skill_version", _VERSION_RE)
