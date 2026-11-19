@@ -3,11 +3,13 @@ Evo Core - 配置管理系统
 
 配置完全外部化，代码中无硬编码默认值。
 
-配置文件搜索路径（按优先级）：
+配置文件搜索路径（按优先级；每次调用动态解析）：
 1. $EVO_CONFIG_PATH 环境变量
-2. ./.config/evo.json
-3. ~/.evo/config.json
-4. /etc/evo/config.json
+2. 当前工作区/.config/evo.json
+3. 仓库根目录/.config/evo.json
+4. 当前目录/.config/evo.json
+5. ~/.evo/config.json
+6. /etc/evo/config.json
 
 无配置文件时会抛出错误，提示复制 example 文件。
 """
