@@ -91,6 +91,12 @@ class AdminDatabaseAuthTests(unittest.TestCase):
             database = Database(local_store_path=Path(tempfile.gettempdir()) / "unused-auth.json")
         self.assertEqual(database.backend, "local")
 
+    def test_local_backend_ignores_invalid_mysql_port_configuration(self):
+        with patch.dict(os.environ, {"DB_PORT": "not-a-port", "EVO_AUTH_BACKEND": "local"}):
+            database = Database(local_store_path=Path(tempfile.gettempdir()) / "unused-auth.json")
+        self.assertEqual(database.backend, "local")
+        self.assertIsNone(database.port)
+
     def test_backend_defaults_to_mysql_only_when_driver_is_available(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EVO_AUTH_BACKEND", None)

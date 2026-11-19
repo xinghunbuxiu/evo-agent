@@ -105,7 +105,8 @@ class Database:
             raise ValueError("EVO_AUTH_BACKEND must be 'mysql' or 'local'")
         self.backend = configured_backend
         self.host = os.getenv("DB_HOST", "localhost")
-        self.port = int(os.getenv("DB_PORT", "3306"))
+        # Local auth does not consume MySQL settings; malformed DB_PORT must not block it.
+        self.port = int(os.getenv("DB_PORT", "3306")) if self.backend == "mysql" else None
         self.user = os.getenv("DB_USER", "evo_user")
         self.password = os.getenv("DB_PASSWORD", "")
         self.db_name = os.getenv("DB_NAME", "evo_db")

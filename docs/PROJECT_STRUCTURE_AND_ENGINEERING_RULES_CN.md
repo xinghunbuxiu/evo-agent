@@ -269,6 +269,16 @@ src/
 - 切换后端属于显式数据迁移操作，不是故障恢复策略。切换前必须备份并核对账号记录；本变更不自动复制或合并两个存储。
 - `/api/db/status` 仍用于 MySQL 运维检查；它不代表当前认证后端自动切换。
 
+## 9.5 数据库连接配置契约（2026-11-19）
+
+- `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME` 只用于 MySQL 认证后端；`EVO_AUTH_BACKEND` 是认证后端的唯一选择开关。
+- Admin Server 在导入 `admin.database` 前加载仓库根 `.env`，随后模块级 `db = Database()` 读取一次配置；运行中修改环境变量不会更新已创建的数据库实例，需重启进程。
+- 独立 Worker 通过 `admin.server.create_app()` 复用同一装配入口，不维护第二套数据库配置加载逻辑。
+- Docker Compose 将宿主机 `.env` 只读挂载到 Admin 和 Worker 容器的 `/app/.env`；Server 的 `load_dotenv()` 负责读取它。Compose `environment` 列表未逐项映射 `DB_*`，不代表应用读不到已挂载的 `.env`。
+- 根 `requirements.txt` 和 `Dockerfile.admin` 当前不安装 `pymysql`。因此默认镜像没有该驱动时会选择 `local`；MySQL 部署必须在镜像/运行环境额外安装 `pymysql`，并建议显式设置 `EVO_AUTH_BACKEND=mysql`，避免驱动缺失时误以为 DB_* 已启用 MySQL。
+- 显式选择 MySQL 但驱动缺失时，启动日志和认证接口会报告不可用，不会回退到本地文件。显式选择 local 时不解析或依赖 `DB_PORT` 等 MySQL 连接参数。
+- `DB_PASSWORD` 不要求在所有环境非空（本地模式不使用它，开发 MySQL 也可能使用空密码）；生产密钥由部署 Secret/环境注入，不得把真实 `.env` 提交到仓库。
+
 ## 10. 分阶段治理顺序
 
 ### Phase 0：冻结范围并建立事实地图
