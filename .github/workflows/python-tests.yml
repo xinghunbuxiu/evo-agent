@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-regression-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: python-regression-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Diagnose self-hosted runner before checkout
+        if: github.event_name == 'workflow_dispatch'
         continue-on-error: true
         run: |
           set -u
@@ -55,6 +56,7 @@ jobs:
             if printenv "$name" >/dev/null 2>&1; then echo "$name=set"; else echo "$name=unset"; fi
           done
       - name: Probe isolated execution capabilities
+        if: github.event_name == 'workflow_dispatch'
         continue-on-error: true
         run: |
           set -u
