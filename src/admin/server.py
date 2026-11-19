@@ -20,6 +20,7 @@ import httpx
 from dotenv import load_dotenv
 
 from admin.spa_static import register_spa_static
+from admin.workspace import resolve_admin_workspace
 from admin.experience_outbox_runtime import sync_experience_outbox
 from admin.mission_plan_ai_runtime import create_worker_mission_plan_proposer
 
@@ -1109,13 +1110,7 @@ def create_app() -> FastAPI:
     
     # 初始化组件
     repo_workspace = Path(__file__).resolve().parents[2]
-    env_workspace = str(os.getenv("EVO_ADMIN_WORKSPACE") or "").strip()
-    workspace = repo_workspace
-    if env_workspace:
-        env_path = Path(env_workspace).expanduser()
-        env_has_local_executor = (env_path / "executors" / "toutiao" / "scripts" / "cli.py").is_file()
-        if env_has_local_executor:
-            workspace = env_path
+    workspace = resolve_admin_workspace(repo_workspace)
     workspace.mkdir(parents=True, exist_ok=True)
     organization_registry = OrganizationRegistry(workspace)
     try:
