@@ -40,7 +40,7 @@
 - `src/admin/runtime_state.py` 约 1,106 行，跨业务状态模型集中在一个文件。
 - `executors/toutiao/data/` 下存在约 544 个已跟踪数据文件，主要为草稿样本；运行数据、演示数据和正式配置的仓库归属需要分开。
 - `executors/toutiao/README.md` 明确称当前为执行器骨架；`browser_backend.py` 的发布辅助仅打开编辑页、尝试填入内容并截图，返回 `browser_assisted`，不能视为平台已真实发布。此能力必须明确标为人工辅助/实验能力，不能作为真实发布成功证据。
-- 根目录与 `src/.config/` 同时存在 Evo 配置文件，配置来源优先级和唯一权威位置需要统一。
+- 根目录 `.config/evo.json` 与 `src/.config/evo.json` 同时存在。Admin 默认工作区是仓库根目录，分布式配置由 `src/core/config.py` 的 `ConfigLoader` 加载；`src/.config/` 暂按历史副本处理，在确认所有启动入口和工作区调用后再决定迁移/删除。
 - `ARCHITECTURE.md` 中的目录、存储和运行方式描述与当前实现不完全一致，不能继续作为当前代码结构的准确说明。
 - 仓库中存在被跟踪的本地认证数据文件 `.local_admin_users.json`；本地账号数据不应作为产品默认数据提交。
 
@@ -232,6 +232,14 @@ src/
 
 验收标准不是“代码能运行”而是：真实输入进入正式入口，经过正式授权与持久化边界，得到可验证结果；失败时保留准确状态且不伪造成功。
 
+## 9.1 配置治理当前落地记录（2026-11-19）
+
+- 已修复 `ConfigLoader` 在模块导入时缓存 `EVO_CONFIG_PATH` 和 `Path.cwd()` 的问题。
+- 已让 `ConfigLoader.find_config_file()` 支持显式工作区，并按本节定义的优先级查找。
+- Admin `create_app()` 已把实际 `workspace` 传入 `get_distributed_config(workspace)`，避免依赖服务进程启动目录。
+- 已新增 `tests/test_core_config_paths.py`，覆盖工作区配置、显式环境变量优先级和环境变量动态读取。
+- 尚未完成：数据库连接配置与本地认证存储路径仍直接读取环境变量；本地认证 JSON 迁移、固定密码盐迁移、`src/.config/evo.json` 的全仓引用核验仍未完成。不得把本次配置路径修复描述为全仓配置已统一。
+
 ## 10. 分阶段治理顺序
 
 ### Phase 0：冻结范围并建立事实地图
@@ -241,8 +249,9 @@ src/
 - 保留 PR 当前功能，不做大规模搬迁。
 
 ### Phase 1：配置与数据边界
-- 建立统一 Settings/PathConfig。
-- 统一根配置文件位置。
+- 复用现有 `src/core/config.py::ConfigLoader` 管理分布式仓库配置，不另建重复 Settings/PathConfig；应用数据库、认证和运行时路径仍需逐项盘点，不能把分布式仓库配置误当作全局应用配置。
+- 配置查找优先级固定为：`EVO_CONFIG_PATH` > 显式工作区 `.config/evo.json` > 仓库根 `.config/evo.json` > 当前目录 > 用户级配置 > 系统级配置。环境变量和当前目录在每次调用时读取，不在模块导入时缓存。
+- Admin 初始化分布式配置时必须传入实际工作区；仓库根 `.config/evo.json` 是随仓库提供的默认配置，工作区配置用于部署/项目覆盖。`src/.config/evo.json` 暂不删除，待完成全仓调用点核验后再处理。
 - 本地认证数据与仓库代码分离，并提供显式初始化/迁移。
 - 清理运行生成数据；正式样本迁入 fixtures 并脱敏。
 - 移除固定密钥/盐值默认值，提供安全迁移。
