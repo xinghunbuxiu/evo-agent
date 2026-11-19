@@ -34,7 +34,13 @@ def register_auth_routes(
         if not username or not password:
             return error_response("用户名和密码不能为空", 400)
 
-        user = db.verify_password(username, password)
+        try:
+            user = db.verify_password(username, password)
+        except Exception as exc:
+            from admin.database import AuthStorageUnavailable
+            if isinstance(exc, AuthStorageUnavailable):
+                raise HTTPException(503, "认证服务暂时不可用") from exc
+            raise
         if not user:
             return error_response("用户名或密码错误", 401)
 
@@ -52,7 +58,13 @@ def register_auth_routes(
         if len(password) < 6:
             return error_response("密码至少需要6位", 400)
 
-        success = db.create_user(username, password)
+        try:
+            success = db.create_user(username, password)
+        except Exception as exc:
+            from admin.database import AuthStorageUnavailable
+            if isinstance(exc, AuthStorageUnavailable):
+                raise HTTPException(503, "认证服务暂时不可用") from exc
+            raise
         if not success:
             return error_response("用户名已存在", 400)
 

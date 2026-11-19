@@ -85,10 +85,25 @@ except ImportError:
     MYSQL_AVAILABLE = False
 
 
-class Database:
-    """MySQL 数据库管理"""
+class AuthStorageUnavailable(RuntimeError):
+    """Configured authentication storage is unavailable; no fallback is permitted."""
 
-    def __init__(self, local_store_path: Optional[Path] = None, legacy_store_path: Optional[Path] = None):
+
+class Database:
+    """认证存储访问；实例生命周期内只使用一个后端。"""
+
+    def __init__(
+        self,
+        local_store_path: Optional[Path] = None,
+        legacy_store_path: Optional[Path] = None,
+        backend: Optional[str] = None,
+    ):
+        configured_backend = str(backend or os.getenv("EVO_AUTH_BACKEND") or "").strip().lower()
+        if not configured_backend:
+            configured_backend = "mysql" if MYSQL_AVAILABLE else "local"
+        if configured_backend not in {"mysql", "local"}:
+            raise ValueError("EVO_AUTH_BACKEND must be 'mysql' or 'local'")
+        self.backend = configured_backend
         self.host = os.getenv("DB_HOST", "localhost")
         self.port = int(os.getenv("DB_PORT", "3306"))
         self.user = os.getenv("DB_USER", "evo_user")
@@ -103,8 +118,10 @@ class Database:
     
     def _get_connection(self):
         """获取数据库连接"""
+        if self.backend != "mysql":
+            raise RuntimeError("当前认证后端为本地文件，不能访问 MySQL")
         if not MYSQL_AVAILABLE:
-            raise RuntimeError("pymysql 未安装，请运行: pip install pymysql")
+            raise AuthStorageUnavailable("认证后端配置为 MySQL，但 pymysql 未安装")
         
         if self._connection is None or not self._connection.open:
             self._connection = pymysql.connect(
@@ -120,9 +137,11 @@ class Database:
     
     def init_tables(self):
         """初始化数据库和表（自动创建）"""
-        if not MYSQL_AVAILABLE:
+        if self.backend == "local":
             self._ensure_local_store()
             return
+        if not MYSQL_AVAILABLE:
+            raise AuthStorageUnavailable("认证后端配置为 MySQL，但 pymysql 未安装")
 
         # 1. 先连接 MySQL（不指定数据库）创建数据库
         conn = pymysql.connect(
@@ -296,6 +315,8 @@ class Database:
     
     def _sync_user(self, user_info: dict, token: str):
         """同步用户到数据库"""
+        if self.backend == "local":
+            return
         conn = self._get_connection()
         with conn.cursor() as cursor:
             token_hash = self._hash_token(token)
@@ -342,6 +363,8 @@ class Database:
     
     def get_user_by_gitee_id(self, gitee_id: int) -> Optional[Dict[str, Any]]:
         """通过 Gitee ID 获取用户信息"""
+        if self.backend != "mysql":
+            return None
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
@@ -355,39 +378,31 @@ class Database:
             return None
     
     def create_user(self, username: str, password: str) -> bool:
-        """创建新用户（账号密码方式）"""
-        if not MYSQL_AVAILABLE:
+        """只向实例选定的认证后端创建账号；后端故障时明确失败。"""
+        if self.backend == "local":
             return self._create_local_user(username, password)
-
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # 检查用户名是否已存在
                 cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
                 if cursor.fetchone():
                     return False
-                
-                # 创建用户
-                password_hash = hash_password(password)
                 cursor.execute(
-                    """INSERT INTO users 
+                    """INSERT INTO users
                         (username, password_hash, name, login_type)
                         VALUES (%s, %s, %s, 'password')
                     """,
-                    (username, password_hash, username)
+                    (username, hash_password(password), username)
                 )
                 conn.commit()
                 return True
-        except Exception as e:
-            print(f"[DB Error] 创建用户失败: {e}")
-            print("[DB Fallback] 改用本地账号存储")
-            return self._create_local_user(username, password)
+        except Exception as exc:
+            raise AuthStorageUnavailable("认证数据库暂时不可用") from exc
     
     def verify_password(self, username: str, password: str) -> Optional[Dict[str, Any]]:
-        """验证账号密码，返回用户信息"""
-        if not MYSQL_AVAILABLE:
+        """只从实例选定的认证后端验证账号；后端故障时明确失败。"""
+        if self.backend == "local":
             return self._verify_local_password(username, password)
-
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
@@ -420,12 +435,8 @@ class Database:
                     "login": login,
                     "name": name or username,
                 }
-        except Exception as e:
-            print(f"[DB Error] 验证密码失败: {e}")
-            import traceback
-            traceback.print_exc()
-            print("[DB Fallback] 改用本地账号存储")
-            return self._verify_local_password(username, password)
+        except Exception as exc:
+            raise AuthStorageUnavailable("认证数据库暂时不可用") from exc
     
     def close(self):
         """关闭数据库连接"""

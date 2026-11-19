@@ -86,5 +86,57 @@ class AdminDatabaseAuthTests(unittest.TestCase):
                 database._load_local_store()
 
 
+    def test_backend_is_selected_once_and_local_can_be_explicit(self):
+        with patch("admin.database.MYSQL_AVAILABLE", True), patch.dict(os.environ, {"EVO_AUTH_BACKEND": "local"}):
+            database = Database(local_store_path=Path(tempfile.gettempdir()) / "unused-auth.json")
+        self.assertEqual(database.backend, "local")
+
+    def test_backend_defaults_to_mysql_only_when_driver_is_available(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EVO_AUTH_BACKEND", None)
+            with patch("admin.database.MYSQL_AVAILABLE", True):
+                self.assertEqual(Database().backend, "mysql")
+            with patch("admin.database.MYSQL_AVAILABLE", False):
+                self.assertEqual(Database().backend, "local")
+
+    def test_invalid_backend_configuration_is_rejected(self):
+        with patch.dict(os.environ, {"EVO_AUTH_BACKEND": "fallback"}):
+            with self.assertRaisesRegex(ValueError, "EVO_AUTH_BACKEND"):
+                Database()
+
+    def test_mysql_registration_failure_never_writes_to_local_store(self):
+        from admin.database import AuthStorageUnavailable
+        with tempfile.TemporaryDirectory() as temp:
+            local_path = Path(temp) / "users.json"
+            database = Database(local_store_path=local_path, backend="mysql")
+            with patch.object(database, "_get_connection", side_effect=RuntimeError("offline")):
+                with self.assertRaises(AuthStorageUnavailable):
+                    database.create_user("mysql-user", "password-123")
+            self.assertFalse(local_path.exists())
+
+    def test_mysql_login_failure_never_authenticates_from_local_store(self):
+        from admin.database import AuthStorageUnavailable
+        with tempfile.TemporaryDirectory() as temp:
+            local_path = Path(temp) / "users.json"
+            database = Database(local_store_path=local_path, backend="mysql")
+            database._save_local_store({"users": [{
+                "id": 1,
+                "username": "local-only-user",
+                "password_hash": hash_password("password-123"),
+                "name": "Local User",
+                "login_type": "password",
+            }]})
+            with patch.object(database, "_get_connection", side_effect=RuntimeError("offline")):
+                with self.assertRaises(AuthStorageUnavailable):
+                    database.verify_password("local-only-user", "password-123")
+
+    def test_local_backend_never_attempts_mysql(self):
+        with tempfile.TemporaryDirectory() as temp:
+            database = Database(local_store_path=Path(temp) / "users.json", backend="local")
+            with patch.object(database, "_get_connection", side_effect=AssertionError("must not connect")):
+                self.assertTrue(database.create_user("local-user", "password-123"))
+                self.assertEqual(database.verify_password("local-user", "password-123")["login"], "local-user")
+
+
 if __name__ == "__main__":
     unittest.main()
