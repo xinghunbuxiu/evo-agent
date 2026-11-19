@@ -116,19 +116,40 @@ class DistributedConfig:
 class ConfigLoader:
     """配置加载器"""
     
-    CONFIG_PATHS = [
-        os.getenv("EVO_CONFIG_PATH"),
-        Path.cwd() / ".config" / "evo.json",
-        Path.home() / ".evo" / "config.json",
-        Path("/etc/evo/config.json"),
-    ]
-    
     @classmethod
-    def find_config_file(cls) -> Optional[Path]:
-        """查找配置文件"""
-        for path in cls.CONFIG_PATHS:
-            if path and Path(path).is_file():
-                return Path(path)
+    def config_paths(cls, workspace: Optional[Path] = None) -> list[Path]:
+        """按明确优先级解析配置位置；每次调用读取环境变量和当前目录。"""
+        paths: list[Path] = []
+        env_path = str(os.getenv("EVO_CONFIG_PATH") or "").strip()
+        if env_path:
+            paths.append(Path(env_path).expanduser())
+        if workspace is not None:
+            paths.append(Path(workspace).expanduser() / ".config" / "evo.json")
+
+        # 随包仓库配置是部署默认值；工作区配置和显式环境变量始终优先。
+        repository_root = Path(__file__).resolve().parents[2]
+        paths.extend([
+            repository_root / ".config" / "evo.json",
+            Path.cwd() / ".config" / "evo.json",
+            Path.home() / ".evo" / "config.json",
+            Path("/etc/evo/config.json"),
+        ])
+
+        unique_paths: list[Path] = []
+        seen: set[Path] = set()
+        for path in paths:
+            normalized = path.expanduser()
+            if normalized not in seen:
+                seen.add(normalized)
+                unique_paths.append(normalized)
+        return unique_paths
+
+    @classmethod
+    def find_config_file(cls, workspace: Optional[Path] = None) -> Optional[Path]:
+        """查找配置文件；不在模块导入时缓存 cwd 或环境变量。"""
+        for path in cls.config_paths(workspace):
+            if path.is_file():
+                return path
         return None
     
     @classmethod
