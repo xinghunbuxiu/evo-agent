@@ -1,6 +1,6 @@
 # Broker Published Skill Manifest Design
 
-Status: design decision for the next implementation slice
+Status: A implemented and regression-verified; B in progress
 Date: 2026-11-18
 Scope: immutable Skill metadata, Validator binding, Broker Catalog discovery, and Mission planning
 
@@ -150,4 +150,4 @@ D. Mission runtime exact binding and replay.
 E. Planner discovery, matching trace, and safe fallback.
 F. Experience feedback and regression end-to-end.
 
-Each slice must include tests and update this document with implemented status. Automatic Skill reuse is not complete until A–F pass.
+### Slice A — implemented and regression-verified (2026-11-19)\n\n- Added `src/core/skill_manifest.py` with strict `mission.skill-manifest.v1` validation, canonical JSON serialization, and SHA-256 digest calculation.\n- The first runtime contract is explicitly limited to Python `run(context)`; unsupported runtime contracts fail closed.\n- Input/output schema declarations use a bounded JSON Schema subset. Unknown keywords and dynamic references are rejected; depth, node count, property count, array size, string bounds, and total Manifest bytes are limited.\n- Added `tests/test_skill_manifest.py` for identity/field validation, schema limits, runtime compatibility, deterministic canonicalization, and digest independence from executable code.\n- Verified on PR HEAD `c34558b739cff9cab85c13446d0d5a93b8933995`: Python Regression #1662 and #1663 passed; Admin UI Build #428 passed.\n- Scope is intentionally isolated: candidate staging, Validator attestations, Artifact Store publication, Catalog, and Planner do not consume Manifest data yet.\n\n### Slice B — in progress\n\n- Next implementation work is to carry the canonical Manifest and digest through a versioned candidate-stage contract, persist them immutably in Broker-owned staging, and bind the digest into Validator request/policy/attestation verification. Legacy v1 bindings remain unchanged.\n\nEach slice must include tests and update this document with implemented status. Automatic Skill reuse is not complete until A–F pass.
