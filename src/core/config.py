@@ -187,20 +187,9 @@ class ConfigLoader:
         
         配置文件必须存在，无硬编码默认值。
         """
-        # 1. 查找配置文件（工作区优先）
-        config_path = None
-        loaded_from = None
-        
-        if workspace:
-            workspace_config = workspace / ".config" / "evo.json"
-            if workspace_config.is_file():
-                config_path = workspace_config
-                loaded_from = str(workspace_config)
-        
-        if not config_path:
-            config_path = cls.find_config_file()
-            if config_path:
-                loaded_from = str(config_path)
+        # 1. 按统一优先级解析：显式环境变量 > 工作区 > 仓库默认 > 当前目录 > 用户级 > 系统级。
+        config_path = cls.find_config_file(workspace)
+        loaded_from = str(config_path) if config_path else None
         
         # 2. 无配置文件时报错
         if not config_path:
