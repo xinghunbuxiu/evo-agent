@@ -4,11 +4,78 @@ MySQL 数据库模块 - 用户登录管理
 """
 
 import os
+import base64
 import hashlib
+import hmac
 import json
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 import httpx
+
+_PASSWORD_HASH_ITERATIONS = 310_000
+_PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
+_LEGACY_PASSWORD_SALT = "evo-salt-2024"
+
+
+def _legacy_hash_password(password: str) -> str:
+    """仅用于验证历史 SHA-256 密码；成功登录后必须升级。"""
+    salt = os.getenv("PASSWORD_SALT", _LEGACY_PASSWORD_SALT)
+    return hashlib.sha256(f"{password}{salt}".encode("utf-8")).hexdigest()
+
+
+def hash_password(password: str) -> str:
+    """使用每个密码独立随机盐的 PBKDF2-HMAC-SHA256 格式。"""
+    if not isinstance(password, str) or not password:
+        raise ValueError("password must be a non-empty string")
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PASSWORD_HASH_ITERATIONS
+    )
+    return "$".join((
+        _PASSWORD_HASH_ALGORITHM,
+        str(_PASSWORD_HASH_ITERATIONS),
+        base64.urlsafe_b64encode(salt).decode("ascii"),
+        base64.urlsafe_b64encode(digest).decode("ascii"),
+    ))
+
+
+def verify_password_hash(password: str, encoded: str) -> tuple[bool, bool]:
+    """返回 (是否匹配, 是否需要升级)。未知格式和损坏数据均失败关闭。"""
+    if not isinstance(password, str) or not isinstance(encoded, str):
+        return False, False
+
+    if encoded.startswith(_PASSWORD_HASH_ALGORITHM + "$"):
+        try:
+            algorithm, iterations_text, salt_text, digest_text = encoded.split("$", 3)
+            iterations = int(iterations_text)
+            if algorithm != _PASSWORD_HASH_ALGORITHM or not 100_000 <= iterations <= 2_000_000:
+                return False, False
+            salt = base64.b64decode(salt_text.encode("ascii"), altchars=b"-_", validate=True)
+            expected = base64.b64decode(digest_text.encode("ascii"), altchars=b"-_", validate=True)
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+            if len(salt) < 16 or len(expected) != 32:
+                return False, False
+            matched = hmac.compare_digest(actual, expected)
+            return matched, matched and iterations < _PASSWORD_HASH_ITERATIONS
+        except (ValueError, TypeError, UnicodeError):
+            return False, False
+
+    # 旧版本存储 SHA-256(password + salt)，只允许在成功验证后升级。
+    if len(encoded) == 64:
+        matched = hmac.compare_digest(_legacy_hash_password(password), encoded.lower())
+        return matched, matched
+    return False, False
+
+
+def _resolve_local_auth_store_path() -> Path:
+    """将本地认证数据放在仓库之外；支持显式路径和 XDG 数据目录。"""
+    explicit_path = str(os.getenv("EVO_LOCAL_AUTH_DB") or "").strip()
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+    data_home = str(os.getenv("XDG_DATA_HOME") or "").strip()
+    base = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+    return base / "evo" / "admin_users.json"
 
 # 同步 MySQL 连接
 try:
@@ -18,27 +85,20 @@ except ImportError:
     MYSQL_AVAILABLE = False
 
 
-def hash_password(password: str) -> str:
-    """密码哈希（使用 SHA256 + salt）"""
-    salt = os.getenv("PASSWORD_SALT", "evo-salt-2024")
-    return hashlib.sha256(f"{password}{salt}".encode()).hexdigest()
-
-
 class Database:
     """MySQL 数据库管理"""
-    
-    def __init__(self):
+
+    def __init__(self, local_store_path: Optional[Path] = None, legacy_store_path: Optional[Path] = None):
         self.host = os.getenv("DB_HOST", "localhost")
         self.port = int(os.getenv("DB_PORT", "3306"))
         self.user = os.getenv("DB_USER", "evo_user")
         self.password = os.getenv("DB_PASSWORD", "")
         self.db_name = os.getenv("DB_NAME", "evo_db")
         self._connection = None
-        self._local_store_path = Path(
-            os.getenv(
-                "EVO_LOCAL_AUTH_DB",
-                str(Path(__file__).resolve().parents[2] / ".local_admin_users.json"),
-            )
+        self._local_store_path = Path(local_store_path) if local_store_path else _resolve_local_auth_store_path()
+        self._legacy_local_store_path = (
+            Path(legacy_store_path) if legacy_store_path
+            else Path(__file__).resolve().parents[2] / ".local_admin_users.json"
         )
     
     def _get_connection(self):
