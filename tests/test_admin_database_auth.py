@@ -65,6 +65,17 @@ class AdminDatabaseAuthTests(unittest.TestCase):
             if os.name == "posix":
                 self.assertEqual(current_path.stat().st_mode & 0o777, 0o600)
 
+    def test_new_local_account_can_be_created_and_authenticated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "auth" / "users.json"
+            database = Database(local_store_path=path, legacy_store_path=Path(temp) / "missing.json")
+            self.assertTrue(database._create_local_user("new-user", "new-password"))
+            self.assertFalse(database._create_local_user("new-user", "new-password"))
+            result = database._verify_local_password("new-user", "new-password")
+            self.assertEqual(result["login"], "new-user")
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(stored["users"][0]["password_hash"].startswith("pbkdf2_sha256$"))
+
     def test_corrupt_local_store_fails_closed_instead_of_resetting_accounts(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "users.json"
