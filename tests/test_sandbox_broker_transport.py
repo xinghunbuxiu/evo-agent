@@ -34,6 +34,7 @@ from core.sandbox_broker_transport import (
     stage_skill_candidate_via_broker,
 )
 from core.sandbox_runner import RunnerProcessOutput
+from core.skill_manifest import manifest_sha256
 
 
 @unittest.skipUnless(hasattr(socket, "AF_UNIX") and hasattr(socket, "SO_PEERCRED"),
@@ -335,6 +336,25 @@ class SandboxBrokerTransportTests(unittest.TestCase):
                 public_key=self.key.public_key().public_bytes_raw(),
                 expected_key_id="test-key",
             )
+            manifest = {
+                "schema_version": "mission.skill-manifest.v1",
+                "skill_id": "skill-transport-manifest", "skill_version": "1.0.0",
+                "name": "Transport Manifest", "domain": "python",
+                "capability_type": "general_dev", "description": "Transport v2 test",
+                "task_types": ["code.review"],
+                "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
+                "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run", "call_signature": "run(context)"},
+                "compatibility": {"runtime": "python", "min_version": "3.11.0", "max_version": "3.14.0"},
+            }
+            manifest_receipt = stage_skill_candidate_via_broker(
+                path, "test-workspace", tenant_id="tenant-transport",
+                mission_context=context, skill_id="skill-transport-manifest",
+                skill_version="1.0.0", code=code,
+                public_key=self.key.public_key().public_bytes_raw(),
+                expected_key_id="test-key", manifest=manifest,
+                expected_manifest_sha256=manifest_sha256(manifest),
+            )
         finally:
             stop.set()
             server_thread.join(timeout=3)
@@ -352,6 +372,14 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             "mission_context": context,
         }
         self.assertEqual(artifact_store.load_for_binding(binding).code, code)
+        manifest_artifact = manifest_receipt["candidate_artifact"]
+        self.assertEqual(manifest_artifact["schema_version"], "mission.skill-candidate-artifact.v2")
+        staged_manifest = artifact_store.load_candidate_manifest(
+            tenant_id="tenant-transport", skill_id="skill-transport-manifest",
+            skill_version="1.0.0", content_sha256=manifest_artifact["content_sha256"],
+            manifest_sha256=manifest_artifact["manifest_sha256"],
+        )
+        self.assertEqual(staged_manifest.manifest_sha256, manifest_sha256(manifest))
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")
