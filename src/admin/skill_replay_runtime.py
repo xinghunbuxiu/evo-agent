@@ -899,6 +899,18 @@ class SkillReplayRuntime:
                 raise PermissionError("Skill candidate provenance does not match this Mission node")
             self._validate_mission_delivery_acceptance(parameters)
 
+        # Manifest v2 is currently staged by a separate Broker contract, but
+        # the execution request, Validator attestation and published Artifact
+        # path still accept only the v1 binding. Do not stage a v1 code-only
+        # candidate and then attempt to execute it with a v2 local binding.
+        # This guard runs before callbacks or any Broker side effect.
+        if parameters.get("manifest") is not None:
+            raise SkillReplayRuntimeConfigurationError(
+                "Manifest-bearing candidates are blocked until Broker execution, "
+                "Validator attestation, and immutable Artifact publication bind "
+                "the same Manifest digest"
+            )
+
         context = {
             "tenant_id": tenant_id,
             "mission_run_id": mission_run_id,
