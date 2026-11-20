@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from core.skill_artifact_store import SkillArtifactStore, VALIDATION_ATTESTATION_SCHEMA
+from core.skill_artifact_store import SkillArtifactStore, SkillArtifactStoreError, VALIDATION_ATTESTATION_SCHEMA
 from core.sandbox_broker import (
     BrokerReplayStore,
     BrokerRequestRejected,
@@ -145,6 +145,21 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         self.assertEqual(staged.code, code)
         self.assertEqual(staged.manifest, manifest)
         self.assertEqual(staged.manifest_sha256, manifest_sha256(manifest))
+
+        # A v2 Manifest candidate must never be resolved through the legacy
+        # code-only v1 binding path. Otherwise downstream v1 Validator and
+        # promotion could accidentally attest/publish without the Manifest.
+        legacy_binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-manifest-demo",
+            "skill_version": "1.0.0",
+            "content_sha256": artifact["content_sha256"],
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        with self.assertRaises(SkillArtifactStoreError):
+            artifact_store.load_for_binding(legacy_binding)
+
         self.assertEqual(artifact_store.list_published(tenant_id="tenant-test")["items"], [])
         tampered = dict(request, request_id=str(uuid.uuid4()), manifest_sha256="0" * 64)
         with self.assertRaisesRegex(BrokerRequestRejected, "Manifest digest"):
