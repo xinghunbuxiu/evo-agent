@@ -29,6 +29,10 @@ from .skill_artifact_store import VALIDATION_ATTESTATION_SCHEMA, VALIDATION_SIGN
 VALIDATION_REQUEST_SCHEMA = "mission.skill-validation-request.v1"
 VALIDATION_RESPONSE_SCHEMA = "mission.skill-validation-response.v1"
 VALIDATION_POLICY_SCHEMA = "mission.skill-validation-policy.v1"
+VALIDATION_REQUEST_SCHEMA_V2 = "mission.skill-validation-request.v2"
+VALIDATION_RESPONSE_SCHEMA_V2 = "mission.skill-validation-response.v2"
+VALIDATION_POLICY_SCHEMA_V2 = "mission.skill-validation-policy.v2"
+VALIDATION_ATTESTATION_SCHEMA_V2 = "mission.skill-validation-attestation.v4"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
 _WORKSPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -42,6 +46,7 @@ _ATTESTATION_FIELDS = {
     "broker_request_id", "broker_attestation_sha256", "checks_sha256",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
+_ATTESTATION_FIELDS_V2 = _ATTESTATION_FIELDS | {"manifest_sha256"}
 _ALLOWED_TRUST_LEVELS = {"verified", "cloud"}
 _ALLOWED_CHECKS = {"json_key_exists", "json_value_equals", "json_value_type"}
 _ALLOWED_JSON_TYPES = {"null", "boolean", "number", "string", "array", "object"}
@@ -161,6 +166,51 @@ def normalize_validation_policies(value: Any) -> tuple[dict[str, Any], ...]:
         normalized.append({
             "policy_id": policy_id, "tenant_id": tenant_id, "skill_id": skill_id,
             "skill_version": version, "content_sha256": digest, "trust_level": trust,
+            "checks": [_normalize_check(check, i) for i, check in enumerate(checks)],
+        })
+    return tuple(normalized)
+
+
+def normalize_manifest_validation_policies(value: Any) -> tuple[dict[str, Any], ...]:
+    """Validate v2 policies whose identity pins both source and canonical Manifest."""
+    if not isinstance(value, dict) or set(value) != {"schema_version", "policies"}:
+        raise SkillValidatorError("Manifest validation policy document has unsupported or missing fields")
+    if value.get("schema_version") != VALIDATION_POLICY_SCHEMA_V2:
+        raise SkillValidatorError("unsupported Manifest validation policy schema")
+    policies = value.get("policies")
+    if not isinstance(policies, list) or not policies or len(policies) > 10000:
+        raise SkillValidatorError("Manifest validation policy document must contain 1..10000 policies")
+    normalized = []
+    seen_policy_ids: set[str] = set()
+    seen_identities: set[tuple[str, str, str, str, str, str]] = set()
+    for index, raw in enumerate(policies):
+        fields = {
+            "policy_id", "tenant_id", "skill_id", "skill_version",
+            "content_sha256", "manifest_sha256", "trust_level", "checks",
+        }
+        if not isinstance(raw, dict) or set(raw) != fields:
+            raise SkillValidatorError(f"Manifest validation policy {index} has unsupported or missing fields")
+        policy_id = _identity(raw.get("policy_id"), "policy_id")
+        tenant_id = _identity(raw.get("tenant_id"), "tenant_id")
+        skill_id = _identity(raw.get("skill_id"), "skill_id")
+        version = _identity(raw.get("skill_version"), "skill_version", _VERSION_RE)
+        digest = _identity(raw.get("content_sha256"), "content_sha256", _DIGEST_RE)
+        manifest_digest = _identity(raw.get("manifest_sha256"), "manifest_sha256", _DIGEST_RE)
+        trust = raw.get("trust_level")
+        if not isinstance(trust, str) or trust not in _ALLOWED_TRUST_LEVELS:
+            raise SkillValidatorError(f"Manifest validation policy {index} trust_level is invalid")
+        checks = raw.get("checks")
+        if not isinstance(checks, list) or not checks or len(checks) > 64:
+            raise SkillValidatorError(f"Manifest validation policy {index} requires 1..64 checks")
+        identity = (tenant_id, skill_id, version, digest, manifest_digest, trust)
+        if policy_id in seen_policy_ids or identity in seen_identities:
+            raise SkillValidatorError("Manifest validation policies contain duplicate IDs or artifact identities")
+        seen_policy_ids.add(policy_id)
+        seen_identities.add(identity)
+        normalized.append({
+            "policy_id": policy_id, "tenant_id": tenant_id, "skill_id": skill_id,
+            "skill_version": version, "content_sha256": digest,
+            "manifest_sha256": manifest_digest, "trust_level": trust,
             "checks": [_normalize_check(check, i) for i, check in enumerate(checks)],
         })
     return tuple(normalized)
@@ -423,7 +473,8 @@ class SkillValidatorService:
     def __init__(
         self, *, validator_id: str, key_id: str, signing_key: Ed25519PrivateKey,
         broker_public_key: bytes, broker_key_id: str,
-        workspace_ids: Sequence[str], policies: Sequence[Mapping[str, Any]],
+        workspace_ids: Sequence[str], policies: Sequence[Mapping[str, Any]] = (),
+        manifest_policies: Sequence[Mapping[str, Any]] = (),
         request_store: SkillValidatorRequestStore | None = None,
     ):
         self.validator_id = _identity(validator_id, "validator_id")
@@ -441,11 +492,29 @@ class SkillValidatorService:
         if not isinstance(workspace_ids, Sequence) or isinstance(workspace_ids, (str, bytes)) or not workspace_ids:
             raise SkillValidatorError("workspace_ids must be a non-empty sequence")
         self.workspace_ids = frozenset(_identity(item, "workspace_id", _WORKSPACE_RE) for item in workspace_ids)
-        normalized = normalize_validation_policies({"schema_version": VALIDATION_POLICY_SCHEMA, "policies": list(policies)})
-        self.policies = {
-            (item["tenant_id"], item["skill_id"], item["skill_version"], item["content_sha256"], item["trust_level"]): item
-            for item in normalized
-        }
+        self.policies = {}
+        if policies:
+            normalized = normalize_validation_policies({
+                "schema_version": VALIDATION_POLICY_SCHEMA, "policies": list(policies),
+            })
+            self.policies = {
+                (item["tenant_id"], item["skill_id"], item["skill_version"],
+                 item["content_sha256"], item["trust_level"]): item
+                for item in normalized
+            }
+        self.manifest_policies = {}
+        if manifest_policies:
+            normalized_v2 = normalize_manifest_validation_policies({
+                "schema_version": VALIDATION_POLICY_SCHEMA_V2,
+                "policies": list(manifest_policies),
+            })
+            self.manifest_policies = {
+                (item["tenant_id"], item["skill_id"], item["skill_version"],
+                 item["content_sha256"], item["manifest_sha256"], item["trust_level"]): item
+                for item in normalized_v2
+            }
+        if not self.policies and not self.manifest_policies:
+            raise SkillValidatorError("at least one v1 or v2 acceptance policy is required")
 
     def validate(self, request: Any) -> dict[str, Any]:
         if self.request_store is None:
@@ -456,7 +525,9 @@ class SkillValidatorService:
         }
         if (
             not isinstance(request, dict) or set(request) != expected_fields
-            or request.get("schema_version") != VALIDATION_REQUEST_SCHEMA
+            or request.get("schema_version") not in {
+                VALIDATION_REQUEST_SCHEMA, VALIDATION_REQUEST_SCHEMA_V2,
+            }
             or not isinstance(request.get("request_id"), str)
         ):
             raise SkillValidatorError("validation request has unsupported or missing fields")
@@ -490,6 +561,8 @@ class SkillValidatorService:
         return {"schema_version":"mission.skill-validation-status-response.v1","request_id":request_id,**outcome}
 
     def _validate_uncached(self, request: Any) -> dict[str, Any]:
+        if isinstance(request, dict) and request.get("schema_version") == VALIDATION_REQUEST_SCHEMA_V2:
+            return self._validate_manifest_v2(request)
         fields = {
             "schema_version", "request_id", "workspace_id", "mission_context",
             "skill_binding", "trust_level", "broker_attestation",
@@ -596,6 +669,115 @@ class SkillValidatorService:
         }
 
 
+    def _validate_manifest_v2(self, request: Any) -> dict[str, Any]:
+        """Validate a Manifest v2 Broker receipt and sign both immutable digests."""
+        fields = {
+            "schema_version", "request_id", "workspace_id", "mission_context",
+            "skill_binding", "trust_level", "broker_attestation",
+        }
+        if not isinstance(request, dict) or set(request) != fields:
+            raise SkillValidatorError("Manifest validation request has unsupported or missing fields")
+        request_id = request.get("request_id")
+        try:
+            uuid.UUID(request_id)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise SkillValidatorError("validation request_id is invalid") from exc
+        workspace_id = _identity(request.get("workspace_id"), "workspace_id", _WORKSPACE_RE)
+        if workspace_id not in self.workspace_ids:
+            raise SkillValidatorError("workspace_id is not authorized for this Validator")
+        context = _context(request.get("mission_context"))
+        binding = request.get("skill_binding")
+        binding_fields = _BINDING_FIELDS | {"manifest_sha256"}
+        if not isinstance(binding, Mapping) or set(binding) != binding_fields:
+            raise SkillValidatorError("Manifest Skill binding has unsupported or missing fields")
+        if binding.get("schema_version") != "mission.skill-replay-binding.v2":
+            raise SkillValidatorError("unsupported Manifest Skill binding schema")
+        if binding.get("trust_level") != "draft":
+            raise SkillValidatorError("Validator only accepts a Broker replay of a draft candidate")
+        skill_id = _identity(binding.get("skill_id"), "skill_id")
+        version = _identity(binding.get("skill_version"), "skill_version", _VERSION_RE)
+        digest = _identity(binding.get("content_sha256"), "content_sha256", _DIGEST_RE)
+        manifest_digest = _identity(binding.get("manifest_sha256"), "manifest_sha256", _DIGEST_RE)
+        binding_context = _context(binding.get("mission_context"))
+        if binding_context != context:
+            raise SkillValidatorError("Skill binding Mission context does not match validation request")
+        trust = request.get("trust_level")
+        if not isinstance(trust, str) or trust not in _ALLOWED_TRUST_LEVELS:
+            raise SkillValidatorError("requested trust_level is invalid")
+        policy = self.manifest_policies.get(
+            (context["tenant_id"], skill_id, version, digest, manifest_digest, trust),
+        )
+        if policy is None:
+            raise SkillValidatorError("no trusted acceptance policy exists for this exact Skill and Manifest")
+        broker_attestation = request.get("broker_attestation")
+        if not isinstance(broker_attestation, dict):
+            raise SkillValidatorError("signed Broker v2 replay attestation is required")
+        broker_request_id = _identity(broker_attestation.get("request_id"), "broker_request_id", _UUID_RE)
+        try:
+            verified_result = verify_broker_response(
+                broker_attestation,
+                public_key=self.broker_public_key,
+                expected_key_id=self.broker_key_id,
+                expected_request_id=broker_request_id,
+                expected_workspace_id=workspace_id,
+                expected_mission_context=context,
+                expected_profile_id=SKILL_REPLAY_PROFILE_ID,
+                expected_target=f"{skill_id}@{version}",
+                expected_skill_binding=dict(binding),
+            )
+        except (TypeError, ValueError) as exc:
+            raise SkillValidatorError("Broker Manifest v2 replay attestation is invalid or untrusted") from exc
+        replay_output = broker_attestation.get("skill_replay_output")
+        if verified_result.get("execution_succeeded") is not True:
+            raise SkillValidatorError("Broker reports that Skill execution did not succeed")
+        if not isinstance(replay_output, dict) or replay_output.get("success") is not True:
+            raise SkillValidatorError("Skill Replay did not produce a successful structured output")
+        results = _check_output(replay_output.get("value"), policy["checks"])
+        if not results:
+            raise SkillValidatorError("independent acceptance policy produced no check results")
+        passed = all(item["passed"] for item in results)
+        policy_sha256 = hashlib.sha256(_canonical_json(policy)).hexdigest()
+        broker_digest = broker_response_sha256(broker_attestation)
+        checks_sha256 = hashlib.sha256(_canonical_json({"checks": results})).hexdigest()
+        statement = {
+            "schema_version": VALIDATION_ATTESTATION_SCHEMA_V2,
+            "validation_id": str(uuid.uuid4()),
+            "validator_id": self.validator_id,
+            "policy_id": policy["policy_id"],
+            "policy_sha256": policy_sha256,
+            "workspace_id": workspace_id,
+            "tenant_id": context["tenant_id"],
+            "mission_run_id": context["mission_run_id"],
+            "node_id": context["node_id"],
+            "task_id": context["task_id"],
+            "broker_request_id": broker_request_id,
+            "broker_attestation_sha256": broker_digest,
+            "checks_sha256": checks_sha256,
+            "skill_id": skill_id,
+            "skill_version": version,
+            "content_sha256": digest,
+            "manifest_sha256": manifest_digest,
+            "trust_level": trust,
+            "passed": passed,
+        }
+        signature = self.signing_key.sign(_canonical_json(statement))
+        attestation = {
+            **statement,
+            "signature": {
+                "algorithm": VALIDATION_SIGNATURE_ALGORITHM,
+                "key_id": self.key_id,
+                "value": base64.b64encode(signature).decode("ascii"),
+            },
+        }
+        return {
+            "schema_version": VALIDATION_RESPONSE_SCHEMA_V2,
+            "request_id": request_id,
+            "attestation": attestation,
+            "policy_id": policy["policy_id"],
+            "checks": results,
+        }
+
+
 def verify_validation_response(
     response: Any, *, public_key: bytes, expected_key_id: str,
     expected_request_id: str, expected_identity: Mapping[str, str],
@@ -605,13 +787,18 @@ def verify_validation_response(
         "schema_version", "request_id", "attestation", "policy_id", "checks",
     }:
         raise SkillValidatorError("Validator response has unsupported or missing fields")
-    if response.get("schema_version") != VALIDATION_RESPONSE_SCHEMA or response.get("request_id") != expected_request_id:
+    response_schema = response.get("schema_version")
+    manifest_v2 = response_schema == VALIDATION_RESPONSE_SCHEMA_V2
+    expected_response_schema = VALIDATION_RESPONSE_SCHEMA_V2 if manifest_v2 else VALIDATION_RESPONSE_SCHEMA
+    expected_attestation_fields = _ATTESTATION_FIELDS_V2 if manifest_v2 else _ATTESTATION_FIELDS
+    expected_attestation_schema = VALIDATION_ATTESTATION_SCHEMA_V2 if manifest_v2 else VALIDATION_ATTESTATION_SCHEMA
+    if response_schema != expected_response_schema or response.get("request_id") != expected_request_id:
         raise SkillValidatorError("Validator response does not match the request")
     attestation = response.get("attestation")
-    if not isinstance(attestation, dict) or set(attestation) != _ATTESTATION_FIELDS:
+    if not isinstance(attestation, dict) or set(attestation) != expected_attestation_fields:
         raise SkillValidatorError("Validator attestation has unsupported or missing fields")
     if (
-        attestation.get("schema_version") != VALIDATION_ATTESTATION_SCHEMA
+        attestation.get("schema_version") != expected_attestation_schema
         or not isinstance(attestation.get("passed"), bool)
     ):
         raise SkillValidatorError("Validator attestation verdict is invalid")
@@ -623,6 +810,8 @@ def verify_validation_response(
     _identity(attestation.get("broker_request_id"), "broker_request_id", _UUID_RE)
     _identity(attestation.get("broker_attestation_sha256"), "broker_attestation_sha256", _DIGEST_RE)
     _identity(attestation.get("checks_sha256"), "checks_sha256", _DIGEST_RE)
+    if manifest_v2:
+        _identity(attestation.get("manifest_sha256"), "manifest_sha256", _DIGEST_RE)
     for field in ("tenant_id", "mission_run_id", "node_id", "task_id"):
         _identity(attestation.get(field), field)
     if response.get("policy_id") != attestation.get("policy_id"):
@@ -645,7 +834,7 @@ def verify_validation_response(
         "workspace_id", "tenant_id", "mission_run_id", "node_id", "task_id",
         "broker_request_id", "broker_attestation_sha256",
         "skill_id", "skill_version", "content_sha256", "trust_level",
-    )
+    ) + (("manifest_sha256",) if manifest_v2 else ())
     for field in expected_fields:
         if attestation.get(field) != expected_identity.get(field):
             raise SkillValidatorError("Validator attestation does not bind the expected replay and artifact")
@@ -669,6 +858,9 @@ def verify_validation_response(
 
 __all__ = [
     "VALIDATION_REQUEST_SCHEMA", "VALIDATION_RESPONSE_SCHEMA", "VALIDATION_POLICY_SCHEMA",
-    "SkillValidatorError", "normalize_validation_policies", "SkillValidatorService",
+    "VALIDATION_REQUEST_SCHEMA_V2", "VALIDATION_RESPONSE_SCHEMA_V2",
+    "VALIDATION_POLICY_SCHEMA_V2", "VALIDATION_ATTESTATION_SCHEMA_V2",
+    "SkillValidatorError", "normalize_validation_policies",
+    "normalize_manifest_validation_policies", "SkillValidatorService",
     "verify_validation_response",
 ]

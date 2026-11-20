@@ -10,7 +10,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
-from .skill_validator import VALIDATION_REQUEST_SCHEMA, SkillValidatorError, verify_validation_response
+from .skill_validator import (
+    VALIDATION_REQUEST_SCHEMA, VALIDATION_REQUEST_SCHEMA_V2,
+    SkillValidatorError, verify_validation_response,
+)
 
 MAX_VALIDATOR_REQUEST_BYTES = 1024 * 1024
 MAX_VALIDATOR_RESPONSE_BYTES = 128 * 1024
@@ -162,7 +165,9 @@ def request_skill_validation(
         raise SkillValidatorTransportError("Unix-domain sockets are unavailable")
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or not 0 < timeout_seconds <= 330:
         raise ValueError("timeout_seconds must be between zero and 330")
-    if not isinstance(request, dict) or request.get("schema_version") != VALIDATION_REQUEST_SCHEMA:
+    if not isinstance(request, dict) or request.get("schema_version") not in {
+        VALIDATION_REQUEST_SCHEMA, VALIDATION_REQUEST_SCHEMA_V2,
+    }:
         raise ValueError("request is not a Skill Validator request")
     if "request_id" not in request:
         request = {**request, "request_id": str(uuid.uuid4())}

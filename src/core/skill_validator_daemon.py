@@ -15,7 +15,10 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from .skill_validator import SkillValidatorError, SkillValidatorRequestStore, SkillValidatorService
+from .skill_validator import (
+    VALIDATION_POLICY_SCHEMA, VALIDATION_POLICY_SCHEMA_V2,
+    SkillValidatorError, SkillValidatorRequestStore, SkillValidatorService,
+)
 from .skill_validator_transport import serve_validator_listener
 
 LOGGER = logging.getLogger("evo.skill_validator")
@@ -95,7 +98,14 @@ def build_service(config: dict) -> tuple[SkillValidatorService, tuple[int, ...],
             validator_id=config["validator_id"], key_id=config["key_id"],
             signing_key=private_key, broker_public_key=broker_public_key,
             broker_key_id=config["broker_key_id"], workspace_ids=workspace_ids,
-            policies=policies.get("policies"),
+            policies=(
+                policies.get("policies")
+                if policies.get("schema_version") == VALIDATION_POLICY_SCHEMA else ()
+            ),
+            manifest_policies=(
+                policies.get("policies")
+                if policies.get("schema_version") == VALIDATION_POLICY_SCHEMA_V2 else ()
+            ),
             request_store=SkillValidatorRequestStore(config["replay_store_path"]),
         )
     except (SkillValidatorError, TypeError) as exc:
