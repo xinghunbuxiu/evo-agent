@@ -1,120 +1,118 @@
-# Skill Replay 真实接线审计（2026-11-19）
+# Skill Replay / Broker Artifact Store 接线审计（2026-11-20）
 
 ## 1. 审计基线
 
 - Repository: `xinghunbuxiu/evo-agent`
 - PR: #1（Open，未合并）
 - Branch: `automation/mission-learning-evidence-api-first`
-- Audited HEAD: `5114ff201898bb1b86998881a614a7baff0810c6`
-- Scope: Mission delivery candidate -> Worker result -> Broker staging/replay -> Validator -> immutable Artifact Store.
+- Audited HEAD: `cd2e015f8b3c91d94cdab806e44668ffb4e61376`
+- Scope: Mission candidate -> Broker stage/replay -> independent Validator -> immutable Artifact Store -> Catalog/reuse.
+- CI at audited HEAD:
+  - Python regression run `44656030826`: success.
+  - Admin UI Build run `44656030704`: success.
 
-本文件记录代码调用链审计结果，不代表端到端闭环已经完成。
+本审计区分“模块存在”“API 可调用”和“生产链路已端到端贯通”。只有当前 HEAD 的实际调用和协议绑定才算完成。
 
-## 2. 已确认的真实调用链
+## 2. Mission 入口与授权边界
 
-### 2.1 Worker 返回候选的传输能力存在
+当前提供显式 API：
 
-`src/workers/javascript_reverse/runtime.py` 中的 reconstruct handler 会从能力执行结果中提取并保留 `skill_candidate`。  
-`tests/test_javascript_skill_candidate_transport.py` 覆盖了“能力结果显式带有候选时，Worker handler 能把候选带回任务结果”。
+`POST /api/missions/{mission_run_id}/skills/{skill_id}/replay`
 
-这只证明传输能力，不证明生产能力会生成候选。
+路由执行以下检查后才调用 Replay Runtime：
 
-### 2.2 当前 JavaScript 能力没有生成 Executable Skill
+- 必须存在登录会话；
+- Mission run 必须存在且租户授权通过；
+- 仅 tenant_admin / member 可发起；
+- node_id 必须属于该 Mission；
+- 请求只允许 `node_id`，并要求规范 UUID `Idempotency-Key`；
+- 先在 Mission action 中持久化请求身份，再产生 Broker side effect；
+- 重复请求返回既有结果或冲突，不盲目再次执行。
 
-调用关系：
+因此，当前是“经授权的显式 Replay API”，不是每次 Mission 交付完成后自动触发 Replay。普通 Mission 在 Replay Runtime 未配置时仍可执行。
+
+## 3. Executable Candidate 的生产来源
+
+当前 JavaScript 生产链路：
 
 ```text
 JavaScriptCapabilityProvider.execute(reconstruct)
-  -> domains.javascript.commands.reconstruct_project
+  -> reconstruct_project
   -> JSReconstructor.create_plan
   -> JSReconstructor.execute_plan
   -> TaskResult.data
   -> Worker reconstruct handler
-  -> Mission extract_task_snapshot
+  -> Mission task snapshot
   -> create_mission_delivery_skill_candidate
 ```
 
-在审计 HEAD：
+在本审计 HEAD：
 
-- `src/domains/javascript/reconstructor.py::JSReconstructor.execute_plan()` 返回 `success`、`target_dir`、`framework`、组件数量及 `skill_template`。
-- 返回对象没有 `skill_candidate`。
-- `src/domains/javascript/provider.py::JavaScriptCapabilityProvider.execute()` 只是把重建结果放入 `TaskResult.data`，没有调用模型生成代码。
-- `src/admin/model_provider_runtime.py` 已有租户级 OpenAI-compatible 模型调用能力，但当前 JavaScript reconstruct 路径没有调用它来生成可执行候选。
+- `JSReconstructor.execute_plan()` 返回重建结果、目标目录、框架、组件数和 `skill_template`，没有生成 `skill_candidate`。
+- `JavaScriptCapabilityProvider` 传递重建结果，不调用模型生成 Python Skill。
+- Worker 的候选传输能力只说明上游显式返回候选时可以透传，不代表当前 reconstruct 能力会生成候选。
+- 因此，正常生产路径没有 Executable Candidate 时会沉淀为 `non_executable_recipe`，不能进入 Broker。
+- 已有显式候选创建入口会做 Python AST/入口契约检查并绑定来源，但该入口本身不调用 LLM、不执行代码、不提升信任等级。
 
-因此，当前生产路径通常进入 `create_mission_delivery_skill_candidate()` 的 Recipe 分支。Recipe 的 `execution_contract.kind` 为 `non_executable_recipe`，并被明确标记为 `replay_eligible=false`。这条路径是安全的，但不是 Executable Skill 自动生成。
+结论：当前不能宣称系统已经自动把 Mission 经验生成成可执行 Skill。模型生成仍是独立待实现能力；生成结果只能是 Draft，必须经过静态检查、Broker Replay 和独立 Validator。
 
-### 2.3 Mission 交付门禁已经存在
+## 4. Broker 与 Artifact Store 当前边界
 
-`src/workers/javascript_reverse/runtime.py::complete_javascript_reverse_promotion_action()` 在沉淀交付经验前检查：
+### 已实现
 
-- reconstruct 的 `evaluation_verdict == pass`；
-- `evaluation_metrics.has_target_dir is True`；
-- reconstruct task evidence ID 存在。
+- Broker 有独立 Unix Socket 服务和请求协议；Admin/Mission 不在本进程执行候选代码。
+- Candidate Stage 支持 v1 和 Manifest v2 两种请求形状。
+- v2 Stage 会规范化 Manifest，核对 Skill ID/version，重算 canonical Manifest SHA-256，并把 Manifest 与代码摘要一起写入 Broker 自有候选存储。
+- Stage 回执由 Broker 签名；客户端校验回执身份和签名。
+- Artifact Store 使用 Broker 私有目录、原子 create-once 发布和 readback 校验，避免覆盖已发布内容。
+- Broker Catalog 不把 Draft 候选当成已发布 Artifact。
+- 最新 HEAD 增加了 Manifest-bearing Candidate 的 fail-closed 测试：在当前 v2 全链路未完成时，Replay 必须在回调、Stage 和执行副作用前拒绝该候选。
 
-门禁不满足时，Promotion 被阻断，不保存成功交付 Experience，也不生成候选。
+### 尚未贯通
 
-`src/admin/knowledge_runtime.py::create_mission_delivery_skill_candidate()` 对交付验收再次检查，并且只接受显式 Executable Candidate 的 `python_run_context` 契约和同步模块级 `run(context)` 入口。没有候选时会保存 Recipe，而不会把自然语言误当 Python。
+当前 Mission `replay_candidate()` 对带 `parameters.manifest` 的候选明确抛出配置错误。原因是它后续仍走 v1 binding / execution / Validator / promotion 路径。
 
-### 2.4 Broker / Validator Runtime 是可选 API 能力，不是自动 Mission 接线
+Validator 当前仍只接受：
 
-- `src/admin/server.py` 启动时创建可选 `SkillReplayRuntime`，并将其注入 Mission 相关路由。
-- `src/admin/skill_replay_runtime.py::replay_candidate()` 提供候选 staging、Broker Replay、Validator 请求和 Broker promotion 的流程。
-- 在审计 HEAD 的 `server.py` 中，没有发现 Mission promotion handler 自动调用 `replay_candidate()` 的调用点。
-- 因此，适配器和路由存在，不等于每次 Mission 交付后会自动执行 Replay。
+- `mission.skill-validation-request.v1`；
+- `mission.skill-replay-binding.v1`；
+- 以 tenant、Skill ID/version、code digest、trust level 为键的策略；
+- 不包含 `manifest_sha256` 的签名 attestation。
 
-当前自动 Mission 路径只创建本地 Draft/Recipe 候选；Replay 仍是独立的显式 Runtime/API 流程。
+因此，虽然 Candidate Stage v2 和 Manifest v2 binding helper 已存在，仍不能把它们描述为完整的 Manifest v2 Replay 或发布链路。Artifact schema 常量的版本号也不能替代端到端 digest 验证。
 
-## 3. 另一个必须先解决的协议缺口：Replay 输入
+## 5. Replay Input Contract 缺口
 
-当前 `SkillReplayRuntime.replay_candidate()` 构造的 Mission context 只有：
+当前 Mission Replay context 主要承载身份字段：
 
-- `tenant_id`
-- `mission_run_id`
-- `node_id`
-- `task_id`
+- tenant_id
+- mission_run_id
+- node_id
+- task_id
 
-`SkillReplayMissionAdapter`、`build_skill_replay_execution_request_id()` 和当前 v1 Broker Mission context 校验均要求这组精确身份字段。Replay 调用没有传入经过 schema 校验的业务输入对象，也没有把原任务输入、目标文件引用或输出契约作为独立字段传入 Skill 的 `run(context)`。
+调用给 Broker 的 input_summary 是说明性文本，不是经过 Manifest input_schema 校验的业务输入对象。当前不能证明已发布 Skill 能在下一次 Mission 中接收受约束的新输入并完成同类业务工作。
 
-这意味着当前 Replay 适合验证“某个绑定候选在 Broker 环境中能否被调用并产生结构化输出”，但尚不能证明它能在下一次真实任务中接收新的业务输入并完成同一类业务工作。
+不能把任意任务 payload、绝对路径或原始敏感数据塞进身份 context。必须单独定义版本化、限长、租户绑定、摘要绑定的 Replay Input Contract，并定义允许传入的结构化值与受控文件引用。
 
-不能通过把原始路径或任意任务 payload 直接塞进现有身份 context 来绕过此缺口。需要单独定义版本化、限长、schema 校验、租户绑定和摘要绑定的 Replay Input Contract，并明确哪些输入可进入隔离执行环境。
+## 6. 下一阶段实施顺序
 
-## 4. Manifest 状态
+按依赖关系推进，不能提前移除当前 fail-closed：
 
-`docs/BROKER_PUBLISHED_SKILL_MANIFEST_DESIGN.md` 将 Slice B 标记为进行中。当前设计要求 Manifest 摘要与代码摘要一起被 Broker、Validator、Artifact Store、Catalog 和 Mission binding 绑定。
+1. **Validator v2**：增加严格的 v2 request/binding；策略身份绑定 `manifest_sha256`；Validator 验证 Broker 对应的 v2 execution receipt；签名 attestation 同时绑定 code digest 和 Manifest digest。v1 保持独立，不接受混合字段。
+2. **Broker execution binding**：执行请求、执行回执、请求幂等身份都必须绑定精确 Manifest digest，不能只在 Stage 阶段校验。
+3. **Artifact Store v2 publication**：验证 Validator 的 v2 签名和精确 digest；create-once 保存 code + canonical Manifest + 两个摘要；readback 对两者重新计算。
+4. **Catalog v2**：只返回经过签名的受限 Manifest 元数据和摘要；不泄漏代码、Mission 原始上下文或内部路径。
+5. **Mission v2 Replay**：先持久化 v2 binding 和所有确定性 request ID，再触发副作用；恢复流程也必须重新核验每份签名与摘要。
+6. **Replay Input Contract**：Manifest 声明输入/输出 schema，Mission 输入经 schema、大小、租户和文件引用规则校验后进入 Broker；输入摘要加入执行证据与 Validator attestation。
+7. **真实 Socket 集成测试**：覆盖 Stage -> Execute -> Validator -> Promotion -> Catalog -> 新 Mission Replay；不能只用 mock 适配器证明端到端。
 
-当前 Mission `replay_candidate()` 路径仍使用 v1 candidate staging helper，只提交代码与身份，没有将 Manifest 贯穿 staging -> validation -> publication -> Catalog -> replay。因此不能把 Manifest v2 设计文档或独立 Manifest 校验模块的存在，描述为已完成端到端 Manifest 闭环。
+## 7. 不可突破的验收边界
 
-## 5. 当前 CI 事实
+- Recipe 永远不是 Executable Skill。
+- LLM 生成成功不等于 Skill 验证通过。
+- Broker 执行成功不等于 Validator 通过。
+- Validator 通过不等于业务交付验收通过。
+- 只有绑定精确 code + Manifest + Mission/input 身份的独立 Validator 证明，才可用于不可变 Artifact 发布。
+- 缺少配置、签名、证据、摘要或状态不确定时 fail closed；普通 Mission 不因此被阻断。
+- 未完成真实调用链和真实 Socket 集成测试前，不开启自动 Catalog 匹配或自动 Skill 复用。
 
-审计 HEAD `5114ff201898bb1b86998881a614a7baff0810c6`：
-
-- Admin UI Build run `44536724231`：成功。
-- Python Regression run `44536723893`：失败在依赖安装阶段。
-- 失败下载项：`pydantic_core-2.50.5` wheel。
-- 日志显示下载速度约 738 bytes/s，最终触发 `files.pythonhosted.org` read timeout。
-- Regression suite 步骤被跳过，故本次没有 Python 测试通过/失败数量。
-
-此前将 pip timeout 调为 120 秒、retries 调为 10 次，未解决本次 Runner 下载问题。下一步应让 Runner 支持部署级可配置的可信 PyPI 镜像/代理或预热 wheel cache；不应在 workflow 中硬编码某家镜像，也不应跳过依赖或测试。
-
-## 6. 实施顺序与边界
-
-按项目结构治理文档的 Phase 0 / Phase 4 约束，先完成配置、数据、模块职责和真实输入边界审计，再推进接线。
-
-1. 定义 Replay Input Contract：输入 schema、大小上限、允许的文件引用、敏感字段规则、输入摘要和版本兼容。
-2. 明确 Skill Manifest v2 与 Replay Input Contract 的关系：Manifest 声明输入/输出 schema；Mission 提供符合 schema 的输入；Broker 对输入摘要和绑定进行签名。
-3. 确定 Executable Skill 生成责任归属。模型生成只产生 Draft；提示词、输出 JSON、AST/Manifest 校验、失败降级和模型来源证据均需测试。
-4. 将真实 Mission Promotion 接入 Replay Runtime；先持久化 candidate binding 和幂等请求 ID，再产生 Broker side effect。
-5. 只有 Broker 执行成功、独立 Validator 对精确代码/Manifest/输入/输出证据签名通过，才允许发布不可变 Artifact。
-6. 业务交付验收仍由 Mission 的业务验收流程决定；不得把 Replay 或 Validator 通过等同于下一次业务任务成功。
-
-## 7. 禁止的捷径
-
-- 不把 Recipe 改名为 Executable Skill。
-- 不在 Admin/Mission 进程执行候选代码。
-- 不因模型生成成功就赋予 verified/cloud trust。
-- 不让 Worker 自己签发独立 Validator 证明。
-- 不把 Broker 执行成功、Validator 通过、业务验收通过合并成一个布尔值。
-- 不把任务路径、任意文件系统路径或原始敏感 payload 混入当前身份 context。
-- 不新增没有真实调用方的并行 Runtime、Manager、Store 或协议层。
-- 不以 mock 的 Mission -> Broker 调用测试替代真实 Socket 集成证据。
