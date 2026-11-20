@@ -755,6 +755,37 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         stage.assert_not_called()
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
+    def test_manifest_candidate_fails_closed_before_any_broker_side_effect(self, stage):
+        from admin.knowledge_runtime import write_skill_candidate
+
+        candidate = self._skill()
+        candidate.parameters["manifest"] = {"schema_version": "mission.skill-manifest.v1"}
+        write_skill_candidate(self.workspace, "tenant-a", candidate)
+        runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
+        runtime.adapter.execute = lambda *args, **kwargs: self.fail(
+            "Manifest candidate must not reach the Broker executor"
+        )
+        bound = []
+        with self.assertRaisesRegex(
+            SkillReplayRuntimeConfigurationError,
+            "Manifest-bearing candidates are blocked",
+        ):
+            runtime.replay_candidate(
+                tenant_id="tenant-a",
+                mission_run={
+                    "mission_run_id": "mission-1",
+                    "tenant_id": "tenant-a",
+                    "plan": {"nodes": [{"id": "node-1"}]},
+                },
+                node_id="node-1",
+                task_id="task-1",
+                skill_id="skill-demo",
+                on_candidate_bound=bound.append,
+            )
+        stage.assert_not_called()
+        self.assertEqual(bound, [])
+
+    @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_rejects_recipe_before_broker_staging(self, stage):
         from admin.knowledge_runtime import write_skill_candidate
 
