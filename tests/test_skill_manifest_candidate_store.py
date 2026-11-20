@@ -10,7 +10,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.skill_artifact_store import SkillArtifactStore, SkillArtifactStoreError
-from core.skill_manifest import manifest_sha256
+from core.skill_manifest import manifest_sha256, normalize_skill_manifest
 
 
 class ManifestCandidateStoreTests(unittest.TestCase):
@@ -83,7 +83,7 @@ class ManifestCandidateStoreTests(unittest.TestCase):
             manifest_sha256=identity["manifest_sha256"],
         )
         self.assertEqual(loaded.code, self.skill.code)
-        self.assertEqual(loaded.manifest, self.manifest)
+        self.assertEqual(loaded.manifest, normalize_skill_manifest(self.manifest))
         self.assertEqual(loaded.content_sha256, identity["content_sha256"])
         self.assertEqual(loaded.manifest_sha256, identity["manifest_sha256"])
         self.assertEqual(loaded.tenant_id, "tenant-a")
