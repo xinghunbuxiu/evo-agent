@@ -25,6 +25,7 @@ from .skill_manifest import normalize_skill_manifest, manifest_sha256 as compute
 
 
 ARTIFACT_SCHEMA = "mission.skill-artifact.v2"
+ARTIFACT_MANIFEST_SCHEMA = "mission.skill-artifact.v3"
 CANDIDATE_ARTIFACT_SCHEMA = "mission.skill-candidate-artifact.v1"
 CANDIDATE_ARTIFACT_V2_SCHEMA = "mission.skill-candidate-artifact.v2"
 VALIDATION_ATTESTATION_SCHEMA = "mission.skill-validation-attestation.v3"
@@ -35,6 +36,7 @@ _ATTESTATION_FIELDS = {
     "broker_request_id", "broker_attestation_sha256", "checks_sha256",
     "skill_id", "skill_version", "content_sha256", "trust_level", "passed", "signature",
 }
+_ATTESTATION_FIELDS_V2 = _ATTESTATION_FIELDS | {"manifest_sha256"}
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
 _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -229,14 +231,18 @@ class SkillArtifactStore:
     def _verify_validation_attestation(
         self, attestation: Any, *, tenant_id: str, skill_id: str,
         version: str, digest: str, trust_level: str,
+        manifest_sha256: str | None = None,
         expected_workspace_id: str | None = None,
         expected_mission_context: Mapping[str, Any] | None = None,
         expected_broker_request_id: str | None = None,
         expected_broker_attestation_sha256: str | None = None,
     ) -> None:
-        if not isinstance(attestation, Mapping) or set(attestation) != _ATTESTATION_FIELDS:
+        manifest_v2 = manifest_sha256 is not None
+        attestation_fields = _ATTESTATION_FIELDS_V2 if manifest_v2 else _ATTESTATION_FIELDS
+        expected_schema = "mission.skill-validation-attestation.v4" if manifest_v2 else VALIDATION_ATTESTATION_SCHEMA
+        if not isinstance(attestation, Mapping) or set(attestation) != attestation_fields:
             raise SkillArtifactStoreError("validation attestation has unsupported or missing fields")
-        if attestation.get("schema_version") != VALIDATION_ATTESTATION_SCHEMA:
+        if attestation.get("schema_version") != expected_schema:
             raise SkillArtifactStoreError("unsupported validation attestation schema")
         if attestation.get("passed") is not True:
             raise SkillArtifactStoreError("Skill validation attestation did not pass")
@@ -260,6 +266,8 @@ class SkillArtifactStore:
             "tenant_id": tenant_id, "skill_id": skill_id, "skill_version": version,
             "content_sha256": digest, "trust_level": trust_level,
         }
+        if manifest_v2:
+            expected["manifest_sha256"] = _identity(manifest_sha256, "manifest_sha256", _DIGEST_RE)
         if any(attestation.get(field) != value for field, value in expected.items()):
             raise SkillArtifactStoreError("validation attestation does not bind this exact Skill artifact")
         if expected_workspace_id is not None and workspace_id != expected_workspace_id:
@@ -287,7 +295,7 @@ class SkillArtifactStore:
         encoded = signature.get("value")
         if not isinstance(encoded, str) or not encoded:
             raise SkillArtifactStoreError("validation attestation signature is missing")
-        payload = {key: attestation[key] for key in _ATTESTATION_FIELDS if key != "signature"}
+        payload = {key: attestation[key] for key in attestation_fields if key != "signature"}
         try:
             self.validator_public_key.verify(base64.b64decode(encoded, validate=True), _canonical_json(payload))
         except (ValueError, TypeError, binascii.Error, InvalidSignature) as exc:
@@ -428,6 +436,184 @@ class SkillArtifactStore:
             "content_sha256": digest,
             "trust_level": trust,
         }
+
+    def publish_manifest(
+        self, *, tenant_id: str, skill: Any, manifest: Mapping[str, Any],
+        manifest_sha256: str, validation_attestation: Mapping[str, Any],
+        workspace_id: str, mission_context: Mapping[str, Any],
+        broker_request_id: str, broker_attestation_sha256: str,
+    ) -> dict[str, str]:
+        """Publish a Manifest-bearing Skill only with a v2 Validator attestation."""
+        skill_id = _identity(getattr(skill, "id", None), "skill_id", _ID_RE)
+        version = _identity(getattr(skill, "version", None), "skill_version", _VERSION_RE)
+        code = getattr(skill, "code", None)
+        if not isinstance(code, str) or not code.strip():
+            raise SkillArtifactStoreError("skill code must be a non-empty UTF-8 string")
+        try:
+            code_bytes = code.encode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise SkillArtifactStoreError("skill code is not valid UTF-8") from exc
+        try:
+            normalized_manifest = normalize_skill_manifest(manifest)
+        except ValueError as exc:
+            raise SkillArtifactStoreError("published Skill Manifest is invalid") from exc
+        actual_manifest_digest = compute_skill_manifest_sha256(normalized_manifest)
+        expected_manifest_digest = _identity(manifest_sha256, "manifest_sha256", _DIGEST_RE)
+        if (
+            normalized_manifest["skill_id"] != skill_id
+            or normalized_manifest["skill_version"] != version
+            or actual_manifest_digest != expected_manifest_digest
+        ):
+            raise SkillArtifactStoreError("published Skill Manifest identity or digest does not match")
+        trust = getattr(getattr(skill, "trust_level", None), "value", getattr(skill, "trust_level", None))
+        if trust not in _TRUST_LEVELS:
+            raise SkillArtifactStoreError("only verified or cloud Skills may be published")
+        normalized_tenant = _identity(tenant_id, "tenant_id", _ID_RE)
+        normalized_workspace = _identity(workspace_id, "workspace_id", _WORKSPACE_ID_RE)
+        if not isinstance(mission_context, Mapping) or set(mission_context) != {
+            "tenant_id", "mission_run_id", "node_id", "task_id",
+        }:
+            raise SkillArtifactStoreError("Mission context has unsupported or missing fields")
+        normalized_context = {
+            key: _identity(mission_context[key], f"mission_context.{key}", _ID_RE)
+            for key in ("tenant_id", "mission_run_id", "node_id", "task_id")
+        }
+        if normalized_context["tenant_id"] != normalized_tenant:
+            raise SkillArtifactStoreError("Mission context tenant does not match Skill artifact tenant")
+        request_id = _identity(broker_request_id, "broker_request_id", _UUID_RE)
+        broker_digest = _identity(broker_attestation_sha256, "broker_attestation_sha256", _DIGEST_RE)
+        code_digest = hashlib.sha256(code_bytes).hexdigest()
+        self._verify_validation_attestation(
+            validation_attestation, tenant_id=normalized_tenant,
+            skill_id=skill_id, version=version, digest=code_digest,
+            manifest_sha256=expected_manifest_digest, trust_level=trust,
+            expected_workspace_id=normalized_workspace,
+            expected_mission_context=normalized_context,
+            expected_broker_request_id=request_id,
+            expected_broker_attestation_sha256=broker_digest,
+        )
+        artifact = {
+            "schema_version": ARTIFACT_MANIFEST_SCHEMA,
+            "tenant_id": normalized_tenant, "skill_id": skill_id,
+            "skill_version": version, "trust_level": trust,
+            "content_sha256": code_digest,
+            "manifest_sha256": expected_manifest_digest,
+            "manifest": normalized_manifest, "code": code,
+            "validation_attestation": dict(validation_attestation),
+        }
+        payload = _canonical_json(artifact)
+        path = self._artifact_path(normalized_tenant, skill_id, version, create=True)
+        collision = "Skill artifact version already exists; publish a new version"
+        try:
+            _write_create_once(path, payload, collision_message=collision)
+        except SkillArtifactStoreError as exc:
+            if str(exc) != collision:
+                raise
+            _existing_create_once_matches(path, payload, collision_message=collision)
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v2",
+            "skill_id": skill_id, "skill_version": version,
+            "content_sha256": code_digest, "manifest_sha256": expected_manifest_digest,
+            "trust_level": trust, "mission_context": normalized_context,
+        }
+        try:
+            persisted = self.load_published_manifest(binding)
+        except Exception as exc:
+            raise SkillArtifactStoreError("published Manifest Skill failed readback verification") from exc
+        if (
+            persisted.id != skill_id or persisted.version != version
+            or persisted.tenant_id != normalized_tenant or persisted.code != code
+            or persisted.content_sha256 != code_digest
+            or persisted.manifest_sha256 != expected_manifest_digest
+            or persisted.manifest != normalized_manifest or persisted.trust_level != trust
+        ):
+            raise SkillArtifactStoreError("published Manifest Skill readback identity mismatch")
+        return {
+            "tenant_id": normalized_tenant, "skill_id": skill_id,
+            "skill_version": version, "content_sha256": code_digest,
+            "manifest_sha256": expected_manifest_digest, "trust_level": trust,
+        }
+
+    def load_published_manifest(self, binding: Any) -> SimpleNamespace:
+        """Load a published v2 binding and re-verify code, Manifest and Validator signature."""
+        fields = _BINDING_FIELDS | {"manifest_sha256"}
+        if not isinstance(binding, Mapping) or set(binding) != fields:
+            raise SkillArtifactStoreError("Manifest Skill binding has unsupported or missing fields")
+        if binding.get("schema_version") != "mission.skill-replay-binding.v2":
+            raise SkillArtifactStoreError("unsupported Manifest Skill binding schema")
+        context = binding.get("mission_context")
+        if not isinstance(context, Mapping) or set(context) != {
+            "tenant_id", "mission_run_id", "node_id", "task_id",
+        }:
+            raise SkillArtifactStoreError("Manifest Skill binding Mission context is invalid")
+        tenant = _identity(context.get("tenant_id"), "tenant_id", _ID_RE)
+        for field in ("mission_run_id", "node_id", "task_id"):
+            _identity(context.get(field), field, _ID_RE)
+        skill = _identity(binding.get("skill_id"), "skill_id", _ID_RE)
+        version = _identity(binding.get("skill_version"), "skill_version", _VERSION_RE)
+        code_digest = _identity(binding.get("content_sha256"), "content_sha256", _DIGEST_RE)
+        manifest_digest = _identity(binding.get("manifest_sha256"), "manifest_sha256", _DIGEST_RE)
+        trust = binding.get("trust_level")
+        if trust not in _TRUST_LEVELS:
+            raise SkillArtifactStoreError("Manifest Skill binding trust level is invalid")
+        path = self._artifact_path(tenant, skill, version, create=False)
+        try:
+            info = path.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o222
+                or info.st_size > 2 * 1024 * 1024
+            ):
+                raise SkillArtifactStoreError("published Manifest Skill artifact is unsafe or oversized")
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+        except SkillArtifactStoreError:
+            raise
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SkillArtifactStoreError("published Manifest Skill artifact is unavailable or malformed") from exc
+        expected_fields = {
+            "schema_version", "tenant_id", "skill_id", "skill_version",
+            "trust_level", "content_sha256", "manifest_sha256", "manifest",
+            "code", "validation_attestation",
+        }
+        if not isinstance(artifact, dict) or set(artifact) != expected_fields:
+            raise SkillArtifactStoreError("published Manifest Skill artifact has unsupported or missing fields")
+        if (
+            artifact.get("schema_version") != ARTIFACT_MANIFEST_SCHEMA
+            or artifact.get("tenant_id") != tenant or artifact.get("skill_id") != skill
+            or artifact.get("skill_version") != version or artifact.get("trust_level") != trust
+            or artifact.get("content_sha256") != code_digest
+            or artifact.get("manifest_sha256") != manifest_digest
+        ):
+            raise SkillArtifactStoreError("published Manifest Skill identity does not match binding")
+        code = artifact.get("code")
+        if not isinstance(code, str) or not code.strip():
+            raise SkillArtifactStoreError("published Manifest Skill code is invalid")
+        actual_code_digest = hashlib.sha256(code.encode("utf-8", errors="strict")).hexdigest()
+        try:
+            normalized_manifest = normalize_skill_manifest(artifact.get("manifest"))
+        except ValueError as exc:
+            raise SkillArtifactStoreError("published Manifest Skill Manifest is invalid") from exc
+        actual_manifest_digest = compute_skill_manifest_sha256(normalized_manifest)
+        if (
+            actual_code_digest != code_digest
+            or actual_manifest_digest != manifest_digest
+            or normalized_manifest != artifact.get("manifest")
+            or normalized_manifest["skill_id"] != skill
+            or normalized_manifest["skill_version"] != version
+        ):
+            raise SkillArtifactStoreError("published Manifest Skill code or Manifest digest mismatch")
+        self._verify_validation_attestation(
+            artifact.get("validation_attestation"),
+            tenant_id=tenant, skill_id=skill, version=version,
+            digest=actual_code_digest, manifest_sha256=actual_manifest_digest,
+            trust_level=trust,
+        )
+        return SimpleNamespace(
+            id=skill, version=version, code=code, trust_level=trust,
+            tenant_id=tenant, content_sha256=actual_code_digest,
+            manifest=normalized_manifest, manifest_sha256=actual_manifest_digest,
+        )
+
 
     def stage_candidate(
         self, *, tenant_id: str, skill: Any,
@@ -849,6 +1035,7 @@ class SkillArtifactStore:
 
 __all__ = [
     "ARTIFACT_SCHEMA",
+    "ARTIFACT_MANIFEST_SCHEMA",
     "CANDIDATE_ARTIFACT_SCHEMA",
     "VALIDATION_ATTESTATION_SCHEMA",
     "SkillArtifactStore",
