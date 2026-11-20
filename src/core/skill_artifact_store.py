@@ -554,7 +554,7 @@ class SkillArtifactStore:
         code_digest = _identity(binding.get("content_sha256"), "content_sha256", _DIGEST_RE)
         manifest_digest = _identity(binding.get("manifest_sha256"), "manifest_sha256", _DIGEST_RE)
         trust = binding.get("trust_level")
-        if trust not in _TRUST_LEVELS:
+        if not isinstance(trust, str) or trust not in _TRUST_LEVELS:
             raise SkillArtifactStoreError("Manifest Skill binding trust level is invalid")
         path = self._artifact_path(tenant, skill, version, create=False)
         try:
@@ -606,7 +606,7 @@ class SkillArtifactStore:
             artifact.get("validation_attestation"),
             tenant_id=tenant, skill_id=skill, version=version,
             digest=actual_code_digest, manifest_sha256=actual_manifest_digest,
-            trust_level=trust,
+            trust_level=trust, expected_mission_context=context,
         )
         return SimpleNamespace(
             id=skill, version=version, code=code, trust_level=trust,

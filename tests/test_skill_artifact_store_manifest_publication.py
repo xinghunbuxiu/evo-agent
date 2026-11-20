@@ -110,14 +110,14 @@ class ArtifactStoreManifestPublicationTests(unittest.TestCase):
             artifact = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(artifact["schema_version"], ARTIFACT_MANIFEST_SCHEMA)
             self.assertEqual(artifact["manifest_sha256"], manifest_digest)
-            with self.assertRaises(SkillArtifactStoreError):
-                store.publish_manifest(
-                    tenant_id=context["tenant_id"], skill=skill, manifest=manifest,
-                    manifest_sha256=manifest_digest, validation_attestation=attestation,
-                    workspace_id="manifest-workspace", mission_context=context,
-                    broker_request_id=broker_request_id,
-                    broker_attestation_sha256=broker_digest,
-                )
+            retry_identity = store.publish_manifest(
+                tenant_id=context["tenant_id"], skill=skill, manifest=manifest,
+                manifest_sha256=manifest_digest, validation_attestation=attestation,
+                workspace_id="manifest-workspace", mission_context=context,
+                broker_request_id=broker_request_id,
+                broker_attestation_sha256=broker_digest,
+            )
+            self.assertEqual(retry_identity, identity)
 
     def test_load_rejects_manifest_substitution_after_publication(self):
         with __import__("tempfile").TemporaryDirectory() as temp:
