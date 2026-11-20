@@ -25,6 +25,10 @@ from .execution_results import build_execution_result
 from .sandbox_broker_protocol import (
     BROKER_REQUEST_SCHEMA,
     BROKER_RESPONSE_SCHEMA,
+    BROKER_MANIFEST_REQUEST_SCHEMA,
+    BROKER_MANIFEST_RESPONSE_SCHEMA,
+    SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+    SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA,
     BROKER_SIGNATURE_ALGORITHM,
     _canonical_json,
     _normalize_mission_context,
@@ -252,7 +256,8 @@ def validate_broker_request(request: object) -> dict:
     """Validate the exact wire shape before workspace lookup or execution."""
     if not isinstance(request, dict) or set(request) != _REQUEST_FIELDS:
         raise BrokerRequestRejected("broker request has unsupported or missing fields")
-    if request.get("schema_version") != BROKER_REQUEST_SCHEMA:
+    request_schema = request.get("schema_version")
+    if request_schema not in {BROKER_REQUEST_SCHEMA, BROKER_MANIFEST_REQUEST_SCHEMA}:
         raise BrokerRequestRejected("unsupported broker request schema")
     request_id = request.get("request_id")
     if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
@@ -286,6 +291,11 @@ def validate_broker_request(request: object) -> dict:
         binding = _normalize_skill_binding(request.get("skill_binding"), expected_context=mission_context)
     except ValueError as exc:
         raise BrokerRequestRejected("skill_binding is invalid") from exc
+    manifest_v2 = bool(
+        binding and binding["schema_version"] == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+    )
+    if manifest_v2 != (request_schema == BROKER_MANIFEST_REQUEST_SCHEMA):
+        raise BrokerRequestRejected("Broker request schema does not match its Skill binding version")
     if profile_id == SKILL_REPLAY_PROFILE_ID:
         if binding is None:
             raise BrokerRequestRejected("Skill Replay requires an immutable Skill binding")
@@ -788,9 +798,21 @@ class SandboxBrokerService:
             return cached_response
         skill_artifact = None
 
+        manifest_v2 = bool(
+            binding and binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+        )
         if binding is not None:
             try:
-                skill = self.skill_artifact_store.load_for_binding(binding)
+                if manifest_v2:
+                    skill = self.skill_artifact_store.load_candidate_manifest(
+                        tenant_id=validated["mission_context"]["tenant_id"],
+                        skill_id=binding["skill_id"],
+                        skill_version=binding["skill_version"],
+                        content_sha256=binding["content_sha256"],
+                        manifest_sha256=binding["manifest_sha256"],
+                    )
+                else:
+                    skill = self.skill_artifact_store.load_for_binding(binding)
             except Exception as exc:
                 raise BrokerRequestRejected("trusted Skill artifact failed independent verification") from exc
             if getattr(skill, "tenant_id", None) != validated["mission_context"]["tenant_id"]:
@@ -810,11 +832,15 @@ class SandboxBrokerService:
                 timeout_seconds=validated["timeout_seconds"],
             )
             skill_artifact = {
-                "schema_version": SKILL_ARTIFACT_RESOLUTION_SCHEMA,
+                "schema_version": (
+                    SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA
+                    if manifest_v2 else SKILL_ARTIFACT_RESOLUTION_SCHEMA
+                ),
                 "skill_id": binding["skill_id"],
                 "skill_version": binding["skill_version"],
                 "content_sha256": binding["content_sha256"],
                 "trust_level": binding["trust_level"],
+                **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
             }
         else:
             spec = resolve_execution_profile(root, {
@@ -841,7 +867,7 @@ class SandboxBrokerService:
             _skill_replay_output_from_runner(output) if binding is not None else None
         )
         signed_payload = {
-            "schema_version": BROKER_RESPONSE_SCHEMA,
+            "schema_version": BROKER_MANIFEST_RESPONSE_SCHEMA if manifest_v2 else BROKER_RESPONSE_SCHEMA,
             "request_id": request_id,
             "workspace_id": workspace_id,
             "mission_context": validated["mission_context"],

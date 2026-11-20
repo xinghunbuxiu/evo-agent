@@ -24,6 +24,10 @@ from .execution_results import EXECUTION_RESULT_SCHEMA
 
 BROKER_REQUEST_SCHEMA = "mission.sandbox-broker-request.v3"
 BROKER_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v4"
+BROKER_MANIFEST_REQUEST_SCHEMA = "mission.sandbox-broker-request.v4"
+BROKER_MANIFEST_RESPONSE_SCHEMA = "mission.sandbox-broker-response.v5"
+SKILL_REPLAY_MANIFEST_BINDING_SCHEMA = "mission.skill-replay-binding.v2"
+SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA = "mission.skill-artifact-resolution.v2"
 SKILL_ARTIFACT_RESOLUTION_SCHEMA = "mission.skill-artifact-resolution.v1"
 SKILL_REPLAY_OUTPUT_SCHEMA = "mission.skill-replay-output.v1"
 _MAX_SKILL_REPLAY_VALUE_BYTES = 16 * 1024
@@ -79,10 +83,15 @@ def broker_response_sha256(response: Any) -> str:
 def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | None = None) -> dict[str, Any] | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != _SKILL_BINDING_FIELDS:
+    if not isinstance(value, dict):
         raise ValueError("skill_binding has unsupported or missing fields")
-    if value.get("schema_version") != "mission.skill-replay-binding.v1":
-        raise ValueError("unsupported Skill replay binding schema")
+    schema = value.get("schema_version")
+    manifest_v2 = schema == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+    expected_fields = _SKILL_BINDING_FIELDS | ({"manifest_sha256"} if manifest_v2 else set())
+    if set(value) != expected_fields or schema not in {
+        "mission.skill-replay-binding.v1", SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+    }:
+        raise ValueError("skill_binding has unsupported or missing fields")
     skill_id, version, digest, trust = (value.get("skill_id"), value.get("skill_version"),
                                         value.get("content_sha256"), value.get("trust_level"))
     if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
@@ -91,13 +100,23 @@ def _normalize_skill_binding(value: Any, *, expected_context: dict[str, str] | N
         raise ValueError("skill_binding skill_version is invalid")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError("skill_binding content_sha256 is invalid")
+    if manifest_v2 and (
+        not isinstance(value.get("manifest_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value["manifest_sha256"])
+    ):
+        raise ValueError("skill_binding manifest_sha256 is invalid")
     if not isinstance(trust, str) or trust not in {"draft", "verified", "cloud"}:
         raise ValueError("skill_binding trust_level is invalid")
     context = _normalize_mission_context(value.get("mission_context"))
     if expected_context is not None and context != _normalize_mission_context(expected_context):
         raise ValueError("skill_binding mission_context does not match Broker request")
-    return {"schema_version": value["schema_version"], "skill_id": skill_id, "skill_version": version,
-            "content_sha256": digest, "trust_level": trust, "mission_context": context}
+    normalized = {
+        "schema_version": schema, "skill_id": skill_id, "skill_version": version,
+        "content_sha256": digest, "trust_level": trust, "mission_context": context,
+    }
+    if manifest_v2:
+        normalized["manifest_sha256"] = value["manifest_sha256"]
+    return normalized
 
 
 def _normalize_skill_replay_output(value: Any) -> dict[str, Any] | None:
@@ -166,6 +185,9 @@ def build_broker_request(
         raise ValueError("workspace_id must be a registered opaque identifier")
     mission_context = _normalize_mission_context(mission_context)
     skill_binding = _normalize_skill_binding(skill_binding, expected_context=mission_context)
+    manifest_v2 = bool(
+        skill_binding and skill_binding["schema_version"] == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+    )
     request_id = str(request_id or uuid.uuid4()).lower()
     if not _REQUEST_ID_RE.fullmatch(request_id):
         raise ValueError("request_id must be a UUID")
@@ -194,7 +216,7 @@ def build_broker_request(
     # Deliberately omit argv, cwd, environment, mount paths, and caller-selected
     # container options. The broker must resolve all of those from root-owned policy.
     return {
-        "schema_version": BROKER_REQUEST_SCHEMA,
+        "schema_version": BROKER_MANIFEST_REQUEST_SCHEMA if manifest_v2 else BROKER_REQUEST_SCHEMA,
         "request_id": request_id,
         "workspace_id": workspace_id,
         "mission_context": mission_context,
@@ -228,7 +250,13 @@ def verify_broker_response(
         "skill_binding", "skill_artifact", "skill_replay_output", "result", "signature",
     }:
         raise ValueError("broker response has unsupported or missing fields")
-    if response.get("schema_version") != BROKER_RESPONSE_SCHEMA:
+    binding_schema = (
+        expected_skill_binding.get("schema_version")
+        if isinstance(expected_skill_binding, dict) else None
+    )
+    manifest_v2 = binding_schema == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+    expected_response_schema = BROKER_MANIFEST_RESPONSE_SCHEMA if manifest_v2 else BROKER_RESPONSE_SCHEMA
+    if response.get("schema_version") != expected_response_schema:
         raise ValueError("unsupported broker response schema")
     if response.get("request_id") != expected_request_id:
         raise ValueError("broker response request_id does not match the request")
@@ -248,11 +276,21 @@ def verify_broker_response(
     if response_binding is None:
         if artifact is not None:
             raise ValueError("unexpected Skill artifact resolution")
-    elif (not isinstance(artifact, dict)
-          or set(artifact) != {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level"}
-          or artifact.get("schema_version") != "mission.skill-artifact-resolution.v1"
-          or any(artifact.get(k) != response_binding[k] for k in ("skill_id", "skill_version", "content_sha256", "trust_level"))):
-        raise ValueError("broker Skill artifact resolution does not match request")
+    else:
+        artifact_fields = {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level"}
+        artifact_schema = SKILL_ARTIFACT_RESOLUTION_SCHEMA
+        identity_fields = ("skill_id", "skill_version", "content_sha256", "trust_level")
+        if manifest_v2:
+            artifact_fields.add("manifest_sha256")
+            artifact_schema = SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA
+            identity_fields = (*identity_fields, "manifest_sha256")
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != artifact_fields
+            or artifact.get("schema_version") != artifact_schema
+            or any(artifact.get(key) != response_binding[key] for key in identity_fields)
+        ):
+            raise ValueError("broker Skill artifact resolution does not match request")
 
     result = response.get("result")
     signature = response.get("signature")
@@ -325,7 +363,7 @@ def verify_broker_response(
         key.verify(
             signature_bytes,
             _canonical_json({
-                "schema_version": BROKER_RESPONSE_SCHEMA,
+                "schema_version": expected_response_schema,
                 "request_id": expected_request_id,
                 "workspace_id": expected_workspace_id,
                 "mission_context": mission_context,
@@ -343,6 +381,10 @@ def verify_broker_response(
 __all__ = [
     "BROKER_REQUEST_SCHEMA",
     "BROKER_RESPONSE_SCHEMA",
+    "BROKER_MANIFEST_REQUEST_SCHEMA",
+    "BROKER_MANIFEST_RESPONSE_SCHEMA",
+    "SKILL_REPLAY_MANIFEST_BINDING_SCHEMA",
+    "SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA",
     "SKILL_ARTIFACT_RESOLUTION_SCHEMA",
     "SKILL_REPLAY_OUTPUT_SCHEMA",
     "SKILL_CATALOG_REQUEST_SCHEMA",

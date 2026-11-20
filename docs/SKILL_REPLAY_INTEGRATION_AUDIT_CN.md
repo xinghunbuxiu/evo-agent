@@ -5,7 +5,7 @@
 - Repository: `xinghunbuxiu/evo-agent`
 - PR: #1（Open，未合并）
 - Branch: `automation/mission-learning-evidence-api-first`
-- Audited HEAD: `cd2e015f8b3c91d94cdab806e44668ffb4e61376`
+- Audited HEAD: `5a0cb2a2c3ec4a2727db684ecbe81a5ed3e419ec` (Broker v2 execution implementation is the next commit; see the follow-up section below)
 - Scope: Mission candidate -> Broker stage/replay -> independent Validator -> immutable Artifact Store -> Catalog/reuse.
 - CI at audited HEAD:
   - Python regression run `44656030826`: success.
@@ -96,11 +96,11 @@ Validator 当前仍只接受：
 
 ## 6. 下一阶段实施顺序
 
-按依赖关系推进，不能提前移除当前 fail-closed：
+按依赖关系推进，不能提前移除 Mission 当前的 Manifest fail-closed：
 
-1. **Validator v2**：增加严格的 v2 request/binding；策略身份绑定 `manifest_sha256`；Validator 验证 Broker 对应的 v2 execution receipt；签名 attestation 同时绑定 code digest 和 Manifest digest。v1 保持独立，不接受混合字段。
-2. **Broker execution binding**：执行请求、执行回执、请求幂等身份都必须绑定精确 Manifest digest，不能只在 Stage 阶段校验。
-3. **Artifact Store v2 publication**：验证 Validator 的 v2 签名和精确 digest；create-once 保存 code + canonical Manifest + 两个摘要；readback 对两者重新计算。
+1. **Broker v2 execution binding**：独立请求/响应 schema；执行请求、Broker 回执和幂等请求身份同时绑定精确 code digest + canonical Manifest digest；执行前从 Broker 私有 v2 candidate store 加载并重新计算双摘要。v1 保持原样。
+2. **Validator v2**：增加独立 v2 request/binding；策略键和签名 attestation 同时绑定 code 与 Manifest digest；验证 v2 Broker execution receipt。v1 保持独立，不接受混合字段。
+3. **Artifact Store v2 publication**：验证 Validator v2 签名和精确双摘要；create-once 保存 code + canonical Manifest + 两个摘要；readback 对两者重新计算。
 4. **Catalog v2**：只返回经过签名的受限 Manifest 元数据和摘要；不泄漏代码、Mission 原始上下文或内部路径。
 5. **Mission v2 Replay**：先持久化 v2 binding 和所有确定性 request ID，再触发副作用；恢复流程也必须重新核验每份签名与摘要。
 6. **Replay Input Contract**：Manifest 声明输入/输出 schema，Mission 输入经 schema、大小、租户和文件引用规则校验后进入 Broker；输入摘要加入执行证据与 Validator attestation。
@@ -116,3 +116,17 @@ Validator 当前仍只接受：
 - 缺少配置、签名、证据、摘要或状态不确定时 fail closed；普通 Mission 不因此被阻断。
 - 未完成真实调用链和真实 Socket 集成测试前，不开启自动 Catalog 匹配或自动 Skill 复用。
 
+
+
+## 8. Broker Manifest v2 execution follow-up
+
+The next implementation slice adds an independent Broker execution request/response pair:
+
+- Request schema: `mission.sandbox-broker-request.v4`.
+- Response schema: `mission.sandbox-broker-response.v5`.
+- Binding schema: `mission.skill-replay-binding.v2`, with both `content_sha256` and `manifest_sha256`.
+- Artifact resolution schema: `mission.skill-artifact-resolution.v2`.
+- Broker execution resolves v2 candidates only through `load_candidate_manifest()`; the legacy v1 binding still resolves only through `load_for_binding()`.
+- The signed response binds the exact v2 binding and both artifact digests. The v1 request/response path remains unchanged.
+
+This slice does not enable Manifest-bearing Mission Replay yet. Validator v2, v2 publication/readback, recovery verification, and Mission runtime wiring remain required before the existing fail-closed guard can be removed.
