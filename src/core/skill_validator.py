@@ -846,7 +846,7 @@ def verify_validation_response(
     encoded = signature.get("value")
     if not isinstance(encoded, str) or not encoded:
         raise SkillValidatorError("Validator signature is missing")
-    unsigned = {key: attestation[key] for key in _ATTESTATION_FIELDS if key != "signature"}
+    unsigned = {key: attestation[key] for key in expected_attestation_fields if key != "signature"}
     try:
         Ed25519PublicKey.from_public_bytes(public_key).verify(
             base64.b64decode(encoded, validate=True), _canonical_json(unsigned),
