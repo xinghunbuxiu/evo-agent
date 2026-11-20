@@ -58,7 +58,7 @@ class ManifestCandidateStoreTests(unittest.TestCase):
         self.skill = SimpleNamespace(
             id="skill-manifest-test",
             version="1.0.0",
-            code="def run(context):\\n    return {'ok': bool(context['value'])}\\n",
+            code="def run(context):\n    return {'ok': bool(context['value'])}\n",
             trust_level="draft",
         )
 
@@ -142,7 +142,7 @@ class ManifestCandidateStoreTests(unittest.TestCase):
         changed = SimpleNamespace(
             id=self.skill.id,
             version=self.skill.version,
-            code="def run(context):\\n    return {'ok': False}\\n",
+            code="def run(context):\n    return {'ok': False}\n",
             trust_level="draft",
         )
         with self.assertRaisesRegex(SkillArtifactStoreError, "different content"):
