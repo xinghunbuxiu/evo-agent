@@ -20,6 +20,7 @@ from core.sandbox_broker_protocol import (
     SKILL_MANIFEST_ARTIFACT_RESOLUTION_SCHEMA,
     SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
     SKILL_REPLAY_OUTPUT_SCHEMA,
+    build_broker_request,
     verify_broker_response,
 )
 from core.sandbox_broker_transport import (
@@ -137,6 +138,26 @@ class BrokerManifestExecutionTests(unittest.TestCase):
                     public_key=broker_public, expected_key_id="broker-key",
                     request_id="11111111-1111-4111-8111-111111111111",
                 )
+                verified_binding = {
+                    "schema_version": SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+                    "skill_id": "manifest-skill", "skill_version": "1.0.0",
+                    "content_sha256": code_digest, "manifest_sha256": manifest_digest,
+                    "trust_level": "verified", "mission_context": context,
+                }
+                with self.assertRaises(BrokerRequestRejected):
+                    broker.handle_request(build_broker_request(
+                        workspace_id,
+                        ExecutionProfileSpec(
+                            profile_id="skill.replay.python.v1", target="manifest-skill@1.0.0",
+                            argv=(), cwd=workspace, timeout_seconds=30,
+                            max_output_bytes=MAX_OUTPUT_BYTES, network_access=False,
+                        ),
+                        mission_context=context,
+                        request_id="22222222-2222-4222-8222-222222222223",
+                        skill_binding=verified_binding,
+                    ))
+                self.assertEqual(executions, [])
+
                 binding = {
                     "schema_version": SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
                     "skill_id": "manifest-skill", "skill_version": "1.0.0",

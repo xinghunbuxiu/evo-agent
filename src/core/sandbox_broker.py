@@ -46,10 +46,13 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA_V2,
     SKILL_CATALOG_REQUEST_SCHEMA,
     SKILL_CATALOG_RESPONSE_SCHEMA,
 )
-from .skill_artifact_store import ARTIFACT_SCHEMA
+from .skill_artifact_store import ARTIFACT_SCHEMA, ARTIFACT_MANIFEST_SCHEMA
 from .skill_manifest import normalize_skill_manifest, manifest_sha256
 from .sandbox_runner import RunnerProcessOutput
 
@@ -590,15 +593,21 @@ class SandboxBrokerService:
         return response
 
     def promote_skill_candidate(self, request: object) -> dict:
-        """Publish one staged draft only when an independent Validator signed its exact identity."""
+        """Publish a staged draft only with an exact, independently signed Validator statement."""
+        if not isinstance(request, dict):
+            raise BrokerRequestRejected("Skill candidate promotion request has unsupported or missing fields")
+        request_schema = request.get("schema_version")
+        manifest_v2 = request_schema == SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA
         fields = {
             "schema_version", "request_id", "workspace_id", "mission_context",
             "skill_id", "skill_version", "content_sha256", "trust_level",
             "validation_attestation",
         }
-        if not isinstance(request, dict) or set(request) != fields:
+        if manifest_v2:
+            fields.add("manifest_sha256")
+        if set(request) != fields:
             raise BrokerRequestRejected("Skill candidate promotion request has unsupported or missing fields")
-        if request.get("schema_version") != SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
+        if request_schema not in {SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA, SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA}:
             raise BrokerRequestRejected("unsupported Skill candidate promotion request schema")
         request_id = request.get("request_id")
         if not isinstance(request_id, str) or not _UUID_RE.fullmatch(request_id):
@@ -611,11 +620,8 @@ class SandboxBrokerService:
         except ValueError as exc:
             raise BrokerRequestRejected("Skill candidate promotion Mission context is invalid") from exc
         self._authorize_workspace_tenant(workspace_id, context["tenant_id"])
-
-        skill_id = request.get("skill_id")
-        version = request.get("skill_version")
-        digest = request.get("content_sha256")
-        trust_level = request.get("trust_level")
+        skill_id, version = request.get("skill_id"), request.get("skill_version")
+        digest, trust_level = request.get("content_sha256"), request.get("trust_level")
         if not isinstance(skill_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", skill_id):
             raise BrokerRequestRejected("Skill candidate promotion ID is invalid")
         if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
@@ -624,6 +630,11 @@ class SandboxBrokerService:
             raise BrokerRequestRejected("Skill candidate promotion digest is invalid")
         if not isinstance(trust_level, str) or trust_level not in {"verified", "cloud"}:
             raise BrokerRequestRejected("Skill candidate promotion trust level is invalid")
+        manifest_digest = None
+        if manifest_v2:
+            manifest_digest = request.get("manifest_sha256")
+            if not isinstance(manifest_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_digest):
+                raise BrokerRequestRejected("Skill candidate promotion Manifest digest is invalid")
         validation_attestation = request.get("validation_attestation")
         if not isinstance(validation_attestation, Mapping):
             raise BrokerRequestRejected("independent Validator attestation is missing")
@@ -633,52 +644,58 @@ class SandboxBrokerService:
             raise BrokerRequestRejected("Validator attestation Broker request ID is invalid")
         if not isinstance(broker_attestation_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", broker_attestation_sha256):
             raise BrokerRequestRejected("Validator attestation Broker response digest is invalid")
+        if manifest_v2 and validation_attestation.get("manifest_sha256") != manifest_digest:
+            raise BrokerRequestRejected("Validator attestation Manifest digest does not match promotion request")
         if self.skill_artifact_store is None:
             raise BrokerRequestRejected("Broker Skill Artifact Store is not configured")
 
-        # Resolve source only from Broker-owned staging storage. The promotion
-        # caller cannot replace the staged source with caller-supplied code.
-        binding = {
-            "schema_version": "mission.skill-replay-binding.v1",
-            "skill_id": skill_id,
-            "skill_version": version,
-            "content_sha256": digest,
-            "trust_level": "draft",
-            "mission_context": context,
-        }
-        try:
-            candidate = self.skill_artifact_store.load_for_binding(binding)
-        except Exception as exc:
-            raise BrokerRequestRejected("staged Skill candidate failed identity verification") from exc
+        # Resolve source only from Broker-owned staging storage; callers cannot replace code.
+        if manifest_v2:
+            try:
+                candidate = self.skill_artifact_store.load_candidate_manifest(
+                    tenant_id=context["tenant_id"], skill_id=skill_id, skill_version=version,
+                    content_sha256=digest, manifest_sha256=manifest_digest,
+                )
+            except Exception as exc:
+                raise BrokerRequestRejected("staged Manifest Skill candidate failed identity verification") from exc
+        else:
+            binding = {
+                "schema_version": "mission.skill-replay-binding.v1",
+                "skill_id": skill_id, "skill_version": version, "content_sha256": digest,
+                "trust_level": "draft", "mission_context": context,
+            }
+            try:
+                candidate = self.skill_artifact_store.load_for_binding(binding)
+            except Exception as exc:
+                raise BrokerRequestRejected("staged Skill candidate failed identity verification") from exc
         if getattr(candidate, "trust_level", None) != "draft":
             raise BrokerRequestRejected("only staged draft Skills can be promoted")
 
-        cached_response = self.replay_store.claim(
-            request_id, request, allow_indeterminate_resume=True,
-        )
+        cached_response = self.replay_store.claim(request_id, request, allow_indeterminate_resume=True)
         if cached_response is not None:
             return cached_response
-        promoted = SimpleNamespace(
-            id=candidate.id,
-            version=candidate.version,
-            code=candidate.code,
-            trust_level=trust_level,
-        )
+        promoted = SimpleNamespace(id=candidate.id, version=candidate.version, code=candidate.code, trust_level=trust_level)
         try:
-            identity = self.skill_artifact_store.publish(
-                tenant_id=context["tenant_id"],
-                skill=promoted,
-                validation_attestation=validation_attestation,
-                workspace_id=workspace_id,
-                mission_context=context,
-                broker_request_id=broker_request_id,
-                broker_attestation_sha256=broker_attestation_sha256,
-            )
+            if manifest_v2:
+                identity = self.skill_artifact_store.publish_manifest(
+                    tenant_id=context["tenant_id"], skill=promoted,
+                    manifest=candidate.manifest, manifest_sha256=manifest_digest,
+                    validation_attestation=validation_attestation,
+                    workspace_id=workspace_id, mission_context=context,
+                    broker_request_id=broker_request_id, broker_attestation_sha256=broker_attestation_sha256,
+                )
+            else:
+                identity = self.skill_artifact_store.publish(
+                    tenant_id=context["tenant_id"], skill=promoted,
+                    validation_attestation=validation_attestation,
+                    workspace_id=workspace_id, mission_context=context,
+                    broker_request_id=broker_request_id, broker_attestation_sha256=broker_attestation_sha256,
+                )
         except Exception as exc:
             raise BrokerRequestRejected("independent Validator attestation was rejected") from exc
 
         validation_provenance = {
-            "schema_version": "mission.skill-validation-provenance.v1",
+            "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA_V2 if manifest_v2 else "mission.skill-validation-provenance.v1",
             "validation_id": validation_attestation["validation_id"],
             "validator_id": validation_attestation["validator_id"],
             "policy_id": validation_attestation["policy_id"],
@@ -686,24 +703,23 @@ class SandboxBrokerService:
             "checks_sha256": validation_attestation["checks_sha256"],
             "broker_request_id": broker_request_id,
             "broker_attestation_sha256": broker_attestation_sha256,
+            **({"manifest_sha256": manifest_digest} if manifest_v2 else {}),
         }
         signed_payload = {
-            "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
-            "request_id": request_id,
-            "workspace_id": workspace_id,
-            "mission_context": context,
-            "artifact": {"schema_version": ARTIFACT_SCHEMA, **identity},
+            "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA if manifest_v2 else SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+            "request_id": request_id, "workspace_id": workspace_id, "mission_context": context,
+            "artifact": {
+                "schema_version": ARTIFACT_MANIFEST_SCHEMA if manifest_v2 else ARTIFACT_SCHEMA,
+                **identity,
+            },
             "validation_provenance": validation_provenance,
         }
         signature = self.signing_key.sign(_canonical_json(signed_payload))
         import base64
         response = {
             **signed_payload,
-            "signature": {
-                "algorithm": BROKER_SIGNATURE_ALGORITHM,
-                "key_id": self.key_id,
-                "value": base64.b64encode(signature).decode("ascii"),
-            },
+            "signature": {"algorithm": BROKER_SIGNATURE_ALGORITHM, "key_id": self.key_id,
+                          "value": base64.b64encode(signature).decode("ascii")},
         }
         self.replay_store.complete(request_id, request, response)
         return response
@@ -803,16 +819,18 @@ class SandboxBrokerService:
         )
         if binding is not None:
             try:
-                if manifest_v2:
+                if manifest_v2 and binding["trust_level"] == "draft":
                     skill = self.skill_artifact_store.load_candidate_manifest(
                         tenant_id=validated["mission_context"]["tenant_id"],
-                        skill_id=binding["skill_id"],
-                        skill_version=binding["skill_version"],
-                        content_sha256=binding["content_sha256"],
-                        manifest_sha256=binding["manifest_sha256"],
+                        skill_id=binding["skill_id"], skill_version=binding["skill_version"],
+                        content_sha256=binding["content_sha256"], manifest_sha256=binding["manifest_sha256"],
                     )
+                elif manifest_v2:
+                    skill = self.skill_artifact_store.load_published_manifest(binding)
                 else:
                     skill = self.skill_artifact_store.load_for_binding(binding)
+                if getattr(skill, "trust_level", None) != binding["trust_level"]:
+                    raise BrokerRequestRejected("resolved Skill trust level does not match immutable binding")
             except Exception as exc:
                 raise BrokerRequestRejected("trusted Skill artifact failed independent verification") from exc
             if getattr(skill, "tenant_id", None) != validated["mission_context"]["tenant_id"]:

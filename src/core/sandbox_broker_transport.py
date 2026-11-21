@@ -34,7 +34,10 @@ from .sandbox_broker_protocol import (
     SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA,
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA_V2,
     SKILL_CATALOG_REQUEST_SCHEMA,
 )
 from .execution_profiles import ExecutionProfileSpec
@@ -154,7 +157,10 @@ def handle_broker_connection(
             SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
         }:
             response = service.stage_skill_candidate(request)
-        elif isinstance(request, dict) and request.get("schema_version") == SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA:
+        elif isinstance(request, dict) and request.get("schema_version") in {
+            SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+            SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA,
+        }:
             response = service.promote_skill_candidate(request)
         else:
             response = service.handle_request(request)
@@ -376,21 +382,13 @@ def stage_skill_candidate_via_broker(
 
 
 def promote_skill_candidate_via_broker(
-    socket_path: str,
-    workspace_id: str,
-    *,
-    mission_context: dict[str, str],
-    skill_id: str,
-    skill_version: str,
-    content_sha256: str,
-    trust_level: str,
-    validation_attestation: dict,
-    public_key: bytes,
-    expected_key_id: str,
-    request_id: str | None = None,
+    socket_path: str, workspace_id: str, *, mission_context: dict[str, str],
+    skill_id: str, skill_version: str, content_sha256: str, trust_level: str,
+    validation_attestation: dict, public_key: bytes, expected_key_id: str,
+    manifest_sha256: str | None = None, request_id: str | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict:
-    """Submit an independent Validator statement and verify Broker publication receipt."""
+    """Submit a signed Validator statement and verify the exact Broker publication receipt."""
     context_fields = {"tenant_id", "mission_run_id", "node_id", "task_id"}
     if not isinstance(mission_context, dict) or set(mission_context) != context_fields:
         raise ValueError("mission_context must contain exact Tenant, Mission, node, and task identities")
@@ -410,17 +408,20 @@ def promote_skill_candidate_via_broker(
         raise ValueError("trust_level must be verified or cloud")
     if not isinstance(validation_attestation, dict):
         raise ValueError("validation_attestation must be an object")
-
+    manifest_v2 = manifest_sha256 is not None
+    if manifest_v2:
+        if not isinstance(manifest_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+            raise ValueError("manifest_sha256 is invalid")
+        if validation_attestation.get("manifest_sha256") != manifest_sha256:
+            raise ValueError("Validator attestation does not bind the requested Manifest digest")
     request = {
-        "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+        "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
         "request_id": request_id or str(uuid.uuid4()),
-        "workspace_id": workspace_id,
-        "mission_context": context,
-        "skill_id": skill_id,
-        "skill_version": skill_version,
-        "content_sha256": content_sha256,
-        "trust_level": trust_level,
+        "workspace_id": workspace_id, "mission_context": context,
+        "skill_id": skill_id, "skill_version": skill_version,
+        "content_sha256": content_sha256, "trust_level": trust_level,
         "validation_attestation": validation_attestation,
+        **({"manifest_sha256": manifest_sha256} if manifest_v2 else {}),
     }
     response = request_broker(socket_path, request, timeout_seconds=timeout_seconds)
     if not isinstance(response, dict) or set(response) != {
@@ -429,15 +430,13 @@ def promote_skill_candidate_via_broker(
     }:
         raise BrokerTransportError("Broker Skill promotion response is malformed or rejected")
     expected_artifact = {
-        "schema_version": "mission.skill-artifact.v2",
-        "tenant_id": context["tenant_id"],
-        "skill_id": skill_id,
-        "skill_version": skill_version,
-        "content_sha256": content_sha256,
-        "trust_level": trust_level,
+        "schema_version": "mission.skill-artifact.v3" if manifest_v2 else "mission.skill-artifact.v2",
+        "tenant_id": context["tenant_id"], "skill_id": skill_id,
+        "skill_version": skill_version, "content_sha256": content_sha256,
+        "trust_level": trust_level, **({"manifest_sha256": manifest_sha256} if manifest_v2 else {}),
     }
     validation_provenance = {
-        "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
+        "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA_V2 if manifest_v2 else SKILL_VALIDATION_PROVENANCE_SCHEMA,
         "validation_id": validation_attestation.get("validation_id"),
         "validator_id": validation_attestation.get("validator_id"),
         "policy_id": validation_attestation.get("policy_id"),
@@ -445,9 +444,11 @@ def promote_skill_candidate_via_broker(
         "checks_sha256": validation_attestation.get("checks_sha256"),
         "broker_request_id": validation_attestation.get("broker_request_id"),
         "broker_attestation_sha256": validation_attestation.get("broker_attestation_sha256"),
+        **({"manifest_sha256": manifest_sha256} if manifest_v2 else {}),
     }
+    expected_response_schema = SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA if manifest_v2 else SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA
     if (
-        response.get("schema_version") != SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA
+        response.get("schema_version") != expected_response_schema
         or response.get("request_id") != request["request_id"]
         or response.get("workspace_id") != workspace_id
         or response.get("mission_context") != context
@@ -461,12 +462,9 @@ def promote_skill_candidate_via_broker(
     if signature.get("algorithm") != "ed25519" or signature.get("key_id") != expected_key_id:
         raise BrokerTransportError("Broker Skill promotion signer is not trusted")
     signed_payload = {
-        "schema_version": response["schema_version"],
-        "request_id": response["request_id"],
-        "workspace_id": response["workspace_id"],
-        "mission_context": context,
-        "artifact": expected_artifact,
-        "validation_provenance": validation_provenance,
+        "schema_version": response["schema_version"], "request_id": response["request_id"],
+        "workspace_id": response["workspace_id"], "mission_context": context,
+        "artifact": expected_artifact, "validation_provenance": validation_provenance,
     }
     try:
         Ed25519PublicKey.from_public_bytes(public_key).verify(
@@ -476,7 +474,6 @@ def promote_skill_candidate_via_broker(
     except (ValueError, TypeError, KeyError, InvalidSignature) as exc:
         raise BrokerTransportError("Broker Skill promotion signature verification failed") from exc
     return response
-
 
 
 def execute_via_broker(

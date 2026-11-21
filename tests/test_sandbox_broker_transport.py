@@ -32,6 +32,7 @@ from core.sandbox_broker_transport import (
     list_published_skills_via_broker,
     serve_listener,
     stage_skill_candidate_via_broker,
+    promote_skill_candidate_via_broker,
 )
 from core.sandbox_runner import RunnerProcessOutput
 from core.skill_manifest import manifest_sha256
@@ -380,6 +381,106 @@ class SandboxBrokerTransportTests(unittest.TestCase):
             manifest_sha256=manifest_artifact["manifest_sha256"],
         )
         self.assertEqual(staged_manifest.manifest_sha256, manifest_sha256(manifest))
+
+    def test_manifest_v2_promotion_uses_socket_and_verifies_signed_receipt(self):
+        root = Path(self.temp.name)
+        workspace = root / "workspace"
+        artifact_root = root / "manifest-promotion-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        store = SkillArtifactStore(
+            artifact_root, validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-transport-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"test-workspace": workspace},
+            workspace_tenants={"test-workspace": ["tenant-test"]},
+            replay_store=BrokerReplayStore(root / "manifest-promotion-state" / "replay.sqlite3"),
+            executor=lambda _spec: RunnerProcessOutput(0, b"", b""),
+            signing_key=self.key, key_id="test-key",
+            skill_artifact_store=store,
+            skill_replay_executor=lambda *_args, **_kwargs: RunnerProcessOutput(0, b"", b""),
+        )
+        context = {"tenant_id": "tenant-test", "mission_run_id": "mission-transport-manifest",
+                   "node_id": "node-transport-manifest", "task_id": "task-transport-manifest"}
+        code = "def run(context):\n    return {'ok': True}\n"
+        manifest = {
+            "schema_version": "mission.skill-manifest.v1",
+            "skill_id": "skill-transport-manifest-promote", "skill_version": "1.0.0",
+            "name": "Transport Manifest Promotion", "domain": "python",
+            "capability_type": "automation", "description": "Transport promotion test",
+            "task_types": ["automation"],
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
+            "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run", "call_signature": "run(context)"},
+            "compatibility": {"runtime": "python", "min_version": "3.11.0", "max_version": "3.14.0"},
+        }
+        manifest_digest = manifest_sha256(manifest)
+        socket_path = str(root / "manifest-promotion.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(socket_path)
+        listener.listen(8)
+        stop = threading.Event()
+        server = threading.Thread(target=serve_listener, kwargs={
+            "listener": listener, "service": service, "allowed_uids": [os.getuid()],
+            "stop_event": stop, "max_workers": 2,
+        })
+        server.start()
+        try:
+            staged = stage_skill_candidate_via_broker(
+                socket_path, "test-workspace", tenant_id="tenant-test", mission_context=context,
+                skill_id="skill-transport-manifest-promote", skill_version="1.0.0",
+                code=code, manifest=manifest, expected_manifest_sha256=manifest_digest,
+                public_key=self.key.public_key().public_bytes_raw(), expected_key_id="test-key",
+                request_id="11111111-1111-4111-8111-111111111121",
+            )
+            statement = {
+                "schema_version": "mission.skill-validation-attestation.v4",
+                "validation_id": "validation-transport-manifest", "validator_id": "independent-validator",
+                "policy_id": "manifest-policy", "policy_sha256": "a" * 64,
+                "workspace_id": "test-workspace", **context,
+                "broker_request_id": "00000000-0000-4000-8000-000000000021",
+                "broker_attestation_sha256": "b" * 64, "checks_sha256": "c" * 64,
+                "skill_id": "skill-transport-manifest-promote", "skill_version": "1.0.0",
+                "content_sha256": staged["candidate_artifact"]["content_sha256"],
+                "manifest_sha256": manifest_digest, "trust_level": "verified", "passed": True,
+            }
+            attestation = {
+                **statement,
+                "signature": {
+                    "algorithm": "ed25519", "key_id": "validator-transport-key",
+                    "value": base64.b64encode(validator_key.sign(json.dumps(
+                        statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                    ).encode("utf-8"))).decode("ascii"),
+                },
+            }
+            receipt = promote_skill_candidate_via_broker(
+                socket_path, "test-workspace", mission_context=context,
+                skill_id="skill-transport-manifest-promote", skill_version="1.0.0",
+                content_sha256=staged["candidate_artifact"]["content_sha256"],
+                manifest_sha256=manifest_digest, trust_level="verified",
+                validation_attestation=attestation,
+                public_key=self.key.public_key().public_bytes_raw(), expected_key_id="test-key",
+                request_id="22222222-2222-4222-8222-222222222221",
+            )
+        finally:
+            stop.set()
+            server.join(timeout=3)
+            listener.close()
+            Path(socket_path).unlink(missing_ok=True)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(receipt["schema_version"], "mission.skill-candidate-promotion-response.v3")
+        self.assertEqual(receipt["artifact"]["schema_version"], "mission.skill-artifact.v3")
+        self.assertEqual(receipt["artifact"]["manifest_sha256"], manifest_digest)
+        self.assertEqual(receipt["validation_provenance"]["manifest_sha256"], manifest_digest)
+        published = store.load_published_manifest({
+            "schema_version": "mission.skill-replay-binding.v2",
+            "skill_id": "skill-transport-manifest-promote", "skill_version": "1.0.0",
+            "content_sha256": staged["candidate_artifact"]["content_sha256"],
+            "manifest_sha256": manifest_digest, "trust_level": "verified",
+            "mission_context": context,
+        })
+        self.assertEqual(published.manifest_sha256, manifest_digest)
 
     def test_socket_client_sends_framed_request(self):
         path = str(Path(self.temp.name) / "broker.sock")

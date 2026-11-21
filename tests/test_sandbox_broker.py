@@ -26,6 +26,7 @@ from core.sandbox_broker_protocol import (
     SKILL_CANDIDATE_STAGE_REQUEST_SCHEMA,
     SKILL_CANDIDATE_STAGE_REQUEST_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_REQUEST_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA,
     build_broker_request,
     verify_broker_response,
 )
@@ -465,6 +466,95 @@ class SandboxBrokerServiceTests(unittest.TestCase):
         published = artifact_store.load_for_binding(binding)
         self.assertEqual(published.code, code)
         self.assertEqual(published.trust_level, "verified")
+
+    def test_broker_promotes_manifest_candidate_only_with_matching_v2_attestation(self):
+        artifact_root = Path(self.temp.name) / "manifest-promotion-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        validator_key = Ed25519PrivateKey.generate()
+        artifact_store = SkillArtifactStore(
+            artifact_root, validator_public_key=validator_key.public_key().public_bytes_raw(),
+            validator_key_id="validator-test-key",
+        )
+        service = SandboxBrokerService(
+            workspace_roots={"project-test": self.root},
+            workspace_tenants={"project-test": ["tenant-test"]},
+            replay_store=self.store, executor=self._execute,
+            signing_key=self.key, key_id="broker-test-key",
+            skill_artifact_store=artifact_store,
+            skill_replay_executor=self._execute_skill_replay,
+        )
+        context = {"tenant_id": "tenant-test", "mission_run_id": "mission-manifest-promote",
+                   "node_id": "node-manifest-promote", "task_id": "task-manifest-promote"}
+        code = "def run(context):\n    return {'ok': True}\n"
+        manifest = {
+            "schema_version": "mission.skill-manifest.v1",
+            "skill_id": "skill-manifest-promote", "skill_version": "1.0.0",
+            "name": "Manifest Promotion", "domain": "python",
+            "capability_type": "automation", "description": "Manifest promotion test",
+            "task_types": ["automation"],
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
+            "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run", "call_signature": "run(context)"},
+            "compatibility": {"runtime": "python", "min_version": "3.11.0", "max_version": "3.14.0"},
+        }
+        manifest_digest = manifest_sha256(manifest)
+        staged = artifact_store.stage_candidate(
+            tenant_id="tenant-test",
+            skill=SimpleNamespace(id="skill-manifest-promote", version="1.0.0", code=code, trust_level="draft"),
+            manifest=manifest, expected_manifest_sha256=manifest_digest,
+        )
+        statement = {
+            "schema_version": "mission.skill-validation-attestation.v4",
+            "validation_id": "validation-manifest-promote", "validator_id": "independent-validator",
+            "policy_id": "manifest-policy-v2", "policy_sha256": "a" * 64,
+            "workspace_id": "project-test", **context,
+            "broker_request_id": "00000000-0000-4000-8000-000000000011",
+            "broker_attestation_sha256": "b" * 64, "checks_sha256": "c" * 64,
+            "skill_id": "skill-manifest-promote", "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"], "manifest_sha256": manifest_digest,
+            "trust_level": "verified", "passed": True,
+        }
+        attestation = {
+            **statement,
+            "signature": {
+                "algorithm": "ed25519", "key_id": "validator-test-key",
+                "value": base64.b64encode(validator_key.sign(json.dumps(
+                    statement, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                ).encode("utf-8"))).decode("ascii"),
+            },
+        }
+        request = {
+            "schema_version": SKILL_CANDIDATE_PROMOTION_REQUEST_V2_SCHEMA,
+            "request_id": str(uuid.uuid4()), "workspace_id": "project-test",
+            "mission_context": context, "skill_id": "skill-manifest-promote",
+            "skill_version": "1.0.0", "content_sha256": staged["content_sha256"],
+            "manifest_sha256": manifest_digest, "trust_level": "verified",
+            "validation_attestation": attestation,
+        }
+        response = service.promote_skill_candidate(request)
+        self.assertEqual(response["schema_version"], "mission.skill-candidate-promotion-response.v3")
+        self.assertEqual(response["artifact"]["schema_version"], "mission.skill-artifact.v3")
+        self.assertEqual(response["artifact"]["manifest_sha256"], manifest_digest)
+        self.assertEqual(response["validation_provenance"]["manifest_sha256"], manifest_digest)
+        self.key.public_key().verify(
+            base64.b64decode(response["signature"]["value"]),
+            json.dumps({key: response[key] for key in (
+                "schema_version", "request_id", "workspace_id", "mission_context",
+                "artifact", "validation_provenance",
+            )}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
+        published = artifact_store.load_published_manifest({
+            "schema_version": "mission.skill-replay-binding.v2",
+            "skill_id": "skill-manifest-promote", "skill_version": "1.0.0",
+            "content_sha256": staged["content_sha256"], "manifest_sha256": manifest_digest,
+            "trust_level": "verified", "mission_context": context,
+        })
+        self.assertEqual(published.code, code)
+        self.assertEqual(published.manifest, manifest)
+        self.assertEqual(published.trust_level, "verified")
+        tampered = dict(request, request_id=str(uuid.uuid4()), manifest_sha256="0" * 64)
+        with self.assertRaisesRegex(BrokerRequestRejected, "Manifest digest"):
+            service.promote_skill_candidate(tampered)
 
     def test_broker_promotion_rejects_forged_validator_signature(self):
         artifact_root = Path(self.temp.name) / "promotion-reject-artifacts"
