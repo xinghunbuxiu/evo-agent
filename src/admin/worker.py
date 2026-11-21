@@ -12,20 +12,11 @@ import signal
 import sys
 import time
 
+from admin.workspace import resolve_admin_workspace
+
 
 def _resolve_workspace():
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parents[2]
-    env_workspace = str(os.getenv("EVO_ADMIN_WORKSPACE") or "").strip()
-    workspace = repo
-    if env_workspace:
-        env_path = Path(env_workspace).expanduser()
-        env_has_local_executor = (env_path / "executors" / "toutiao" / "scripts" / "cli.py").is_file()
-        if env_has_local_executor or env_path.is_dir():
-            workspace = env_path
-    workspace.mkdir(parents=True, exist_ok=True)
-    return workspace
+    return resolve_admin_workspace()
 
 
 def main() -> None:

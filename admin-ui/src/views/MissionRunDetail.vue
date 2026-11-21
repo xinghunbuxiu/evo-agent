@@ -42,13 +42,97 @@
       正在加载 mission 详情...
     </div>
 
+    <section
+      v-else-if="missionRun && activeSection === 'recovery'"
+      class="space-y-4"
+    >
+      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        复核只读取原始 Broker/Validator 状态并重新验签。恢复操作不会重新运行 Skill；若原始执行或独立验收证据不完整，服务端会拒绝发布。
+      </div>
+      <div
+        v-for="item in recoveryItems"
+        :key="item.task_id"
+        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-slate-900">{{ item.title || item.skill_id }}</div>
+            <div class="mt-1 break-all font-mono text-xs text-slate-500">
+              {{ item.skill_id }} · {{ item.node_id }} · {{ item.task_id }}
+            </div>
+            <div class="mt-2 text-xs text-slate-500">
+              中断原因：{{ item.recovery_reason || '未知' }} · {{ formatTime(item.interrupted_at) }}
+            </div>
+          </div>
+          <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+            {{ item.recovery_assessment.status }}
+          </span>
+        </div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Broker Stage</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_stage || item.broker_status.stage?.status || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Broker Execution</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_execution || item.broker_status.execution?.status || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Independent Validator</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.validator || item.validator_status.status || 'not_checked' }}</div>
+          </div>
+          <div class="rounded-lg bg-slate-50 p-3">
+            <div class="text-xs text-slate-500">Artifact Promotion</div>
+            <div class="mt-1 text-sm font-medium text-slate-800">{{ item.verified_receipts.broker_promotion || item.broker_status.promotion?.status || 'not_checked' }}</div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs text-slate-600">
+          {{ item.recovery_assessment.next_step }}
+        </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+          <div class="break-all text-xs text-slate-500">
+            {{ item.skill_binding?.skill_version || '未固定版本' }}
+            <span v-if="item.skill_binding?.content_sha256"> · SHA256 {{ item.skill_binding.content_sha256 }}</span>
+          </div>
+          <button
+            v-if="canResumeReplayPromotion(item)"
+            type="button"
+            :disabled="recoveryBusyKey === item.task_id"
+            class="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="resumeReplayPromotion(item)"
+          >
+            {{ recoveryBusyKey === item.task_id ? '正在复核并恢复...' : '管理员确认恢复发布' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="!recoveryItems.length" class="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+        当前 Mission 没有待复核的 Skill Replay。
+      </div>
+    </section>
+
+    <section v-if="missionRun && publishedSkills.length" class="rounded-2xl border border-teal-200 bg-teal-50/60 p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-sm font-semibold text-teal-950">已发布 Skill · 可复用</div><div class="mt-1 text-xs text-teal-800">只允许复用已独立验收的固定版本；不会重新发布，也不会把自然语言 Recipe 当代码执行。</div></div><span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-teal-800">{{ publishedSkills.length }} 个</span></div>
+      <div class="mt-3 grid gap-3 md:grid-cols-2">
+        <div v-for="skill in publishedSkills" :key="String(skill.id) + '@' + String(skill.version)" class="rounded-xl border border-teal-100 bg-white p-3">
+          <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="truncate text-sm font-semibold text-slate-900">{{ skill.name || skill.id }}</div><div class="mt-1 break-all font-mono text-[11px] text-slate-500">{{ skill.id }}@{{ skill.version || '?' }}</div></div><span class="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700">verified</span></div>
+          <div class="mt-2 break-all text-xs text-slate-500">{{ skill.domain || 'unknown' }} · SHA256 {{ skill.content_sha256 || '未提供' }}</div>
+          <div class="mt-3 flex flex-wrap gap-2"><button v-for="node in missionRun.plan.nodes.filter((item) => item.status === 'reuse_existing' && item.recommended_skill_ids?.includes(skill.id || ''))" :key="String(skill.id) + ':' + node.id" type="button" class="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50" :disabled="publishedReuseBusyKey === String(node.id) + ':' + String(skill.id)" @click="reusePublishedSkill(String(node.id), skill)">{{ publishedReuseBusyKey === String(node.id) + ':' + String(skill.id) ? '复用中…' : '复用到 ' + (node.title || node.id) }}</button></div>
+        </div>
+      </div>
+    </section>
+
     <MissionRunDetailPanel
       v-else-if="missionRun"
       :run="missionRun"
       :section="activeSection"
       :continue-disabled="continuing"
-      :show-continue-button="true"
+       :show-continue-button="true"
+      :replay-busy-key="replayBusyKey"
+      :staffing-options="staffingOptions"
+      :staffing-busy-key="staffingBusyKey"
       @continue="continueCurrentMission"
+      @replay-skill="replayCurrentSkill"
+      @approve-staffing="approveCurrentStaffing"
     />
 
     <div v-else class="rounded-2xl border border-rose-200 bg-white p-8 text-center text-sm text-rose-600">
@@ -63,9 +147,22 @@ import { useRoute, useRouter } from 'vue-router'
 import MissionRunDetailPanel from '../components/MissionRunDetailPanel.vue'
 import WorkspacePageHeader from '../components/shell/WorkspacePageHeader.vue'
 import WorkspaceSubNav, { type WorkspaceSubNavItem } from '../components/shell/WorkspaceSubNav.vue'
-import { continueMission, getMissionRun, type MissionRun } from '../api/missions'
+import { getKnowledgeSkills, type KnowledgeSkill } from '../api/knowledge'
+import {
+  approveMissionStaffing,
+  continueMission,
+  getMissionRun,
+  getMissionStaffingOptions,
+  listMissionSkillReplayRecoveryReviews,
+  resumeMissionSkillReplayPromotion,
+  replayMissionSkill,
+  reusePublishedMissionSkill,
+  type MissionRun,
+  type MissionStaffingOptions,
+  type MissionSkillReplayRecoveryItem,
+} from '../api/missions'
 
-type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan'
+type MissionDetailSection = 'overview' | 'actions' | 'growth' | 'plan' | 'recovery'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,6 +170,13 @@ const activeSection = ref<MissionDetailSection>('overview')
 const missionRun = ref<MissionRun | null>(null)
 const loading = ref(false)
 const continuing = ref(false)
+const replayBusyKey = ref('')
+const staffingOptions = ref<MissionStaffingOptions | null>(null)
+const staffingBusyKey = ref('')
+const recoveryItems = ref<MissionSkillReplayRecoveryItem[]>([])
+const publishedSkills = ref<KnowledgeSkill[]>([])
+const publishedReuseBusyKey = ref('')
+const recoveryBusyKey = ref('')
 const message = ref('')
 const success = ref(false)
 let refreshTimer: number | null = null
@@ -100,6 +204,10 @@ const sectionMeta = computed(() => {
       title: `${title} · 续跑计划`,
       description: '下一轮 focus 与 next steps；可在此继续 mission。',
     },
+    recovery: {
+      title: `${title} · Skill Replay 复核`,
+      description: '核验 Broker 与 Validator 的原始签名回执；仅允许管理员按原请求恢复发布，不会重新执行 Skill。',
+    },
   }
   return map[activeSection.value]
 })
@@ -116,6 +224,7 @@ const subNavItems = computed<WorkspaceSubNavItem[]>(() => ([
   { key: 'actions', title: '动作链', badge: String(actionCount.value), active: activeSection.value === 'actions' },
   { key: 'growth', title: '成长', badge: String(growthCount.value), active: activeSection.value === 'growth' },
   { key: 'plan', title: '续跑', badge: planStepCount.value ? String(planStepCount.value) : undefined, active: activeSection.value === 'plan' },
+  { key: 'recovery', title: 'Replay 复核', badge: recoveryItems.value.length ? String(recoveryItems.value.length) : undefined, active: activeSection.value === 'recovery' },
 ]))
 
 const memberWorkspaceRoute = computed(() => {
@@ -130,7 +239,7 @@ const memberWorkspaceRoute = computed(() => {
 
 const normalizeSection = (value: unknown): MissionDetailSection => {
   const section = String(value || '').trim()
-  if (section === 'actions' || section === 'growth' || section === 'plan') return section
+  if (section === 'actions' || section === 'growth' || section === 'plan' || section === 'recovery') return section
   return 'overview'
 }
 
@@ -153,11 +262,191 @@ const loadMissionRun = async () => {
   try {
     const result = await getMissionRun(id)
     missionRun.value = result.data || null
+    staffingOptions.value = null
+    recoveryItems.value = []
+    if (missionRun.value?.tenant_id) {
+      try {
+        const knowledge = await getKnowledgeSkills(missionRun.value.tenant_id)
+        publishedSkills.value = (knowledge.data?.skills || []).filter((skill) => skill.trust_level === 'verified' && skill.replay_eligible === true && Boolean(skill.id && skill.version && skill.content_sha256))
+      } catch (skillError) {
+        publishedSkills.value = []
+        console.warn('Failed to load published executable Skills:', skillError)
+      }
+      try {
+        const reviews = await listMissionSkillReplayRecoveryReviews(missionRun.value.tenant_id, 200)
+        recoveryItems.value = (reviews.data?.items || []).filter(
+          (item) => item.mission_run_id === missionRun.value?.mission_run_id,
+        )
+      } catch (recoveryError) {
+        // Recovery review is an admin-only optional view; it must not block normal Mission details.
+        console.warn('Failed to load Skill Replay recovery reviews:', recoveryError)
+      }
+    }
+    if (missionRun.value?.staffing_requests?.length) {
+      try {
+        const options = await getMissionStaffingOptions(id, missionRun.value.tenant_id)
+        staffingOptions.value = options.data || null
+      } catch (staffingError) {
+        console.warn('Failed to load Mission staffing options:', staffingError)
+      }
+    }
   } catch (error) {
     console.error('Failed to load mission run:', error)
     missionRun.value = null
+    staffingOptions.value = null
   } finally {
     loading.value = false
+  }
+}
+
+const formatTime = (value?: string) => {
+  if (!value) return '--'
+  return value.slice(0, 19).replace('T', ' ')
+}
+
+const canResumeReplayPromotion = (item: MissionSkillReplayRecoveryItem) => {
+  const stageStatus = item.broker_status.stage?.status
+  const stageIsVerified = item.verified_receipts.broker_stage === 'verified'
+  // Stage is create-once and never executes code. The backend may safely
+  // reissue the exact original Stage request when its status is not_found or
+  // indeterminate, but never when a signature was explicitly invalid.
+  const stageCanBeRecovered = !stageIsVerified && (
+    stageStatus === 'not_found' || stageStatus === 'indeterminate'
+  )
+  return item.candidate_binding_status === 'pinned'
+    && (stageIsVerified || stageCanBeRecovered)
+    && item.verified_receipts.broker_execution === 'verified'
+    && item.verified_receipts.execution_succeeded === true
+    && item.verified_receipts.validator === 'verified'
+    && item.verified_receipts.broker_promotion !== 'invalid'
+    && Boolean(item.stage_request_id && item.execution_request_id && item.validation_request_id && item.promotion_request_id)
+}
+
+const resumeReplayPromotion = async (item: MissionSkillReplayRecoveryItem) => {
+  if (!missionRun.value || recoveryBusyKey.value) return
+  const confirmed = window.confirm(
+    `确认复核原始签名证据，并按原请求恢复 ${item.skill_id} 的 Artifact 发布？此操作不会重新执行 Skill。`
+  )
+  if (!confirmed) return
+  recoveryBusyKey.value = item.task_id
+  message.value = ''
+  try {
+    const response = await resumeMissionSkillReplayPromotion(
+      item.mission_run_id,
+      item.skill_id,
+      item.task_id,
+    )
+    success.value = Boolean(response.success)
+    message.value = response.message || (response.success ? 'Skill Artifact 已恢复发布。' : '恢复未完成，请继续人工复核。')
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '恢复结果不确定，请刷新复核队列。'
+    await loadMissionRun()
+  } finally {
+    recoveryBusyKey.value = ''
+  }
+}
+
+const approveCurrentStaffing = async (payload: {
+  nodeId: string
+  employeeMemberId: string
+  workerId: string
+}) => {
+  const current = missionRun.value
+  const nodeId = String(payload.nodeId || '').trim()
+  const employeeMemberId = String(payload.employeeMemberId || '').trim()
+  const workerId = String(payload.workerId || '').trim()
+  if (!current || !nodeId || !employeeMemberId || !workerId || staffingBusyKey.value) return
+  const confirmed = window.confirm(
+    `确认将 Mission 节点 ${nodeId} 派给员工 ${employeeMemberId} 的 Worker ${workerId}？批准后会立即恢复该节点派遣。`
+  )
+  if (!confirmed) return
+  staffingBusyKey.value = nodeId
+  message.value = ''
+  try {
+    const response = await approveMissionStaffing(current.mission_run_id, {
+      tenant_id: current.tenant_id,
+      node_id: nodeId,
+      employee_member_id: employeeMemberId,
+      worker_id: workerId,
+    })
+    if (!response.success) {
+      success.value = false
+      message.value = response.message || '人员审批未成功；请刷新并核对 Mission 状态。'
+      await loadMissionRun()
+      return
+    }
+    success.value = true
+    message.value = '人员派遣已批准，Mission 已尝试恢复对应节点。'
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '人员派遣审批失败'
+    await loadMissionRun()
+  } finally {
+    staffingBusyKey.value = ''
+  }
+}
+
+const reusePublishedSkill = async (nodeId: string, skill: KnowledgeSkill) => {
+  const current = missionRun.value
+  const skillId = String(skill.id || '').trim()
+  const version = String(skill.version || '').trim()
+  const digest = String(skill.content_sha256 || '').trim()
+  if (!current || !nodeId || !skillId || !version || !digest || publishedReuseBusyKey.value) return
+  if (!window.confirm('确认将已发布 ' + skillId + '@' + version + ' 复用到节点 ' + nodeId + '？这会在 Broker 中执行固定 Artifact，不会重新发布。')) return
+  publishedReuseBusyKey.value = nodeId + ':' + skillId
+  message.value = ''
+  try {
+    const response = await reusePublishedMissionSkill(current.mission_run_id, skillId, nodeId, { schema_version: 'mission.skill-replay-binding.v1', skill_id: skillId, skill_version: version, content_sha256: digest, trust_level: String(skill.trust_level || 'verified') }, crypto.randomUUID())
+    success.value = Boolean(response.success)
+    message.value = response.message || (response.success ? '已复用并记录新的执行证据。' : '已发布 Skill 复用未成功。')
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error ? error.message : '已发布 Skill 复用结果不确定，请先刷新 Mission 状态。'
+    await loadMissionRun()
+  } finally { publishedReuseBusyKey.value = '' }
+}
+
+const replayCurrentSkill = async (payload: { skillId: string; nodeId: string }) => {
+  const current = missionRun.value
+  const skillId = String(payload.skillId || '').trim()
+  const nodeId = String(payload.nodeId || '').trim()
+  if (!current || !skillId || !nodeId || replayBusyKey.value) return
+
+  const confirmed = window.confirm(
+    `将 ${skillId} 提交到隔离 Broker 执行。执行成功后还会请求独立 Validator；只有签名验收通过才可能发布不可变 Artifact。是否继续？`
+  )
+  if (!confirmed) return
+
+  replayBusyKey.value = `${nodeId}:${skillId}`
+  message.value = ''
+  try {
+    const response = await replayMissionSkill(
+      current.mission_run_id,
+      skillId,
+      nodeId,
+      crypto.randomUUID(),
+    )
+    if (!response.success) {
+      success.value = false
+      message.value = response.message || 'Broker 回放请求未成功；请核对 Mission 动作链状态。'
+      await loadMissionRun()
+      return
+    }
+    success.value = true
+    message.value = 'Broker 隔离回放已完成；已刷新 Mission 动作链以读取签名证据、独立验证和发布状态。'
+    await loadMissionRun()
+  } catch (error: unknown) {
+    success.value = false
+    message.value = error instanceof Error
+      ? error.message
+      : 'Broker 回放结果不确定；请先刷新 Mission 动作链核对状态，不要直接重复执行。'
+    await loadMissionRun()
+  } finally {
+    replayBusyKey.value = ''
   }
 }
 

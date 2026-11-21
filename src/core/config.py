@@ -3,11 +3,13 @@ Evo Core - 配置管理系统
 
 配置完全外部化，代码中无硬编码默认值。
 
-配置文件搜索路径（按优先级）：
+配置文件搜索路径（按优先级；每次调用动态解析）：
 1. $EVO_CONFIG_PATH 环境变量
-2. ./.config/evo.json
-3. ~/.evo/config.json
-4. /etc/evo/config.json
+2. 当前工作区/.config/evo.json
+3. 仓库根目录/.config/evo.json
+4. 当前目录/.config/evo.json
+5. ~/.evo/config.json
+6. /etc/evo/config.json
 
 无配置文件时会抛出错误，提示复制 example 文件。
 """
@@ -116,19 +118,40 @@ class DistributedConfig:
 class ConfigLoader:
     """配置加载器"""
     
-    CONFIG_PATHS = [
-        os.getenv("EVO_CONFIG_PATH"),
-        Path.cwd() / ".config" / "evo.json",
-        Path.home() / ".evo" / "config.json",
-        Path("/etc/evo/config.json"),
-    ]
-    
     @classmethod
-    def find_config_file(cls) -> Optional[Path]:
-        """查找配置文件"""
-        for path in cls.CONFIG_PATHS:
-            if path and Path(path).is_file():
-                return Path(path)
+    def config_paths(cls, workspace: Optional[Path] = None) -> list[Path]:
+        """按明确优先级解析配置位置；每次调用读取环境变量和当前目录。"""
+        paths: list[Path] = []
+        env_path = str(os.getenv("EVO_CONFIG_PATH") or "").strip()
+        if env_path:
+            paths.append(Path(env_path).expanduser())
+        if workspace is not None:
+            paths.append(Path(workspace).expanduser() / ".config" / "evo.json")
+
+        # 随包仓库配置是部署默认值；工作区配置和显式环境变量始终优先。
+        repository_root = Path(__file__).resolve().parents[2]
+        paths.extend([
+            repository_root / ".config" / "evo.json",
+            Path.cwd() / ".config" / "evo.json",
+            Path.home() / ".evo" / "config.json",
+            Path("/etc/evo/config.json"),
+        ])
+
+        unique_paths: list[Path] = []
+        seen: set[Path] = set()
+        for path in paths:
+            normalized = path.expanduser()
+            if normalized not in seen:
+                seen.add(normalized)
+                unique_paths.append(normalized)
+        return unique_paths
+
+    @classmethod
+    def find_config_file(cls, workspace: Optional[Path] = None) -> Optional[Path]:
+        """查找配置文件；不在模块导入时缓存 cwd 或环境变量。"""
+        for path in cls.config_paths(workspace):
+            if path.is_file():
+                return path
         return None
     
     @classmethod
@@ -166,20 +189,9 @@ class ConfigLoader:
         
         配置文件必须存在，无硬编码默认值。
         """
-        # 1. 查找配置文件（工作区优先）
-        config_path = None
-        loaded_from = None
-        
-        if workspace:
-            workspace_config = workspace / ".config" / "evo.json"
-            if workspace_config.is_file():
-                config_path = workspace_config
-                loaded_from = str(workspace_config)
-        
-        if not config_path:
-            config_path = cls.find_config_file()
-            if config_path:
-                loaded_from = str(config_path)
+        # 1. 按统一优先级解析：显式环境变量 > 工作区 > 仓库默认 > 当前目录 > 用户级 > 系统级。
+        config_path = cls.find_config_file(workspace)
+        loaded_from = str(config_path) if config_path else None
         
         # 2. 无配置文件时报错
         if not config_path:

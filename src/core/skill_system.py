@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -103,9 +103,12 @@ class SkillRegistry:
     3. 自动生成的草稿技能
     """
     
-    def __init__(self, workspace: Path, tenant_id: str = "default"):
+    def __init__(self, workspace: Path, tenant_id: str = "default", *, artifact_store=None):
         self.workspace = workspace
         self.tenant_id = tenant_id
+        # Optional read-only view of Broker-published immutable Skill artifacts.
+        # The Broker remains the only writer; callers must supply a Mission-pinned binding.
+        self.artifact_store = artifact_store
         
         # 分布式存储（云端）
         dist_config = get_distributed_config(workspace)
@@ -122,6 +125,54 @@ class SkillRegistry:
         # 技能索引缓存
         self._index_cache: Optional[Dict[str, List[str]]] = None
     
+    def load_published_artifact(self, binding: Mapping[str, Any]) -> Skill:
+        """Load one exact Broker-published Skill version for this tenant.
+
+        This is intentionally explicit rather than part of find_skill(): the
+        immutable Artifact Store has no implicit "latest" lookup, and a Skill
+        may only be resolved when Mission supplies its pinned version, digest,
+        and execution provenance. The injected store must be mounted read-only
+        for this process; publication remains Broker-owned.
+        """
+        if self.artifact_store is None or not callable(
+            getattr(self.artifact_store, "load_for_binding", None)
+        ):
+            raise RuntimeError("Broker Skill Artifact Store is not configured")
+
+        if not isinstance(binding, Mapping):
+            raise ValueError("Skill replay binding is invalid")
+        context = binding.get("mission_context")
+        if not isinstance(context, Mapping) or context.get("tenant_id") != self.tenant_id:
+            raise ValueError("Skill replay binding belongs to another tenant")
+        if binding.get("trust_level") not in {"verified", "cloud"}:
+            raise ValueError("only independently validated published Skills may be loaded")
+
+        artifact = self.artifact_store.load_for_binding(binding)
+        if (
+            getattr(artifact, "tenant_id", None) != self.tenant_id
+            or getattr(artifact, "id", None) != binding.get("skill_id")
+            or getattr(artifact, "version", None) != binding.get("skill_version")
+            or getattr(artifact, "content_sha256", None) != binding.get("content_sha256")
+            or getattr(artifact, "trust_level", None) != binding.get("trust_level")
+        ):
+            raise ValueError("loaded Skill artifact does not match its pinned binding")
+
+        trust_level = SkillTrustLevel(artifact.trust_level)
+        return Skill(
+            id=artifact.id,
+            name=artifact.id,
+            domain="mission",
+            description="Broker-published immutable Mission Skill",
+            code=artifact.code,
+            parameters={
+                "mission_context": dict(context),
+                "content_sha256": artifact.content_sha256,
+            },
+            trust_level=trust_level,
+            source="broker_artifact",
+            version=artifact.version,
+        )
+
     def find_skill(
         self,
         domain: str,
@@ -201,10 +252,18 @@ class SkillRegistry:
         min_success_rate: float = 0.8
     ) -> bool:
         """
-        验证技能（提升到 verified 级别）
-        
-        通过测试后，技能从草稿升级为本地验证通过
+        验证技能（提升到 verified 级别）。
+
+        Fail closed: arbitrary dictionaries and in-memory success counts are not
+        proof of execution. Promotion remains disabled until this registry checks
+        a persisted replay-validation record created by the trusted executor and
+        independent validator. Keep this guard here so callers cannot bypass the
+        knowledge-runtime checks by invoking the registry directly.
         """
+        return False
+
+        # Legacy implementation retained temporarily; unreachable until trusted
+        # persisted replay-validation records are integrated.
         # 加载草稿
         skill = self._load_local_draft(skill_id)
         if not skill:
@@ -241,6 +300,12 @@ class SkillRegistry:
         
         只有验证通过的技能才能发布到云端
         """
+        # Fail closed at the publication boundary too. A JSON file under the
+        # local_verified directory is not itself proof that a trusted replay
+        # executor and independent validator approved this exact skill version.
+        # Re-enable only after publication checks a persisted validation record.
+        return False
+
         # 加载本地验证通过的技能
         skill = self._load_local_verified(skill_id)
         if not skill:
@@ -373,10 +438,10 @@ class SkillExecutor:
     4. 反馈技能效果（用于验证）
     """
     
-    def __init__(self, workspace: Path, tenant_id: str = "default"):
+    def __init__(self, workspace: Path, tenant_id: str = "default", *, artifact_store=None):
         self.workspace = workspace
         self.tenant_id = tenant_id
-        self.registry = SkillRegistry(workspace, tenant_id)
+        self.registry = SkillRegistry(workspace, tenant_id, artifact_store=artifact_store)
         
         # 执行历史（用于验证）
         self.execution_log: List[Dict[str, Any]] = []
@@ -386,36 +451,32 @@ class SkillExecutor:
         domain: str,
         task_type: str,
         context: Dict[str, Any],
-        prefer_local: bool = False
+        prefer_local: bool = False,
+        *,
+        artifact_binding: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Execute a skill selected either by normal lookup or an exact Mission binding.
+
+        When artifact_binding is supplied it is authoritative: resolve only that
+        tenant/version/digest-pinned Broker artifact. Invalid bindings never fall
+        back to local/cloud lookup. Code execution remains delegated to the
+        configured trusted isolated executor; this class does not eval/exec code.
         """
-        执行技能
-        
-        流程：
-        1. 查找技能（云端 → 本地验证 → 草稿）
-        2. 执行技能代码
-        3. 记录执行结果
-        4. 返回结果
-        """
-        # 1. 查找技能
-        skill = self.registry.find_skill(domain, task_type, prefer_local)
-        if not skill:
-            return {
-                "success": False,
-                "error": f"No skill found for {domain}/{task_type}",
-                "suggestion": "Create a draft skill using register_draft()",
-            }
-        
-        # 2. 执行技能
+        skill = None
         try:
-            # TODO: 实现具体的技能执行逻辑
-            # 这里可以是：
-            # - 调用 AI 模型
-            # - 执行预设代码
-            # - 调用外部工具
+            if artifact_binding is not None:
+                skill = self.registry.load_published_artifact(artifact_binding)
+            else:
+                skill = self.registry.find_skill(domain, task_type, prefer_local)
+
+            if not skill:
+                return {
+                    "success": False,
+                    "error": f"No skill found for {domain}/{task_type}",
+                    "suggestion": "Create a draft skill using register_draft()",
+                }
+
             result = self._execute_skill_code(skill, context)
-            
-            # 3. 记录执行
             execution_record = {
                 "skill_id": skill.id,
                 "domain": domain,
@@ -425,8 +486,6 @@ class SkillExecutor:
                 "timestamp": datetime.now().isoformat(),
             }
             self.execution_log.append(execution_record)
-            
-            # 4. 返回结果
             return {
                 "success": result.get("success", False),
                 "skill_id": skill.id,
@@ -434,24 +493,24 @@ class SkillExecutor:
                 "result": result.get("data"),
                 "message": result.get("message", ""),
             }
-            
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "skill_id": skill.id,
-            }
-    
+            response = {"success": False, "error": str(e)}
+            if skill is not None:
+                response["skill_id"] = skill.id
+            return response
+
     def _execute_skill_code(self, skill: Skill, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行技能代码（占位实现）"""
-        # TODO: 实现具体的执行逻辑
-        # 可以是 Python 代码执行、AI 调用、外部命令等
-        return {
-            "success": True,
-            "data": {"executed": skill.name, "context": context},
-            "message": f"Executed skill: {skill.name}",
-        }
-    
+        """拒绝执行尚未接入可信隔离回放器的 Skill。
+
+        Skill.code 目前没有受约束的执行协议。不能把“返回成功对象”
+        当作代码已执行，也不能在宿主进程中直接 eval/exec 不可信技能内容。
+        等待专用 replay executor、版本摘要绑定和独立验证器接入后再开放。
+        """
+        raise RuntimeError(
+            "Skill replay execution is unavailable: no trusted isolated "
+            "executor is configured for this skill."
+        )
+
     def get_execution_history(self, skill_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """获取执行历史（用于验证技能）"""
         if skill_id:
@@ -465,10 +524,25 @@ class SkillExecutor:
         auto_publish: bool = True
     ) -> Dict[str, Any]:
         """
-        验证并发布技能
-        
-        简化流程：基于执行历史自动验证并发布
+        验证并发布技能。
+
+        Disabled until the executor produces real, persisted replay evidence and
+        independent validation checks. The current _execute_skill_code method is
+        a placeholder that always reports success; its in-memory history must not
+        be treated as proof that a skill works or be allowed to publish a skill.
         """
+        return {
+            "success": False,
+            "verified": False,
+            "published": False,
+            "message": (
+                "Skill verification is disabled: the current executor is a "
+                "placeholder and does not produce independently validated replay evidence."
+            ),
+        }
+
+        # Kept below temporarily for reference; unreachable until the real replay
+        # executor and independent validator are connected.
         # 获取该技能的执行历史
         history = self.get_execution_history(skill_id)
         

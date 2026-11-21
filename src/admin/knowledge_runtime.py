@@ -4,12 +4,318 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
 from core import Experience, ExperienceStore, Skill, SkillRegistry, SkillTrustLevel
+from core.experience_reflection import ExperienceReflectionStore
 
+
+def _recipe_steps_from_findings(findings: dict) -> list[str]:
+    raw = findings.get("steps", findings.get("recommended_steps"))
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("accepted Reflection must contain explicit natural-language steps")
+    steps = [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    if not steps:
+        raise ValueError("accepted Reflection must contain at least one non-empty Recipe step")
+    return steps
+
+
+def _write_immutable_reflection_recipe(workspace: Path, tenant_id: str, skill: Skill) -> dict:
+    visible_dir, cache_dir = local_skill_dirs(workspace, tenant_id)
+    payload = skill.to_dict()
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    paths = (visible_dir / f"{skill.id}.json", cache_dir / f"{skill.id}.json")
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("Recipe Skill draft path is unsafe")
+        if path.exists():
+            if not path.is_file():
+                raise ValueError("Recipe Skill draft path is not a regular file")
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError("existing Recipe Skill draft is unreadable") from exc
+            if existing != payload:
+                raise ValueError("Recipe Skill ID already exists with different immutable content")
+            continue
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+        except FileExistsError:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing != payload:
+                raise ValueError("Recipe Skill ID already exists with different immutable content")
+    return {
+        "skill_id": skill.id,
+        "name": skill.name,
+        "domain": skill.domain,
+        "trust_level": skill.trust_level.value,
+        "visible_path": str(paths[0]),
+        "cache_path": str(paths[1]),
+    }
+
+
+def create_accepted_reflection_recipe_skill(
+    workspace: Path,
+    tenant_id: str,
+    reflection_id: str,
+) -> dict:
+    """Create an immutable, non-executable Recipe draft from an accepted Reflection."""
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        raise ValueError("tenant_id is required")
+    if not isinstance(reflection_id, str) or not reflection_id.strip():
+        raise ValueError("reflection_id is required")
+    accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(
+        reflection_id
+    )
+    reflection = accepted["reflection"]
+    decision = accepted["decision"]
+    source = accepted["source_experience"]
+    reflection_payload = reflection.metadata["experience_reflection"]
+    decision_payload = decision.metadata["experience_reflection_decision"]
+    findings = reflection_payload["findings"]
+    steps = _recipe_steps_from_findings(findings)
+
+    recipe = {
+        "schema_version": "experience-recipe.v1",
+        "steps": steps,
+        "applicability_conditions": findings.get("applicability_conditions", []),
+        "constraints": findings.get("constraints", []),
+        "counterexamples": findings.get("counterexamples", []),
+        "open_questions": findings.get("open_questions", []),
+        "success_factors": findings.get("success_factors", []),
+        "failure_causes": findings.get("failure_causes", []),
+    }
+    skill_id = "recipe-" + hashlib.sha256(
+        f"{tenant_id}:{reflection.id}".encode("utf-8")
+    ).hexdigest()[:24]
+    skill = Skill(
+        id=skill_id,
+        name=str(findings.get("title") or f"{source.domain}_{source.task_type}_recipe")[:120],
+        domain=source.domain,
+        description=str(findings.get("observed_outcome") or source.output_summary)[:1000],
+        code="",
+        parameters={
+            "recipe": recipe,
+            "executable": False,
+            "provenance": {
+                "tenant_id": tenant_id,
+                "source_experience_id": source.id,
+                "source_experience_digest": reflection_payload["source_experience_digest"],
+                "reflection_id": reflection.id,
+                "reflection_revision": reflection_payload["revision"],
+                "decision_id": decision.id,
+                "reviewer": decision_payload["reviewer"],
+                "decision_at": decision_payload["decision_at"],
+            },
+        },
+        trust_level=SkillTrustLevel.DRAFT,
+        source="accepted_experience_reflection_recipe",
+        version="1.0.0",
+        created_at=decision_payload["decision_at"],
+        updated_at=decision_payload["decision_at"],
+    )
+    return _write_immutable_reflection_recipe(workspace, tenant_id, skill)
+
+
+
+def _validate_reflection_executable_code(code: object) -> tuple[ast.Module, str]:
+    """Perform a static entry-point check only; never execute synthesized code in Admin."""
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("executable candidate code is required")
+    try:
+        encoded = code.encode("utf-8", errors="strict")
+        if len(encoded) > 512 * 1024:
+            raise ValueError("executable candidate code exceeds 512 KiB")
+        tree = ast.parse(code, mode="exec")
+    except (UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        raise ValueError("executable candidate code must be valid bounded Python source") from exc
+
+    entries = []
+    for index, node in enumerate(tree.body):
+        if (
+            index == 0 and isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+        ):
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run":
+            entries.append(node)
+            continue
+        raise ValueError("executable candidate may contain only a module docstring and one module-level run(context) function")
+    if len(entries) != 1:
+        raise ValueError("executable candidate must define exactly one synchronous run(context) function")
+    entry = entries[0]
+    if isinstance(entry, ast.AsyncFunctionDef):
+        raise ValueError("executable candidate must define exactly one synchronous run(context) function")
+    args = entry.args
+    if (
+        entry.decorator_list or args.posonlyargs or len(args.args) != 1
+        or args.args[0].arg != "context" or args.vararg is not None
+        or args.kwarg is not None or args.kwonlyargs or args.defaults
+        or any(value is not None for value in args.kw_defaults)
+    ):
+        raise ValueError("executable candidate run entry point must accept only one required context argument")
+    if not entry.body:
+        raise ValueError("executable candidate run(context) function must not be empty")
+    return tree, hashlib.sha256(encoded).hexdigest()
+
+
+def _write_immutable_executable_candidate(workspace: Path, tenant_id: str, skill: Skill) -> dict:
+    visible_dir, cache_dir = local_skill_dirs(workspace, tenant_id)
+    root = Path(workspace).resolve()
+    tenant_root = root / ".tenants" / tenant_id
+    for directory in (
+        root / ".tenants", tenant_root,
+        visible_dir.parent, visible_dir, cache_dir.parent, cache_dir,
+    ):
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError("executable Skill candidate directory is unsafe")
+        try:
+            directory.resolve(strict=True).relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("executable Skill candidate directory escapes workspace") from exc
+
+    payload = skill.to_dict()
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    paths = (visible_dir / f"{skill.id}.json", cache_dir / f"{skill.id}.json")
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("executable Skill candidate path is unsafe")
+        if path.exists():
+            if not path.is_file():
+                raise ValueError("executable Skill candidate path is not a regular file")
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError("existing executable Skill candidate is unreadable") from exc
+            if existing != payload:
+                raise ValueError("executable Skill candidate ID already exists with different immutable content")
+            continue
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+        except FileExistsError:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing != payload:
+                raise ValueError("executable Skill candidate ID already exists with different immutable content")
+    return {
+        "skill_id": skill.id,
+        "name": skill.name,
+        "domain": skill.domain,
+        "version": skill.version,
+        "trust_level": skill.trust_level.value,
+        "replay_eligible": True,
+        "replay_status": "awaiting_broker_replay",
+        "visible_path": str(paths[0]),
+        "cache_path": str(paths[1]),
+    }
+
+
+def create_accepted_reflection_executable_candidate(
+    workspace: Path,
+    tenant_id: str,
+    reflection_id: str,
+    candidate: dict,
+) -> dict:
+    """Bind caller-supplied synthesized Python to an accepted Reflection as a new draft.
+
+    This operation validates a static entry-point contract and persists an immutable
+    candidate. It does not call an LLM, execute code, contact Broker, or promote trust.
+    """
+    if not isinstance(candidate, dict):
+        raise ValueError("executable candidate must be an object")
+    allowed = {"name", "domain", "description", "code", "version"}
+    if set(candidate) - allowed or not {"name", "domain", "description", "code"}.issubset(candidate):
+        raise ValueError("executable candidate has unsupported or missing fields")
+
+    accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(reflection_id)
+    reflection = accepted["reflection"]
+    decision = accepted["decision"]
+    source = accepted["source_experience"]
+    reflection_payload = reflection.metadata["experience_reflection"]
+    decision_payload = decision.metadata["experience_reflection_decision"]
+
+    recipe_info = create_accepted_reflection_recipe_skill(workspace, tenant_id, reflection_id)
+    recipe_path = Path(recipe_info["visible_path"])
+    if recipe_path.is_symlink() or not recipe_path.is_file():
+        raise ValueError("accepted Reflection Recipe draft is missing or unsafe")
+    try:
+        recipe_payload = json.loads(recipe_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
+    if (
+        recipe_payload.get("id") != recipe_info["skill_id"]
+        or recipe_payload.get("trust_level") != "draft"
+        or recipe_payload.get("code") != ""
+        or not isinstance(recipe_payload.get("parameters"), dict)
+        or recipe_payload["parameters"].get("executable") is not False
+    ):
+        raise ValueError("accepted Reflection Recipe draft does not match its non-executable contract")
+
+    name = candidate.get("name")
+    domain = candidate.get("domain")
+    description = candidate.get("description")
+    version = candidate.get("version", "1.0.0")
+    if not isinstance(name, str) or not name.strip() or len(name) > 160:
+        raise ValueError("executable candidate name is invalid")
+    if not isinstance(domain, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", domain):
+        raise ValueError("executable candidate domain is invalid")
+    if not isinstance(description, str) or len(description) > 2000:
+        raise ValueError("executable candidate description is invalid")
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", version):
+        raise ValueError("executable candidate version is invalid")
+    _, code_digest = _validate_reflection_executable_code(candidate.get("code"))
+
+    recipe_digest = hashlib.sha256(
+        json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    skill_id = "recipe-exec-" + hashlib.sha256(
+        f"{tenant_id}:{reflection.id}:{reflection_payload['revision']}:{version}:{code_digest}".encode("utf-8")
+    ).hexdigest()[:24]
+    provenance = {
+        "tenant_id": tenant_id,
+        "source_experience_id": source.id,
+        "source_experience_digest": reflection_payload["source_experience_digest"],
+        "reflection_id": reflection.id,
+        "reflection_revision": reflection_payload["revision"],
+        "decision_id": decision.id,
+        "reviewer": decision_payload["reviewer"],
+        "decision_at": decision_payload["decision_at"],
+        "recipe_skill_id": recipe_info["skill_id"],
+        "recipe_sha256": recipe_digest,
+    }
+    skill = Skill(
+        id=skill_id,
+        name=name.strip(),
+        domain=domain,
+        description=description,
+        code=candidate["code"],
+        parameters={
+            "execution_contract": {"kind": "python_run_context", "replay_eligible": True},
+            "recipe": recipe_payload["parameters"]["recipe"],
+            "provenance": provenance,
+            "synthesis": {
+                "method": "caller_supplied_candidate",
+                "code_sha256": code_digest,
+                "static_contract_check": "passed",
+            },
+        },
+        trust_level=SkillTrustLevel.DRAFT,
+        source="accepted_reflection_executable_candidate",
+        version=version,
+        created_at=decision_payload["decision_at"],
+        updated_at=decision_payload["decision_at"],
+    )
+    return _write_immutable_executable_candidate(Path(workspace), tenant_id, skill)
 
 def collect_task_verified_skills(tasks: list) -> list[dict]:
     items: list[dict] = []
@@ -164,29 +470,22 @@ def maybe_auto_verify_skill_candidate(
     tenant_id: str,
     skill: Skill,
     framework_hint: str,
+    replay_results: list[dict] | None = None,
 ) -> dict | None:
-    evidences = matching_mission_delivery_experiences(workspace, tenant_id, framework_hint)
-    if len(evidences) < 2:
-        return None
-    test_results = [
-        {"success": True, "quality_score": exp.quality_score, "id": exp.id}
-        for exp in evidences
-    ]
-    registry = SkillRegistry(workspace, tenant_id)
-    verified = registry.verify_skill(skill.id, test_results, min_success_rate=0.8)
-    if not verified:
-        return None
-    synced = sync_verified_skill_view(workspace, tenant_id, skill.id) or {}
-    return {
-        "validated_by": "mission_delivery_history",
-        "evidence_count": len(evidences),
-        **synced,
-    }
+    """Keep promotion disabled until a trusted Validator attestation is integrated.
+
+    replay_results is retained temporarily for call-site compatibility only.
+    A plain dictionary, including one with success/checks/verifier fields, is
+    caller-controlled data and cannot establish Broker or Validator provenance.
+    The trusted path must consume persisted, signature-verified evidence rather
+    than accepting worker-shaped result objects.
+    """
+    return None
 
 
 def should_skip_auto_skill_task_type(task_type: str) -> bool:
     normalized = str(task_type or "").strip().lower()
-    return normalized in {"growth_event", "replay_validation", "strategy_governance", "role_reflection"}
+    return normalized in {"growth_event", "replay_validation", "strategy_governance", "role_reflection", "experience_reflection", "experience_reflection_decision"}
 
 
 def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> list[dict]:
@@ -198,8 +497,22 @@ def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> l
     for domain_dir in sorted(item for item in experiences_root.iterdir() if item.is_dir()):
         domain = domain_dir.name
         for exp in store.load_by_domain(domain, limit=80):
-            if should_skip_auto_skill_task_type(exp.task_type):
+            metadata = exp.metadata if isinstance(exp.metadata, dict) else {}
+            # A signed Broker replay proves isolated execution only. Until an
+            # independent reflection/validator accepts it, it is observation
+            # evidence and must not seed reusable Skill drafts by quality score.
+            if (
+                should_skip_auto_skill_task_type(exp.task_type)
+                or isinstance(metadata.get("skill_replay"), dict)
+            ):
                 continue
+            if str(exp.task_type or "").strip().lower() == "mission_delivery":
+                delivery = metadata.get("mission_delivery")
+                validation = delivery.get("validation_evidence") if isinstance(delivery, dict) else None
+                # Mission Delivery quality scores are not acceptance evidence.
+                # Require the explicit evaluator verdict emitted by the real Mission path.
+                if not isinstance(validation, dict) or validation.get("verdict") != "pass":
+                    continue
             if float(exp.quality_score or 0.0) < 0.75:
                 continue
             capability_type = str(exp.capability_type or "").strip() or domain
@@ -219,7 +532,7 @@ def collect_stable_experience_skill_groups(workspace: Path, tenant_id: str) -> l
         avg_quality = round(sum(float(item.quality_score or 0.0) for item in items) / len(items), 3)
         if avg_quality < 0.82:
             continue
-        payload["items"] = sorted(items, key=lambda item: item.created_at, reverse=True)[:6]
+        payload["items"] = sorted(items, key=lambda item: item.created_at, reverse=True)
         payload["count"] = len(items)
         payload["avg_quality"] = avg_quality
         stable_groups.append(payload)
@@ -233,26 +546,13 @@ def maybe_auto_verify_stable_experience_skill_candidate(
     skill: Skill,
     items: list[Experience],
 ) -> dict | None:
-    if len(items) < 3:
-        return None
-    avg_quality = round(sum(float(item.quality_score or 0.0) for item in items) / max(len(items), 1), 3)
-    if avg_quality < 0.86:
-        return None
-    registry = SkillRegistry(workspace, tenant_id)
-    test_results = [
-        {"success": float(item.quality_score or 0.0) >= 0.8, "quality_score": float(item.quality_score or 0.0), "id": item.id}
-        for item in items
-    ]
-    verified = registry.verify_skill(skill.id, test_results, min_success_rate=0.85)
-    if not verified:
-        return None
-    synced = sync_verified_skill_view(workspace, tenant_id, skill.id) or {}
-    return {
-        "validated_by": "stable_experience_cluster",
-        "evidence_count": len(items),
-        "avg_quality_score": avg_quality,
-        **synced,
-    }
+    """Historical experience clusters may draft skills, but cannot verify them.
+
+    These experiences predate the candidate skill and do not prove that the
+    candidate was loaded or executed. Keep this path fail-closed until it is
+    connected to persisted, skill-version-bound replay validation records.
+    """
+    return None
 
 
 def auto_draft_stable_experience_skills(
@@ -274,12 +574,60 @@ def auto_draft_stable_experience_skills(
             continue
         existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
         existing_usage = int(existing_payload.get("usage_count", 0) or 0)
-        evidence_ids = [str(item.id) for item in items[:4]]
+        source_experiences: list[dict] = []
+        source_experience_ids: list[str] = []
+        source_mission_run_ids: list[str] = []
+        source_worker_ids: list[str] = []
+        task_evidence_ids: list[str] = []
+        for item in items:
+            experience_id = str(item.id or "").strip()
+            if experience_id:
+                source_experience_ids.append(experience_id)
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            delivery = metadata.get("mission_delivery") if isinstance(metadata.get("mission_delivery"), dict) else {}
+            skill_execution = metadata.get("skill_execution") if isinstance(metadata.get("skill_execution"), dict) else {}
+            source_record = {"experience_id": experience_id} if experience_id else {}
+            if skill_execution:
+                source_record["skill_execution"] = skill_execution
+            for key in (
+                "mission_run_id",
+                "mission_node_id",
+                "primary_worker_id",
+                "evidence_ids",
+                "validation_evidence",
+                "decision_trace",
+            ):
+                value = delivery.get(key)
+                if value is not None and value != "":
+                    source_record[key] = value
+            if source_record:
+                source_experiences.append(source_record)
+            mission_run_id = str(delivery.get("mission_run_id") or "").strip()
+            worker_id = str(delivery.get("primary_worker_id") or "").strip()
+            if mission_run_id:
+                source_mission_run_ids.append(mission_run_id)
+            if worker_id:
+                source_worker_ids.append(worker_id)
+            evidence = delivery.get("evidence_ids")
+            if isinstance(evidence, list):
+                task_evidence_ids.extend(str(value) for value in evidence if str(value or "").strip())
+
+        source_experience_ids = list(dict.fromkeys(source_experience_ids))
+        source_mission_run_ids = list(dict.fromkeys(source_mission_run_ids))
+        source_worker_ids = list(dict.fromkeys(source_worker_ids))
+        task_evidence_ids = list(dict.fromkeys(task_evidence_ids))
+        evidence_ids = task_evidence_ids
         summaries = [str(item.output_summary or "").strip() for item in items[:3] if str(item.output_summary or "").strip()]
         existing_params = existing_payload.get("parameters", {}) if isinstance(existing_payload.get("parameters"), dict) else {}
-        existing_evidence_ids = existing_params.get("evidence_ids", [])
+        existing_experience_ids = existing_params.get("source_experience_ids", [])
         existing_avg_quality = safe_float(existing_params.get("avg_quality_score"), 0.0)
-        if existing_payload and list(existing_evidence_ids) == evidence_ids and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001:
+        existing_source_experiences = existing_params.get("source_experiences", [])
+        if (
+            existing_payload
+            and list(existing_experience_ids) == source_experience_ids
+            and existing_source_experiences == source_experiences
+            and abs(existing_avg_quality - float(group.get("avg_quality") or 0.0)) < 0.001
+        ):
             continue
         description = (
             f"基于 {group.get('count')} 条稳定 {domain}/{task_type} 经验自动沉淀的技能草稿，"
@@ -305,9 +653,15 @@ def auto_draft_stable_experience_skills(
                 "stable_experience_count": int(group.get("count") or 0),
                 "avg_quality_score": float(group.get("avg_quality") or 0.0),
                 "evidence_ids": evidence_ids,
+                "source_experience_ids": source_experience_ids,
+                "source_mission_run_ids": source_mission_run_ids,
+                "source_worker_ids": source_worker_ids,
+                "source_experiences": source_experiences,
                 "example_outputs": summaries,
             },
-            trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
+            # Experience clusters can inform a draft, but cannot transfer trust
+            # from an older artifact with the same stable ID.
+            trust_level=SkillTrustLevel.DRAFT,
             source="stable_experience_auto_generated",
             version="1.0.0",
             usage_count=max(existing_usage, int(group.get("count") or 0)),
@@ -339,8 +693,12 @@ def auto_draft_stable_experience_skills(
                 "skill_id": skill.id,
                 "source": "stable_experience_cluster",
                 "evidence_ids": evidence_ids,
+                "source_experience_ids": source_experience_ids,
+                "source_mission_run_ids": source_mission_run_ids,
+                "source_worker_ids": source_worker_ids,
                 "stable_experience_count": int(group.get("count") or 0),
                 "verified": bool(verified_info),
+            "replay_eligible": skill_info.get("replay_eligible") is True,
             },
         )
         drafted.append({
@@ -349,9 +707,91 @@ def auto_draft_stable_experience_skills(
             "stable_experience_count": int(group.get("count") or 0),
             "avg_quality_score": float(group.get("avg_quality") or 0.0),
             "evidence_ids": evidence_ids,
+            "source_experience_ids": source_experience_ids,
+            "source_mission_run_ids": source_mission_run_ids,
+            "source_worker_ids": source_worker_ids,
         })
     return drafted
 
+
+
+_EXECUTABLE_CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_EXECUTABLE_CANDIDATE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
+
+
+def _build_mission_delivery_executable_skill(
+    candidate: object, *, mission_run: dict, promotion_node: dict,
+    analyze_snapshot: dict, reconstruct_snapshot: dict,
+    validation_evidence: dict, primary_worker_id: str | None,
+) -> Skill:
+    """Accept an explicit executable artifact without executing it in Admin."""
+    required = {"id", "name", "domain", "description", "code", "execution_contract"}
+    if not isinstance(candidate, dict) or not required.issubset(candidate) or set(candidate) - (required | {"version"}):
+        raise ValueError("executable Skill candidate has unsupported or missing fields")
+    skill_id = candidate.get("id")
+    if not isinstance(skill_id, str) or not _EXECUTABLE_CANDIDATE_ID_RE.fullmatch(skill_id):
+        raise ValueError("executable Skill candidate ID is invalid")
+    name, domain = candidate.get("name"), candidate.get("domain")
+    description, code = candidate.get("description"), candidate.get("code")
+    if not isinstance(name, str) or not name.strip() or len(name) > 160:
+        raise ValueError("executable Skill candidate name is invalid")
+    if not isinstance(domain, str) or not _EXECUTABLE_CANDIDATE_ID_RE.fullmatch(domain):
+        raise ValueError("executable Skill candidate domain is invalid")
+    if not isinstance(description, str) or len(description) > 2000:
+        raise ValueError("executable Skill candidate description is invalid")
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("executable Skill candidate code is empty")
+    try:
+        code_size = len(code.encode("utf-8", errors="strict"))
+        tree = ast.parse(code, mode="exec")
+    except (UnicodeError, SyntaxError, ValueError, TypeError) as exc:
+        raise ValueError("executable Skill candidate code is not valid bounded Python source") from exc
+    if code_size > 512 * 1024:
+        raise ValueError("executable Skill candidate code exceeds its size limit")
+    contract = candidate.get("execution_contract")
+    if contract != {"kind": "python_run_context", "replay_eligible": True}:
+        raise ValueError("executable Skill candidate requires the explicit python_run_context contract")
+    version = candidate.get("version", "1.0.0")
+    if not isinstance(version, str) or not _EXECUTABLE_CANDIDATE_VERSION_RE.fullmatch(version):
+        raise ValueError("executable Skill candidate version is invalid")
+    entries = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+    ]
+    if len(entries) != 1 or isinstance(entries[0], ast.AsyncFunctionDef):
+        raise ValueError("executable Skill candidate must define one synchronous run(context)")
+    arguments = entries[0].args
+    if (
+        arguments.posonlyargs or len(arguments.args) != 1
+        or arguments.vararg is not None or arguments.kwarg is not None
+        or arguments.kwonlyargs or arguments.args[0].arg != "context"
+    ):
+        raise ValueError("executable Skill candidate entry point must accept only context")
+    mission_run_id = str(mission_run.get("mission_run_id") or "")
+    mission_node_id = str(promotion_node.get("id") or "")
+    origin_task_id = str(reconstruct_snapshot.get("task_id") or "")
+    if not mission_run_id or not mission_node_id or not origin_task_id:
+        raise ValueError("executable Skill candidate provenance is incomplete")
+    parameters = {
+        "execution_contract": dict(contract),
+        "mission_run_id": mission_run_id,
+        "mission_node_id": mission_node_id,
+        "candidate_origin_task_id": origin_task_id,
+        "evidence_ids": [str(analyze_snapshot["task_id"]), origin_task_id],
+        "validation_evidence": dict(validation_evidence),
+        "primary_worker_id": primary_worker_id,
+        "acceptance": {
+            "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
+            "has_target_dir": True,
+            "components_min": int((reconstruct_snapshot.get("evaluation_metrics") or {}).get("components", 0) or 0),
+        },
+    }
+    return Skill(
+        id=skill_id, name=name.strip(), domain=domain,
+        description=description, code=code, parameters=parameters,
+        trust_level=SkillTrustLevel.DRAFT,
+        source="mission_delivery_executable_candidate", version=version,
+    )
 
 def create_mission_delivery_skill_candidate(
     *,
@@ -365,6 +805,10 @@ def create_mission_delivery_skill_candidate(
     record_growth_event: Callable[..., object],
 ) -> dict:
     metrics = reconstruct_snapshot.get("evaluation_metrics", {}) if isinstance(reconstruct_snapshot.get("evaluation_metrics"), dict) else {}
+    if reconstruct_snapshot.get("evaluation_verdict") != "pass" or metrics.get("has_target_dir") is not True:
+        raise ValueError("Mission delivery acceptance must pass with a real target directory before drafting a Skill candidate")
+    if not str(reconstruct_snapshot.get("task_id") or "").strip():
+        raise ValueError("Mission delivery candidate requires the reconstruct task evidence ID")
     components = int(metrics.get("components", 0) or 0)
     promotion_node = next(
         node for node in mission_run["plan"]["nodes"]
@@ -377,6 +821,13 @@ def create_mission_delivery_skill_candidate(
         "analyze_task_id": analyze_snapshot["task_id"],
         "reconstruct_task_id": reconstruct_snapshot["task_id"],
     }
+    runtime_route = mission_run.get("runtime_route") if isinstance(mission_run.get("runtime_route"), dict) else {}
+    mission_context = mission_run.get("context") if isinstance(mission_run.get("context"), dict) else {}
+    primary_worker_id = str(
+        runtime_route.get("primary_worker_id")
+        or mission_context.get("runtime_primary_worker_id")
+        or ""
+    ).strip() or None
     framework_hint = "javascript"
     analyze_summary = str(analyze_snapshot.get("summary") or "").lower()
     reconstruct_summary = str(reconstruct_snapshot.get("summary") or "").lower()
@@ -384,52 +835,98 @@ def create_mission_delivery_skill_candidate(
         framework_hint = "react"
     elif "vue" in analyze_summary or "vue" in reconstruct_summary:
         framework_hint = "vue"
-    skill_id = f"skill_javascript_reverse_{framework_hint}_delivery"
-    existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
-    existing_usage = int(existing_payload.get("usage_count", 0) or 0)
-    skill = Skill(
-        id=skill_id,
-        name=f"mission_delivery_{framework_hint}_reverse",
-        domain="javascript",
-        capability_type="javascript_reverse",
-        description="根据已验证成功的 JS 逆向交付样本自动生成的草稿技能候选。",
-        code=(
-            "1. 接收工作目录或 bundle 路径。\n"
-            "2. 自动解析真正的 assets/main-*.js 入口与 source_dir。\n"
-            "3. 执行 analyze 提取框架、打包器、页面与边界线索。\n"
-            "4. 执行 reconstruct 生成可接手的项目骨架。\n"
-            "5. 根据 evaluation_verdict、components、has_target_dir 自动验证交付质量。\n"
-            "6. 将成功结果沉淀为经验、验证摘要与后续成长候选。"
-        ),
-        parameters={
-            "mission_kind": mission_run.get("mission_kind"),
-            "mission_run_id": mission_run["mission_run_id"],
-            "mission_node_id": promotion_node["id"],
-            "decision_trace": decision_trace,
-            "validation_evidence": validation_evidence,
-            "framework_hint": framework_hint,
-            "components": components,
-            "accepted_tasks": ["analyze", "reconstruct"],
-            "required_context_keys": ["source_path", "bundle_path", "source_dir"],
-            "acceptance": {
-                "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
-                "has_target_dir": bool(metrics.get("has_target_dir")),
-                "components_min": components,
+
+    executable_candidate = reconstruct_snapshot.get("skill_candidate")
+    if executable_candidate is not None:
+        skill = _build_mission_delivery_executable_skill(
+            executable_candidate,
+            mission_run=mission_run,
+            promotion_node=promotion_node,
+            analyze_snapshot=analyze_snapshot,
+            reconstruct_snapshot=reconstruct_snapshot,
+            validation_evidence=validation_evidence,
+            primary_worker_id=primary_worker_id,
+        )
+        existing_candidate = load_local_skill_payload(workspace, tenant_id, skill.id)
+        if existing_candidate is not None and any(
+            existing_candidate.get(field) != skill.to_dict().get(field)
+            for field in (
+                "id", "name", "domain", "capability_type", "description",
+                "version", "code", "parameters", "trust_level", "source",
+            )
+        ):
+            raise ValueError("executable Skill candidate ID already exists with different immutable content")
+        skill_info = write_skill_candidate(workspace, tenant_id, skill)
+        skill_info.update({"replay_status": "eligible", "replay_eligible": True})
+    else:
+        skill_id = f"skill_javascript_reverse_{framework_hint}_delivery"
+        existing_payload = load_local_skill_payload(workspace, tenant_id, skill_id) or {}
+        existing_usage = int(existing_payload.get("usage_count", 0) or 0)
+        skill = Skill(
+            id=skill_id,
+            name=f"mission_delivery_{framework_hint}_reverse",
+            domain="javascript",
+            capability_type="javascript_reverse",
+            description="根据已验证成功的 JS 逆向交付样本自动生成的草稿技能候选。",
+            code=(
+                "1. 接收工作目录或 bundle 路径。\n"
+                "2. 自动解析真正的 assets/main-*.js 入口与 source_dir。\n"
+                "3. 执行 analyze 提取框架、打包器、页面与边界线索。\n"
+                "4. 执行 reconstruct 生成可接手的项目骨架。\n"
+                "5. 根据 evaluation_verdict、components、has_target_dir 自动验证交付质量。\n"
+                "6. 将成功结果沉淀为经验、验证摘要与后续成长候选。"
+            ),
+            parameters={
+                "execution_contract": {
+                    "kind": "non_executable_recipe",
+                    "reason": "This candidate is a natural-language delivery recipe, not Python run(context) source.",
+                    "replay_eligible": False,
+                },
+                "mission_kind": mission_run.get("mission_kind"),
+                "mission_run_id": mission_run["mission_run_id"],
+                "mission_node_id": promotion_node["id"],
+                "primary_worker_id": primary_worker_id,
+                "evidence_ids": [analyze_snapshot["task_id"], reconstruct_snapshot["task_id"]],
+                "decision_trace": decision_trace,
+                "validation_evidence": validation_evidence,
+                "framework_hint": framework_hint,
+                "components": components,
+                "accepted_tasks": ["analyze", "reconstruct"],
+                "required_context_keys": ["source_path", "bundle_path", "source_dir"],
+                "acceptance": {
+                    "evaluation_verdict": reconstruct_snapshot.get("evaluation_verdict"),
+                    "has_target_dir": bool(metrics.get("has_target_dir")),
+                    "components_min": components,
+                },
             },
-        },
-        trust_level=SkillTrustLevel(existing_payload.get("trust_level", "draft")),
-        source="mission_delivery_auto_generated",
-        version="1.0.0",
-        usage_count=existing_usage + 1,
-        success_rate=1.0 if reconstruct_snapshot.get("evaluation_verdict") == "pass" else 0.0,
-    )
-    skill_info = write_skill_candidate(workspace, tenant_id, skill)
-    verified_info = maybe_auto_verify_skill_candidate(
-        workspace=workspace,
-        tenant_id=tenant_id,
-        skill=skill,
-        framework_hint=framework_hint,
-    )
+            # A newly generated artifact is always a new draft, even if an older
+            # artifact with the same stable ID was previously verified.
+            trust_level=SkillTrustLevel.DRAFT,
+            source="mission_delivery_auto_generated",
+            version="1.0.0",
+            usage_count=existing_usage + 1,
+            success_rate=1.0 if reconstruct_snapshot.get("evaluation_verdict") == "pass" else 0.0,
+        )
+        skill_info = write_skill_candidate(workspace, tenant_id, skill)
+
+    verified_info = None
+    if skill_info.get("replay_eligible") is True:
+        # A future executable candidate must supply independently attested replay
+        # evidence before verification. This path deliberately has no implicit
+        # worker-success or historical-experience fallback.
+        verified_info = maybe_auto_verify_skill_candidate(
+            workspace=workspace,
+            tenant_id=tenant_id,
+            skill=skill,
+            framework_hint=framework_hint,
+        )
+    else:
+        skill_info = {
+            **skill_info,
+            "replay_status": "blocked",
+            "replay_reason": "non_executable_recipe",
+            "trust_level": "draft",
+        }
     if isinstance(verified_info, dict):
         skill_info = {**skill_info, **verified_info, "trust_level": "verified"}
     record_growth_event(
@@ -447,6 +944,7 @@ def create_mission_delivery_skill_candidate(
             "skill_name": skill.name,
             "mission_run_id": mission_run["mission_run_id"],
             "mission_node_id": promotion_node["id"],
+            "primary_worker_id": primary_worker_id,
             "decision_trace": decision_trace,
             "validation_evidence": validation_evidence,
             "source": "mission_delivery",

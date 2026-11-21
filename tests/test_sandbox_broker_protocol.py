@@ -1,0 +1,300 @@
+"""Tests for the path-free sandbox broker request and attestation contract."""
+import base64
+from dataclasses import replace
+import json
+import sys
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from core.execution_profiles import resolve_execution_profile
+from core.sandbox_broker_protocol import (
+    BROKER_RESPONSE_SCHEMA,
+    build_broker_request,
+    verify_broker_response,
+    SKILL_REPLAY_PROFILE_ID,
+)
+
+
+class SandboxBrokerProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.temp.name)
+        (self.workspace / "tests").mkdir()
+        (self.workspace / "tests" / "test_sample.py").write_text(
+            "def test_sample():\n    assert True\n", encoding="utf-8"
+        )
+        self.spec = resolve_execution_profile(self.workspace, {
+            "profile_id": "python.pytest",
+            "target": "tests/test_sample.py",
+        })
+        self.request_id = str(uuid.uuid4())
+        self.private_key = Ed25519PrivateKey.generate()
+        self.public_key = self.private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def _signed_response(self, result=None):
+        result = result or {
+            "schema_version": "mission.execution-result.v2",
+            "runner": {"id": "root-broker", "version": "1"},
+            "profile_id": "python.pytest",
+            "target": "tests/test_sample.py",
+            "exit_code": 0,
+            "timed_out": False,
+            "execution_succeeded": True,
+            "stdout": {"bytes": 0, "available_bytes": 0, "capture_truncated": False, "sha256": "0" * 64},
+            "stderr": {"bytes": 0, "available_bytes": 0, "capture_truncated": False, "sha256": "0" * 64},
+        }
+        payload = {
+            "schema_version": BROKER_RESPONSE_SCHEMA,
+            "request_id": self.request_id,
+            "workspace_id": "project-evo-os",
+            "mission_context": {"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+            "skill_binding": None,
+            "skill_artifact": None,
+            "skill_replay_output": None,
+            "result": result,
+        }
+        canonical = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        return {
+            **payload,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": "broker-key-2026-01",
+                "value": base64.b64encode(self.private_key.sign(canonical)).decode("ascii"),
+            },
+        }
+
+    def test_request_contains_only_opaque_workspace_and_allowlisted_intent(self):
+        request = build_broker_request(
+            "project-evo-os", self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, request_id=self.request_id,
+        )
+        self.assertEqual(request["workspace_id"], "project-evo-os")
+        self.assertEqual(request["profile_id"], "python.pytest")
+        self.assertEqual(request["target"], "tests/test_sample.py")
+        self.assertNotIn("cwd", request)
+        self.assertNotIn("argv", request)
+        self.assertNotIn("workspace_path", request)
+        self.assertEqual(
+            set(request),
+            {"schema_version", "request_id", "workspace_id", "mission_context", "skill_binding", "profile_id", "target", "timeout_seconds"},
+        )
+
+    def test_builds_explicit_skill_replay_profile_from_immutable_binding(self):
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-test",
+            "node_id": "node-test",
+            "task_id": "task-test",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-demo",
+            "skill_version": "1.0.0",
+            "content_sha256": "a" * 64,
+            "trust_level": "verified",
+            "mission_context": context,
+        }
+        spec = replace(self.spec, profile_id=SKILL_REPLAY_PROFILE_ID, target="skill-demo@1.0.0")
+        request = build_broker_request(
+            "project-evo-os", spec, mission_context=context, skill_binding=binding,
+        )
+        self.assertEqual(request["profile_id"], SKILL_REPLAY_PROFILE_ID)
+        self.assertEqual(request["target"], "skill-demo@1.0.0")
+        self.assertEqual(request["skill_binding"], binding)
+
+    def test_builds_draft_candidate_binding_only_for_skill_replay(self):
+        context = {
+            "tenant_id": "tenant-test",
+            "mission_run_id": "mission-test",
+            "node_id": "node-test",
+            "task_id": "task-test",
+        }
+        binding = {
+            "schema_version": "mission.skill-replay-binding.v1",
+            "skill_id": "skill-draft",
+            "skill_version": "1.0.0",
+            "content_sha256": "b" * 64,
+            "trust_level": "draft",
+            "mission_context": context,
+        }
+        spec = replace(self.spec, profile_id=SKILL_REPLAY_PROFILE_ID, target="skill-draft@1.0.0")
+        request = build_broker_request(
+            "project-evo-os", spec, mission_context=context, skill_binding=binding,
+        )
+        self.assertEqual(request["profile_id"], SKILL_REPLAY_PROFILE_ID)
+        self.assertEqual(request["skill_binding"]["trust_level"], "draft")
+        with self.assertRaises(ValueError):
+            build_broker_request(
+                "project-evo-os", replace(self.spec, profile_id="python.pytest"),
+                mission_context=context, skill_binding=binding,
+            )
+
+    def test_rejects_unsafe_profile_targets_even_if_spec_is_forged(self):
+        for target in ("../escape.py", "/etc/passwd", "tests\\\\escape.py", "tests/../escape.py"):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                build_broker_request("project-evo-os", replace(self.spec, target=target), mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"})
+
+    def test_rejects_path_like_or_invalid_workspace_identifiers(self):
+        for value in ("../workspace", "/tmp/workspace", "a/b", "", " "):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                build_broker_request(value, self.spec, mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"})
+
+    def test_verifies_ed25519_attestation(self):
+        response = self._signed_response()
+        result = verify_broker_response(
+            response,
+            public_key=self.public_key,
+            expected_key_id="broker-key-2026-01",
+            expected_request_id=self.request_id,
+            expected_workspace_id="project-evo-os",
+            expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+            expected_profile_id="python.pytest",
+            expected_target="tests/test_sample.py",
+        )
+        self.assertTrue(result["execution_succeeded"])
+
+    def test_generic_response_rejects_skill_replay_output_even_before_signature_check(self):
+        response = self._signed_response()
+        response["skill_replay_output"] = {
+            "schema_version": "mission.skill-replay-output.v1",
+            "success": True,
+            "value": {"ok": True},
+            "error": None,
+            "logs": "",
+        }
+        with self.assertRaisesRegex(ValueError, "generic test-runner response"):
+            verify_broker_response(
+                response,
+                public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={
+                    "tenant_id": "tenant-test", "mission_run_id": "mission-test",
+                    "node_id": "node-test", "task_id": "task-test",
+                },
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_tampering_wrong_key_and_wrong_request(self):
+        response = self._signed_response()
+        changed = dict(response)
+        changed["result"] = dict(response["result"], execution_succeeded=False)
+        for candidate, key, request_id in (
+            (changed, self.public_key, self.request_id),
+            (response, self.public_key, str(uuid.uuid4())),
+            (response, Ed25519PrivateKey.generate().public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            ), self.request_id),
+        ):
+            with self.subTest(candidate=candidate, request_id=request_id), self.assertRaises(ValueError):
+                verify_broker_response(
+                    candidate, public_key=key,
+                    expected_key_id="broker-key-2026-01",
+                    expected_request_id=request_id,
+                    expected_workspace_id="project-evo-os",
+                    expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+                    expected_profile_id="python.pytest",
+                    expected_target="tests/test_sample.py",
+                )
+
+    def test_rejects_unknown_signature_key_id_and_extra_fields(self):
+        response = self._signed_response()
+        response["signature"] = dict(response["signature"], key_id="attacker-key")
+        with self.assertRaisesRegex(ValueError, "key ID"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+        response = self._signed_response()
+        response["caller_command"] = "rm -rf /"
+        with self.assertRaisesRegex(ValueError, "unsupported or missing"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_response_from_another_workspace(self):
+        response = self._signed_response()
+        response["workspace_id"] = "other-workspace"
+        with self.assertRaisesRegex(ValueError, "workspace_id"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_inconsistent_output_truncation_metadata(self):
+        for changes in ({"available_bytes": 2}, {"available_bytes": -1}, {"capture_truncated": True}, {"bytes": True}):
+            result = self._signed_response()["result"]
+            result["stdout"] = dict(result["stdout"], **changes)
+            response = self._signed_response(result=result)
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "output metadata"):
+                verify_broker_response(response, public_key=self.public_key, expected_key_id="broker-key-2026-01", expected_request_id=self.request_id, expected_workspace_id="project-evo-os", expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, expected_profile_id="python.pytest", expected_target="tests/test_sample.py")
+
+    def test_rejects_signed_result_for_different_target(self):
+        result = self._signed_response()["result"]
+        result["target"] = "tests/other.py"
+        response = self._signed_response(result=result)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_signed_response_bound_to_another_task(self):
+        response = self._signed_response()
+        with self.assertRaisesRegex(ValueError, "mission_context"):
+            verify_broker_response(
+                response, public_key=self.public_key,
+                expected_key_id="broker-key-2026-01",
+                expected_request_id=self.request_id,
+                expected_workspace_id="project-evo-os",
+                expected_mission_context={**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "task_id": "different-task"},
+                expected_profile_id="python.pytest",
+                expected_target="tests/test_sample.py",
+            )
+
+    def test_rejects_incomplete_or_malformed_mission_context(self):
+        for context in ({}, {**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "task_id": "../other"}, {**{"tenant_id": "tenant-test", "mission_run_id": "mission-test", "node_id": "node-test", "task_id": "task-test"}, "tenant_id": ""}):
+            with self.subTest(context=context), self.assertRaises(ValueError):
+                build_broker_request("project-evo-os", self.spec, mission_context=context)
+
+
+if __name__ == "__main__":
+    unittest.main()

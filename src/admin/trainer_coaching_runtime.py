@@ -150,6 +150,41 @@ def append_trainer_coaching_record(
     return new_card
 
 
+def record_task_failed_coaching(
+    runtime: dict,
+    *,
+    coached_member: dict,
+    task: dict,
+    failure_reason: str,
+    learning_task_id: str | None = None,
+) -> dict | None:
+    """Record a failure as a Trainer intervention point, not a worker retirement."""
+    member_name = str(coached_member.get("name") or coached_member.get("member_id") or "员工").strip()
+    task_title = str(task.get("title") or task.get("task_type") or "正式任务").strip()
+    reason = str(failure_reason or task.get("error") or "任务未通过").strip()[:500]
+    return append_trainer_coaching_record(
+        runtime,
+        event_type="task_failed_intervention",
+        coached_member=coached_member,
+        outcome=f"{member_name} 在「{task_title}」未通过，需要育成官介入",
+        method_summary=(
+            f"失败原因：{reason}。育成官应区分知识缺口、方法错误、执行器/环境问题和人员匹配问题，"
+            "形成下一轮训练实验，而不是直接结束该员工的成长线。"
+        ),
+        next_coaching_focus=(
+            "先完成失败复盘与针对性训练，再决定是否由原员工重试；"
+            "只有确认能力或环境不匹配时才调整人员"
+        ),
+        dedup_key=str(task.get("task_id") or "").strip() or None,
+        metadata={
+            "task_id": str(task.get("task_id") or "").strip() or None,
+            "learning_task_id": learning_task_id,
+            "failure_reason": reason,
+            "intervention": "trainer_review_before_worker_retirement",
+        },
+    )
+
+
 def record_task_approved_coaching(
     runtime: dict,
     *,
@@ -283,4 +318,5 @@ __all__ = [
     "record_commercial_intake_settled_coaching",
     "record_independence_handoff_coaching",
     "record_task_approved_coaching",
+    "record_task_failed_coaching",
 ]

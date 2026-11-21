@@ -22,9 +22,11 @@ const IntakeWorkspace = defineAsyncComponent(() => import('./views/IntakeWorkspa
 const TrainerToolsWorkspace = defineAsyncComponent(() => import('./views/TrainerToolsWorkspace.vue'))
 const MissionRunsWorkspace = defineAsyncComponent(() => import('./views/MissionRunsWorkspace.vue'))
 const OrganizationNode = defineAsyncComponent(() => import('./views/OrganizationNode.vue'))
+const Preview = defineAsyncComponent(() => import('./views/Preview.vue'))
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
+  { path: '/preview', component: Preview, meta: { public: true, preview: true } },
   { path: '/login', component: Login, meta: { public: true, mode: 'login' } },
   { path: '/register', component: Login, meta: { public: true, mode: 'register' } },
   { path: '/dashboard', component: Dashboard },
@@ -86,6 +88,10 @@ async function ensureAuthenticated() {
 }
 
 router.beforeEach(async (to) => {
+  // The public preview is a self-contained, read-only showcase. It must not
+  // probe the production API or modify the visitor's authentication state.
+  if (to.meta.preview) return true
+
   const isPublic = Boolean(to.meta.public)
   const isAuthenticated = await ensureAuthenticated()
   console.log(`[Router] 导航到 ${to.path}, 公开=${isPublic}, 已登录=${isAuthenticated}`)

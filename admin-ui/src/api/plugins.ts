@@ -45,6 +45,8 @@ export interface TenantExternalLearningPolicy {
   allow_enterprise_sources: boolean
   source_priority: string[]
   validation_required: boolean
+  auto_repair_enabled?: boolean
+  max_repair_attempts?: number
   model_provider?: TenantModelProvider
 }
 

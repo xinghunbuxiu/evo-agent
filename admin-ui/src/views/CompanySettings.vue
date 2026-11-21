@@ -253,6 +253,31 @@
               <span>外部学习后必须验证</span>
             </label>
           </div>
+          <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+            <div class="text-sm font-semibold text-amber-950">失败后自动修复（可选）</div>
+            <p class="mt-1 text-xs leading-5 text-amber-900">
+              启用后，只有任务确实失败、没有其他执行仍在进行，并且 AI 辅助与模型接口可用时，系统才会让 Worker 根据失败证据制定新计划。每轮仍需经过 Mission 审核和独立验收。
+            </p>
+            <label class="mt-3 inline-flex items-center gap-2 text-sm text-slate-700">
+              <input
+                :checked="Boolean(externalLearningPolicy.auto_repair_enabled)"
+                type="checkbox"
+                @change="setAutoRepairEnabled(($event.target as HTMLInputElement).checked)"
+              >
+              <span>允许自动修复失败任务</span>
+            </label>
+            <div v-if="externalLearningPolicy.auto_repair_enabled" class="mt-3 max-w-xs">
+              <label class="mb-1 block text-xs text-slate-500">最多修复轮数（1–20）</label>
+              <input
+                v-model.number="externalLearningPolicy.max_repair_attempts"
+                type="number"
+                min="1"
+                max="20"
+                step="1"
+                class="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-700"
+              >
+            </div>
+          </div>
           <div class="mt-4">
             <label class="mb-2 block text-xs uppercase tracking-[0.18em] text-slate-400">Source Priority</label>
             <input
@@ -671,6 +696,8 @@ const externalLearningPolicy = ref<TenantExternalLearningPolicy>({
   allow_enterprise_sources: true,
   source_priority: ['local_memory', 'platform_shared', 'enterprise_repo', 'official_docs', 'web_search', 'ai_assist'],
   validation_required: true,
+  auto_repair_enabled: false,
+  max_repair_attempts: 0,
   model_provider: {
     enabled: false,
     label: 'openai_compatible',
@@ -699,6 +726,15 @@ const patchModelProvider = (patch: Record<string, unknown>) => {
       ...(externalLearningPolicy.value.model_provider || {}),
       ...patch,
     },
+  }
+}
+
+const setAutoRepairEnabled = (enabled: boolean) => {
+  const currentBudget = Number(externalLearningPolicy.value.max_repair_attempts || 0)
+  externalLearningPolicy.value = {
+    ...externalLearningPolicy.value,
+    auto_repair_enabled: enabled,
+    max_repair_attempts: enabled && currentBudget < 1 ? 2 : currentBudget,
   }
 }
 

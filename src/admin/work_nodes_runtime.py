@@ -13,6 +13,7 @@ from typing import Any, Callable
 from admin.worker_route_runtime import resolve_work_type_id
 from core import ExperienceStore, GitProviderError
 from core.capability_types import infer_capability_type, legacy_domains_for_capability_type
+from admin.experience_shard_runtime import archive_verified_experience_files
 
 
 PHASE_LABELS = {
@@ -489,59 +490,31 @@ async def archive_work_node_to_storage(
             "reason": f"gitee_provider_setup_failed: {type(exc).__name__}: {exc}",
             "next_action": "本地快照已保存；Gitee 配置或服务初始化失败，修复后可重试归档",
         }
-    repos = git_knowledge.get("repos", {}) if isinstance(git_knowledge, dict) else {}
-    branch = "master"
-    if isinstance(repos, dict) and isinstance(repos.get("experiences"), dict):
-        branch = _normalize(repos.get("experiences", {}).get("branch")) or "master"
-    if not target_repo:
-        local = _write_local_node_archive(workspace, prefix, files)
-        return {**local, "reason": "missing_git_repo", "next_action": "已落盘本地，初始化 experiences 仓后可同步"}
-
     uploaded: list[str] = []
     try:
-        for rel_path, content in files.items():
-            full_path = f"{prefix}/{rel_path}"
-            await provider.upsert_text_file(
-                token=token,
-                repo_full_name=target_repo,
-                file_path=full_path,
-                content=content,
-                message=f"Archive work node {node.get('node_id')}",
-                branch=branch,
-            )
-            uploaded.append(full_path)
-
-        # A successful write response is not enough: read every file back and
-        # compare it with the exact UTF-8 payload before reporting remote success.
-        remote_verified: list[str] = []
-        read_text_file = getattr(provider, "read_text_file", None)
-        if not callable(read_text_file):
-            raise RuntimeError("Git provider does not support remote archive verification")
-        for rel_path, expected_content in files.items():
-            full_path = f"{prefix}/{rel_path}"
-            actual_content = await read_text_file(
-                token=token,
-                repo_full_name=target_repo,
-                file_path=full_path,
-                branch=branch,
-            )
-            if actual_content is None:
-                raise RuntimeError(f"remote archive verification failed: missing {full_path}")
-            if actual_content != expected_content:
-                raise RuntimeError(f"remote archive verification failed: content mismatch {full_path}")
-            remote_verified.append(full_path)
+        archive_result = await archive_verified_experience_files(
+            workspace=workspace,
+            tenant_id=tenant_id,
+            provider=provider,
+            token=token,
+            namespace=str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else "",
+            repository_name_prefix=f"evo-{_sanitize_path_segment(tenant_id).lower()}-experience",
+            artifact_prefix=prefix,
+            files=files,
+            message=f"Archive work node {node.get('node_id')}",
+        )
+        uploaded = list(archive_result["files"])
     except Exception as exc:
-        # Remote providers can fail with transport/HTTP errors that are not
-        # normalized to GitProviderError. Preserve the node locally for any
-        # upload failure instead of losing the archive on an unexpected error.
+        # Keep the verified local snapshot if provisioning, upload, readback or
+        # catalog registration fails. Remote artifacts are never reported as
+        # cataloged until the complete batch has passed readback verification.
         local = _write_local_node_archive(workspace, prefix, files)
         return {
             **local,
             "status": "local_only",
             "reason": f"{type(exc).__name__}: {exc}",
-            "target_repo": target_repo,
-            "branch": branch,
-            "next_action": "远端写入或回读校验失败，已尝试保存在本地；修复远端配置后可重新归档",
+            "target_repo": archive_result.get("target_repo") if "archive_result" in locals() else None,
+            "next_action": "远端分片写入、回读或目录登记失败；本地快照已保留，可修复后重试",
             "remote_uploaded_files": uploaded,
             "integrity_verified": False,
         }
@@ -549,15 +522,17 @@ async def archive_work_node_to_storage(
     return {
         "status": "archived",
         "reason": None,
+        "repository_id": archive_result["repository_id"],
         "gitee_path": prefix,
-        "target_repo": target_repo,
-        "target_url": target_url,
-        "branch": branch,
-        "files": uploaded,
-        "verified_files": remote_verified,
-        "integrity_verified": len(remote_verified) == len(files),
+        "target_repo": archive_result["target_repo"],
+        "target_url": archive_result["target_url"],
+        "branch": archive_result["branch"],
+        "files": archive_result["files"],
+        "verified_files": archive_result["verified_files"],
+        "artifact_count": len(archive_result["artifacts"]),
+        "integrity_verified": archive_result["integrity_verified"],
         "archived_at": datetime.now().isoformat(),
-        "next_action": "节点已写入 Gitee 并完成逐文件回读校验",
+        "next_action": "节点已写入编号知识分片，逐文件回读通过并登记到 artifact catalog",
     }
 
 
@@ -665,40 +640,28 @@ async def retry_local_work_node_archive(
             tenant_manager, tenant_id, "experiences",
             config.experiences.full_name, config.experiences.url,
         )
-        repos = git_knowledge.get("repos", {}) if isinstance(git_knowledge, dict) else {}
-        branch = _normalize(repos.get("experiences", {}).get("branch")) or "master" if isinstance(repos, dict) and isinstance(repos.get("experiences"), dict) else "master"
-        if not target_repo:
-            return {"status": "failed", "reason": "missing_git_repo", "local_root": str(base),
-                    "next_action": "本地快照已通过校验；配置 experiences 仓库后重试", "integrity_verified": True}
-        uploaded: list[str] = []
-        verified: list[str] = []
-        for rel_path, file_content in files.items():
-            full_path = f"{prefix}/{rel_path}"
-            await provider.upsert_text_file(
-                token=token, repo_full_name=target_repo, file_path=full_path,
-                content=file_content, message=f"Retry archive work node {node.get('node_id')}", branch=branch,
-            )
-            uploaded.append(full_path)
-        read_text_file = getattr(provider, "read_text_file", None)
-        if not callable(read_text_file):
-            raise RuntimeError("Git provider does not support remote archive verification")
-        for rel_path, expected in files.items():
-            full_path = f"{prefix}/{rel_path}"
-            actual = await read_text_file(
-                token=token, repo_full_name=target_repo, file_path=full_path, branch=branch,
-            )
-            if actual is None or actual != expected:
-                raise RuntimeError(f"remote archive verification failed: {full_path}")
-            verified.append(full_path)
+        archive_result = await archive_verified_experience_files(
+            workspace=workspace,
+            tenant_id=tenant_id,
+            provider=provider,
+            token=token,
+            namespace=str(git_knowledge.get("namespace") or "") if isinstance(git_knowledge, dict) else "",
+            repository_name_prefix=f"evo-{_sanitize_path_segment(tenant_id).lower()}-experience",
+            artifact_prefix=prefix,
+            files=files,
+            message=f"Retry archive work node {node.get('node_id')}",
+        )
+        uploaded = list(archive_result["files"])
+        verified = list(archive_result["verified_files"])
         previous = task.get("work_node_archive") if isinstance(task.get("work_node_archive"), dict) else {}
         return {
-            "status": "archived", "reason": None, "gitee_path": prefix,
-            "target_repo": target_repo, "target_url": target_url, "branch": branch,
-            "files": [f"{prefix}/{p}" for p in files],
-            "verified_files": verified, "integrity_verified": len(verified) == len(files),
+            "status": "archived", "reason": None, "repository_id": archive_result["repository_id"], "gitee_path": prefix,
+            "target_repo": archive_result["target_repo"], "target_url": archive_result["target_url"], "branch": archive_result["branch"],
+            "files": archive_result["files"], "verified_files": verified,
+            "artifact_count": len(archive_result["artifacts"]), "integrity_verified": archive_result["integrity_verified"],
             "archived_at": previous.get("archived_at") or datetime.now().isoformat(),
             "synced_at": datetime.now().isoformat(), "local_root": str(base),
-            "next_action": "本地快照已通过 SHA-256 校验，远端所有文件已逐一回读验证",
+            "next_action": "本地快照已通过 SHA-256 校验，远端分片文件已回读验证并登记 artifact catalog",
         }
     except Exception as exc:
         return {
