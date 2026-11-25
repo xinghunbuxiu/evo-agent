@@ -1,213 +1,44 @@
-# Evo 智能体平台 - 架构文档
+# Evo Agent 技术架构
 
-> **产品主线**见 [README.md](README.md) 与 [docs/PRODUCT_M1_CHECKLIST_CN.md](docs/PRODUCT_M1_CHECKLIST_CN.md)：个人公司 · 育成师 + 财务 + 工种。  
-> 本文档描述**技术分层**，供开发参考。
+> 当前项目结构、代码归属、配置治理、禁止硬编码、反堆叠和真实验收规则，以 [项目结构与工程约束](docs/PROJECT_STRUCTURE_AND_ENGINEERING_RULES_CN.md) 为准。
 
-## 项目概述
+## 产品主线
 
-**Evo** — 个人公司智能体平台的技术实现：Admin 编排、任务队列、经验与 Git 知识容器；首条工种为头条自媒体（`self_media_operations`）。内置 `domains/javascript` 等能力包默认关闭，仅作研发扩展。
+Evo 是以 Mission 为单一任务决策中心的持续学习型智能体平台。主流程：
 
-## 分层架构
+`目标理解 -> 知识检索 -> Mission 计划与依赖 -> Talent Center 人员安排 -> 授权与 Worker Claim -> TaskQueue 执行 -> 结果与证据 -> 独立验证/业务验收 -> 复盘 -> Experience / Skill`
 
-```
-evo-mcp/
-├── src/
-│   ├── core/                    # 核心平台层（跨领域通用）
-│   │   ├── config.py           # 分层配置管理
-│   │   ├── storage.py          # 分布式存储
-│   │   ├── learning.py         # AI 学习引擎
-│   │   └── tenant.py           # 多租户管理
-│   │
-│   └── domains/                 # 领域专用层
-│       ├── javascript/         # JS 代码分析 ✅
-│       │   ├── analyzer.py
-│       │   ├── fingerprint.py
-│       │   ├── reconstructor.py
-│       │   └── commands.py
-│       │
-│       ├── android/            # APK 逆向 ⏳
-│       ├── pc/                 # 二进制分析 ⏳
-│       └── dev/                # 开发辅助 ⏳
-│
-├── .config/
-│   └── evo.json               # 核心配置
-└── src/server.py              # 平台自检（冒烟，非 HTTP 服务）
-```
+Mission 负责任务目标、拆解、依赖、执行授权、验收与重规划；Talent Center 负责 Role、Employee、Worker 的生命周期和成长；Worker 执行受授权任务并提交结果和证据。
 
-## 核心层 (Core)
+## 技术边界
 
-### 1. 配置管理 (`config.py`)
+| 层 | 代码位置 | 职责 |
+|---|---|---|
+| Core Kernel | `src/core/` | 稳定领域模型、协议、共享算法和基础接口 |
+| Admin Application | `src/admin/` | 用例编排、应用服务、权限策略适配 |
+| HTTP API | `src/admin/routes/` | 请求/响应适配，不持有业务规则 |
+| Built-in Domains | `src/domains/` | 专业领域能力 |
+| Workers | `src/workers/` | 岗位/工种任务处理器 |
+| Executors | `executors/` | 外部平台、浏览器、CLI、设备等适配器 |
+| Admin UI | `admin-ui/` | 管理界面，通过 Admin API 工作 |
+| Extensions | `plugins/` | 可选扩展 |
 
-**分层配置架构：**
-- 核心配置 (`evo.json`) - 所有领域共享
-- 领域配置 (`{domain}.json`) - 继承核心并扩展
+## Skill 安全边界
 
-**配置优先级：**
-```
-代码默认值 < 配置文件 < 环境变量
-```
+Recipe（自然语言经验）与 Executable Skill（可执行代码）是不同资产。可执行 Skill 必须经过 Broker 隔离执行；Validator 独立验收并签名；Artifact Store 保存不可变发布产物。Broker 执行成功、Validator 通过、业务验收通过是三个不同事实，不得合并表达。
 
-**环境变量：**
-```bash
-EVO_CONFIG_PATH=/path/to/config.json
-EVO_REGISTRY_OWNER=custom-org
-EVO_GITEE_API=https://gitee.com/api/v5
-```
+Broker/Validator 可选配置缺失时，普通 Mission 仍应正常工作；Skill Replay 必须明确不可用，不得模拟成功或绕过隔离执行。
 
-### 2. 分布式存储 (`storage.py`)
+## 运行入口
 
-**统一存储接口：**
-- 经验存储 (experiences) - 跨领域共享学习经验
-- 知识存储 (knowledge) - 通用技能/策略
-- 领域存储 (domains/{name}/) - 各领域的专用数据
+- Admin 应用工厂：`admin.server:create_app`
+- Python 包路径：`src/`
+- 前端：`admin-ui/`
+- 配置示例：`.env.example` 与受版本控制的非敏感配置
+- 运行数据：工作区与部署指定数据目录，不属于源代码
 
-**分片支持：**
-```python
-from core import ShardedStore, ShardConfig
+实际启动、部署、环境变量和迁移说明请以 [START.md](START.md)、[ADMIN_README.md](ADMIN_README.md) 及 [工程约束文档](docs/PROJECT_STRUCTURE_AND_ENGINEERING_RULES_CN.md) 为准。
 
-store = ShardedStore(
-    base_path=workspace / "shards",
-    config=ShardConfig(shard_count=4)
-)
-```
+## 重要说明
 
-### 3. AI 学习引擎 (`learning.py`)
-
-**核心组件：**
-- `Experience` / `ExperienceStore` - 经验记录
-- `Strategy` / `StrategyEngine` - 策略管理
-- `SkillGenerator` / `SkillExecutor` - 技能系统
-
-### 4. 多租户 (`tenant.py`)
-
-```python
-from core import TenantManager
-
-mgr = TenantManager(workspace)
-tenant = mgr.create_tenant(
-    tenant_id="team-a",
-    name="Team A",
-    domains=["javascript", "android"]
-)
-```
-
-## 领域层 (Domains)
-
-### JavaScript 领域 (`domains/javascript/`)
-
-**已完整实现：**
-
-```python
-from domains import javascript as js
-
-# 1. 初始化
-js.init_workspace(Path("./workspace"), "tenant-1")
-
-# 2. 分析
-result = js.analyze_bundle(
-    workspace=Path("./workspace"),
-    bundle_path=Path("./app.js"),
-    tenant_id="tenant-1"
-)
-# 返回: frameworks, libraries, patterns, fingerprints
-
-# 3. 重构
-js.reconstruct_project(
-    workspace=Path("./workspace"),
-    analysis_result=result,
-    source_dir=Path("./input"),
-    tenant_id="tenant-1"
-)
-```
-
-**特点：**
-- AI 生成指纹（非预定义）
-- 分布式指纹库存储
-- 经验自动记录到 evo-experiences
-
-## 配置文件
-
-### 核心配置 (`.config/evo.json`)
-
-```json
-{
-  "version": "2.0",
-  "platform": "evo",
-  "gitee_api_base": "https://gitee.com/api/v5",
-  "repos": {
-    "registry": "evo-project/evo-registry",
-    "experiences": "evo-project/evo-experiences",
-    "knowledge": "evo-project/evo-knowledge"
-  },
-  "domains": {
-    "javascript": {
-      "enabled": true,
-      "repos": {
-        "fingerprints": "evo-javascript-fingerprints"
-      }
-    },
-    "android": {
-      "enabled": false,
-      "repos": {
-        "fingerprints": "evo-android-fingerprints"
-      }
-    }
-  }
-}
-```
-
-## 与 Hermes Agent 的关系
-
-| 特性 | Hermes Agent | Evo Platform |
-|------|-------------|--------------|
-| 定位 | 通用 AI 助手 | 专业分析平台 |
-| 场景 | 对话/任务 | 代码/二进制分析 |
-| 架构 | 单机 SQLite | 分布式 Gitee |
-| 扩展 | 插件技能 | 领域模块 |
-| 关系 | 可选前端 | 核心后端 |
-
-**集成方式：**
-```python
-# Hermes Agent 调用 Evo 作为技能
-@hermes.skill("analyze_javascript")
-def analyze_js(code: str) -> dict:
-    return evo.domains.javascript.analyze(code)
-```
-
-## 未来扩展
-
-### 添加新领域
-
-1. 创建目录 `src/domains/{name}/`
-2. 实现 `__init__.py`, `analyzer.py`, `commands.py`
-3. 在 `evo.json` 添加领域配置
-4. 领域自动继承核心层的存储和学习能力
-
-### 领域复用核心能力
-
-```python
-# 自动获得的能力
-from core import (
-    get_distributed_config,  # 统一配置
-    UnifiedDistributedStore,  # 分布式存储
-    ExperienceStore,         # 经验记录
-    SkillGenerator,          # AI 技能生成
-    TenantManager,           # 多租户
-)
-```
-
-## 运行测试
-
-```bash
-cd evo-mcp
-PYTHONPATH=src python3 src/server.py
-```
-
-会打印配置、已注册能力包，并在 `.test_workspace/` 下对 JavaScript 分析/重构做冒烟。
-
-生产 HTTP 服务：
-
-```bash
-cd src
-python3 -m uvicorn admin.server:create_app --port 8000 --factory
-```
+仓库正在进行结构治理。文档中的目标结构是渐进迁移方向，不代表所有目标目录已经实现。未完成的迁移、尚未接通的调用链和未执行的测试必须明确标注，不能将设计方案描述为已交付能力。

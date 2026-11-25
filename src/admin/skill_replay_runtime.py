@@ -1,0 +1,1267 @@
+"""Configured Mission entry point for Broker-isolated Skill Replay.
+
+Replay is opt-in: ordinary Mission execution remains available when the Broker
+is not configured. Candidate code is parsed in-process but is only executed by
+the separately managed Sandbox Broker.
+"""
+from __future__ import annotations
+
+import ast
+import base64
+import json
+import hashlib
+import logging
+import os
+import re
+import stat
+import uuid
+from pathlib import Path
+from typing import Callable, Mapping
+
+from core import Skill
+from core.execution_profiles import ExecutionProfileSpec, MAX_OUTPUT_BYTES
+from core.sandbox_broker_protocol import (
+    SKILL_REPLAY_PROFILE_ID,
+    SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA_V2,
+    SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+    broker_response_sha256,
+    verify_broker_response,
+)
+from core.sandbox_broker_transport import (
+    promote_skill_candidate_via_broker,
+    stage_skill_candidate_via_broker,
+    request_broker_replay_status,
+    list_published_skills_via_broker,
+)
+from core.skill_validator import (
+    VALIDATION_REQUEST_SCHEMA, VALIDATION_REQUEST_SCHEMA_V2,
+    verify_validation_response,
+)
+from core.skill_validator_transport import (
+    request_skill_validation,
+    request_skill_validator_status,
+)
+from core.skill_replay_contract import build_skill_replay_binding
+from core.skill_manifest import normalize_skill_manifest, manifest_sha256
+from core.skill_replay_evidence_store import SkillReplayEvidenceStore
+from core.skill_replay_mission import SkillReplayMissionAdapter, build_skill_replay_execution_request_id
+
+LOGGER = logging.getLogger("evo.skill_replay")
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_WORKSPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_CONFIG_ENV = {
+    "socket_path": "EVO_SKILL_REPLAY_BROKER_SOCKET",
+    "workspace_id": "EVO_SKILL_REPLAY_WORKSPACE_ID",
+    "broker_public_key": "EVO_SKILL_REPLAY_BROKER_PUBLIC_KEY",
+    "broker_key_id": "EVO_SKILL_REPLAY_BROKER_KEY_ID",
+    "evidence_root": "EVO_SKILL_REPLAY_EVIDENCE_ROOT",
+}
+_VALIDATOR_CONFIG_ENV = {
+    "validator_socket_path": "EVO_SKILL_REPLAY_VALIDATOR_SOCKET",
+    "validator_public_key": "EVO_SKILL_REPLAY_VALIDATOR_PUBLIC_KEY",
+    "validator_key_id": "EVO_SKILL_REPLAY_VALIDATOR_KEY_ID",
+}
+_VALIDATED_TRUST_LEVEL = "verified"
+
+
+class SkillReplayRuntimeConfigurationError(ValueError):
+    """The optional Mission-to-Broker replay configuration is unsafe or incomplete."""
+
+
+class SkillReplayOutcomeIndeterminate(RuntimeError):
+    """A downstream request may have committed; only status review can resolve it."""
+
+    def __init__(self, message: str, *, evidence_ref: dict | None = None):
+        super().__init__(message)
+        self.evidence_ref = dict(evidence_ref) if isinstance(evidence_ref, dict) else None
+
+
+def _deterministic_request_id(operation: str, identity: Mapping) -> str:
+    """Bind Broker idempotency to the exact candidate or signed promotion evidence."""
+    payload = json.dumps(
+        {"operation": operation, "identity": dict(identity)},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    )
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"evo-agent:skill-replay:{payload}",
+    ))
+
+
+def _load_draft_skill_payload(workspace: Path, tenant_id: str, skill_id: str) -> dict | None:
+    """Read only a tenant-local draft file without following symlinks."""
+    workspace_root = Path(workspace).resolve(strict=True)
+    tenants_root = workspace_root / ".tenants"
+    tenant_root = tenants_root / tenant_id
+    if tenants_root.is_symlink() or tenant_root.is_symlink():
+        raise ValueError("tenant Skill storage must not contain symlink directories")
+    candidates = (
+        tenant_root / "skills" / "draft" / f"{skill_id}.json",
+        tenant_root / ".skill_cache" / "drafts" / f"{skill_id}.json",
+    )
+    for path in candidates:
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ValueError("Skill candidate file is unavailable or unsafe") from exc
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid not in {0, os.geteuid()}
+                or info.st_mode & 0o022
+                or info.st_size > 512 * 1024
+            ):
+                raise ValueError("Skill candidate file is not a trusted bounded regular file")
+            resolved_tenant = tenant_root.resolve(strict=True)
+            resolved_tenant.relative_to(workspace_root)
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(resolved_tenant)
+            chunks = []
+            remaining = 512 * 1024 + 1
+            while remaining:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > 512 * 1024:
+                raise ValueError("Skill candidate file exceeds its size limit")
+        except (OSError, ValueError) as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError("Skill candidate file could not be read safely") from exc
+        finally:
+            os.close(fd)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Skill candidate file is not valid UTF-8 JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Skill candidate file must contain an object")
+        return payload
+    return None
+
+
+class SkillReplayRuntime:
+    def __init__(self, *, workspace: Path, socket_path: str, workspace_id: str,
+                 broker_public_key: bytes, broker_key_id: str,
+                 evidence_store: SkillReplayEvidenceStore,
+                 validator_socket_path: str | None = None,
+                 validator_public_key: bytes | None = None,
+                 validator_key_id: str | None = None):
+        self.workspace = Path(workspace)
+        self.socket_path = socket_path
+        self.workspace_id = workspace_id
+        self.broker_public_key = bytes(broker_public_key)
+        self.broker_key_id = broker_key_id
+        self.evidence_store = evidence_store
+        self.validator_socket_path = validator_socket_path
+        self.validator_public_key = bytes(validator_public_key) if validator_public_key is not None else None
+        self.validator_key_id = validator_key_id
+        if any(value is not None for value in (validator_socket_path, validator_public_key, validator_key_id)):
+            if not validator_socket_path or self.validator_public_key is None or not validator_key_id:
+                raise ValueError("independent Validator configuration must be complete")
+        self.adapter = SkillReplayMissionAdapter(
+            socket_path=socket_path,
+            workspace_id=workspace_id,
+            broker_public_key=broker_public_key,
+            broker_key_id=broker_key_id,
+            evidence_store=evidence_store,
+            experience_workspace=self.workspace,
+        )
+
+    def list_published_skills(self, *, tenant_id: str, limit: int = 100, offset: int = 0) -> dict:
+        """Discover signed, metadata-only published Skills for one tenant."""
+        return list_published_skills_via_broker(
+            self.socket_path,
+            workspace_id=self.workspace_id,
+            tenant_id=tenant_id,
+            public_key=self.broker_public_key,
+            expected_key_id=self.broker_key_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    @staticmethod
+    def _validate_executable_contract(skill: Skill) -> None:
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        contract = parameters.get("execution_contract")
+        if not isinstance(contract, dict) or contract.get("kind") != "python_run_context" or contract.get("replay_eligible") is not True:
+            raise ValueError("Skill is a Recipe or lacks the explicit python_run_context execution contract")
+        if skill.trust_level.value != "draft":
+            raise ValueError("only draft Skill candidates may enter the replay staging flow")
+        try:
+            tree = ast.parse(skill.code, mode="exec")
+        except (SyntaxError, ValueError, TypeError) as exc:
+            raise ValueError("Skill code is not valid Python source") from exc
+        run_functions = [
+            node for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+        ]
+        if len(run_functions) != 1 or isinstance(run_functions[0], ast.AsyncFunctionDef):
+            raise ValueError("executable Skill must define exactly one synchronous run(context) function")
+        arguments = run_functions[0].args
+        if (
+            arguments.posonlyargs
+            or len(arguments.args) != 1
+            or arguments.vararg is not None
+            or arguments.kwarg is not None
+            or arguments.kwonlyargs
+            or arguments.args[0].arg != "context"
+        ):
+            raise ValueError("executable Skill entry point must have exactly one argument named context")
+
+    def broker_request_status(self, request_id: str, mission_context: Mapping[str, str]) -> dict:
+        return request_broker_replay_status(
+            self.socket_path, request_id=request_id, workspace_id=self.workspace_id,
+            mission_context=dict(mission_context), timeout_seconds=3.0,
+        )
+
+    def validator_request_status(self, request_id: str, mission_context: Mapping[str, str]) -> dict:
+        if not (self.validator_socket_path and self.validator_public_key and self.validator_key_id):
+            return {"status": "not_configured"}
+        return request_skill_validator_status(
+            self.validator_socket_path, request_id=request_id,
+            workspace_id=self.workspace_id, mission_context=dict(mission_context),
+            timeout_seconds=3.0,
+        )
+
+    def _verify_broker_signed_receipt(self, response: Mapping, expected_payload: Mapping) -> None:
+        """Verify a signed Broker receipt against an exact canonical payload."""
+        if not isinstance(response, dict) or set(response) != set(expected_payload) | {"signature"}:
+            raise ValueError("Broker receipt has unsupported or missing fields")
+        if any(response.get(key) != value for key, value in expected_payload.items()):
+            raise ValueError("Broker receipt identity or artifact binding does not match")
+        signature = response.get("signature")
+        if (
+            not isinstance(signature, dict)
+            or set(signature) != {"algorithm", "key_id", "value"}
+            or signature.get("algorithm") != "ed25519"
+            or signature.get("key_id") != self.broker_key_id
+            or not isinstance(signature.get("value"), str)
+        ):
+            raise ValueError("Broker receipt signature metadata is invalid")
+        signed = json.dumps(
+            dict(expected_payload), sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(self.broker_public_key).verify(
+            base64.b64decode(signature["value"], validate=True), signed,
+        )
+
+    def verify_recovery_responses(
+        self, *, mission_context: Mapping[str, str], skill_binding: Mapping,
+        execution_request_id: str, validation_request_id: str | None,
+        broker_outcomes: Mapping[str, Mapping], validator_outcome: Mapping,
+        promotion_request_id: str | None = None,
+        stage_request_id: str | None = None,
+    ) -> dict:
+        """Re-verify cached Broker and Validator receipts without side effects."""
+        context = dict(mission_context)
+        binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+        result = {
+            "broker_stage": "not_checked",
+            "broker_execution": "not_checked",
+            "validator": "not_checked",
+            "execution_succeeded": None,
+            "validation_id": None,
+            "broker_promotion": "not_checked",
+        }
+        stage_outcome = broker_outcomes.get("stage")
+        if isinstance(stage_outcome, Mapping) and stage_outcome.get("status") == "completed":
+            try:
+                if (
+                    not isinstance(stage_request_id, str)
+                    or not re.fullmatch(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                        stage_request_id,
+                    )
+                ):
+                    raise ValueError("cached Broker stage request identity is missing or invalid")
+                stage_envelope = stage_outcome.get("response")
+                expected_stage_payload = {
+                    "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+                    "request_id": stage_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "candidate_artifact": {
+                        "schema_version": SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+                        "tenant_id": context["tenant_id"],
+                        "skill_id": binding["skill_id"],
+                        "skill_version": binding["skill_version"],
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": "draft",
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                    },
+                }
+                if (
+                    not isinstance(stage_envelope, dict)
+                    or set(stage_envelope) != set(expected_stage_payload) | {"signature"}
+                    or any(stage_envelope.get(key) != value for key, value in expected_stage_payload.items())
+                ):
+                    raise ValueError("cached Broker stage receipt does not match the pinned candidate")
+                stage_signature = stage_envelope.get("signature")
+                if (
+                    not isinstance(stage_signature, dict)
+                    or set(stage_signature) != {"algorithm", "key_id", "value"}
+                    or stage_signature.get("algorithm") != "ed25519"
+                    or stage_signature.get("key_id") != self.broker_key_id
+                    or not isinstance(stage_signature.get("value"), str)
+                ):
+                    raise ValueError("cached Broker stage signature metadata is invalid")
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                signed_stage_payload = json.dumps(
+                    expected_stage_payload, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False,
+                ).encode("utf-8")
+                Ed25519PublicKey.from_public_bytes(self.broker_public_key).verify(
+                    base64.b64decode(stage_signature["value"], validate=True),
+                    signed_stage_payload,
+                )
+                result["broker_stage"] = "verified"
+            except Exception:
+                result["broker_stage"] = "invalid"
+
+        execution_outcome = broker_outcomes.get("execution")
+        broker_envelope = None
+        if isinstance(execution_outcome, Mapping) and execution_outcome.get("status") == "completed":
+            broker_envelope = execution_outcome.get("response")
+            try:
+                if not isinstance(broker_envelope, dict):
+                    raise ValueError("cached Broker response is missing")
+                verified_result = verify_broker_response(
+                    broker_envelope,
+                    public_key=self.broker_public_key,
+                    expected_key_id=self.broker_key_id,
+                    expected_request_id=execution_request_id,
+                    expected_workspace_id=self.workspace_id,
+                    expected_mission_context=context,
+                    expected_profile_id=SKILL_REPLAY_PROFILE_ID,
+                    expected_target=f"{binding['skill_id']}@{binding['skill_version']}",
+                    expected_skill_binding=binding,
+                )
+                result["broker_execution"] = "verified"
+                result["execution_succeeded"] = verified_result.get("execution_succeeded") is True
+            except Exception:
+                result["broker_execution"] = "invalid"
+                broker_envelope = None
+
+        validation_attestation = None
+        if (
+            isinstance(validator_outcome, Mapping)
+            and validator_outcome.get("status") == "completed"
+            and result["broker_execution"] == "verified"
+            and result["execution_succeeded"] is not True
+        ):
+            # A passed Validator attestation cannot legitimize a failed Broker
+            # execution, even if the cached Validator signature is otherwise valid.
+            result["validator"] = "invalid"
+        elif (
+            isinstance(validator_outcome, Mapping)
+            and validator_outcome.get("status") == "completed"
+            and isinstance(validation_request_id, str)
+            and broker_envelope is not None
+            and result["broker_execution"] == "verified"
+        ):
+            try:
+                expected_identity = {
+                    "workspace_id": self.workspace_id,
+                    "tenant_id": context["tenant_id"],
+                    "mission_run_id": context["mission_run_id"],
+                    "node_id": context["node_id"],
+                    "task_id": context["task_id"],
+                    "broker_request_id": execution_request_id,
+                    "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+                    "skill_id": binding["skill_id"],
+                    "skill_version": binding["skill_version"],
+                    "content_sha256": binding["content_sha256"],
+                    "trust_level": _VALIDATED_TRUST_LEVEL,
+                    **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                }
+                attestation = verify_validation_response(
+                    validator_outcome.get("response"),
+                    public_key=self.validator_public_key,
+                    expected_key_id=self.validator_key_id,
+                    expected_request_id=validation_request_id,
+                    expected_identity=expected_identity,
+                )
+                validation_attestation = attestation
+                result["validator"] = "verified" if attestation.get("passed") is True else "rejected"
+                result["validation_id"] = attestation.get("validation_id")
+            except Exception:
+                result["validator"] = "invalid"
+
+        promotion_outcome = broker_outcomes.get("promotion")
+        if (
+            isinstance(promotion_outcome, Mapping)
+            and promotion_outcome.get("status") == "completed"
+            and result["validator"] == "verified"
+            and isinstance(validation_attestation, Mapping)
+            and isinstance(promotion_request_id, str)
+        ):
+            try:
+                provenance = {
+                    "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA_V2 if manifest_v2 else SKILL_VALIDATION_PROVENANCE_SCHEMA,
+                    "validation_id": validation_attestation["validation_id"],
+                    "validator_id": validation_attestation["validator_id"],
+                    "policy_id": validation_attestation["policy_id"],
+                    "policy_sha256": validation_attestation["policy_sha256"],
+                    "checks_sha256": validation_attestation["checks_sha256"],
+                    "broker_request_id": execution_request_id,
+                    "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+                    **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                }
+                expected_payload = {
+                    "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA if manifest_v2 else SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+                    "request_id": promotion_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "artifact": {
+                        "schema_version": "mission.skill-artifact.v3" if manifest_v2 else "mission.skill-artifact.v2",
+                        "tenant_id": context["tenant_id"],
+                        "skill_id": binding["skill_id"],
+                        "skill_version": binding["skill_version"],
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": _VALIDATED_TRUST_LEVEL,
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                    },
+                    "validation_provenance": provenance,
+                }
+                self._verify_broker_signed_receipt(
+                    promotion_outcome.get("response"), expected_payload,
+                )
+                result["broker_promotion"] = "verified"
+            except Exception:
+                result["broker_promotion"] = "invalid"
+        return result
+
+    def _ensure_stage_receipt(
+        self, *, skill: Skill, mission_context: Mapping[str, str],
+        stage_request_id: str,
+    ) -> dict:
+        """Recover only the create-once Stage receipt for the exact pinned candidate.
+
+        Stage never executes code. Re-submitting the deterministic original
+        request is safe because Broker binds the request digest and the
+        Artifact Store accepts only byte-identical immutable candidate content.
+        Execution and later phases are deliberately not retried here.
+        """
+        outcome = self.broker_request_status(stage_request_id, mission_context)
+        status = outcome.get("status") if isinstance(outcome, Mapping) else None
+        if status == "completed":
+            return dict(outcome)
+        if status not in {"indeterminate", "not_found"}:
+            raise SkillReplayOutcomeIndeterminate(
+                "Broker Stage outcome cannot be safely resumed; operator review is required"
+            )
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        manifest = normalize_skill_manifest(parameters["manifest"]) if parameters.get("manifest") is not None else None
+        stage_skill_candidate_via_broker(
+            self.socket_path, self.workspace_id,
+            tenant_id=mission_context["tenant_id"],
+            mission_context=dict(mission_context),
+            skill_id=skill.id, skill_version=skill.version, code=skill.code,
+            public_key=self.broker_public_key, manifest=manifest,
+            expected_manifest_sha256=(
+                manifest_sha256(manifest)
+                if manifest is not None else None
+            ),
+            expected_key_id=self.broker_key_id, request_id=stage_request_id,
+        )
+        recovered = self.broker_request_status(stage_request_id, mission_context)
+        if not isinstance(recovered, Mapping) or recovered.get("status") != "completed":
+            raise SkillReplayOutcomeIndeterminate(
+                "Broker Stage receipt remains unresolved after exact-request recovery"
+            )
+        return dict(recovered)
+
+    def resume_promotion(
+        self, *, tenant_id: str, mission_run_id: str, node_id: str, task_id: str,
+        skill_id: str, skill_binding: Mapping, stage_request_id: str,
+        execution_request_id: str, validation_request_id: str,
+        promotion_request_id: str,
+    ) -> dict:
+        """Verify or recover the immutable Stage receipt, then resume publication.
+
+        This method never executes Skill code. It re-loads the tenant's exact
+        Draft candidate, conditionally reissues only the original create-once
+        Stage request, re-fetches Broker and Validator receipts, verifies their
+        signatures and lineage, and then resumes deterministic publication.
+        An uncertain Execution or Validation outcome remains fail-closed.
+        """
+        context = {
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+        }
+        for label, value in (
+            ("tenant_id", tenant_id), ("mission_run_id", mission_run_id),
+            ("node_id", node_id), ("task_id", task_id), ("skill_id", skill_id),
+        ):
+            if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+                raise ValueError(f"{label} is invalid")
+        request_ids = (
+            stage_request_id, execution_request_id,
+            validation_request_id, promotion_request_id,
+        )
+        if any(
+            not isinstance(value, str) or not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                value,
+            )
+            for value in request_ids
+        ):
+            raise ValueError("recovery request identity is invalid")
+        if not isinstance(skill_binding, Mapping):
+            raise ValueError("pinned Skill binding is missing")
+        binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+        if (
+            binding.get("schema_version") not in {"mission.skill-replay-binding.v1", SKILL_REPLAY_MANIFEST_BINDING_SCHEMA}
+            or binding.get("skill_id") != skill_id
+            or binding.get("trust_level") != "draft"
+            or binding.get("mission_context") != context
+            or set(binding) != (
+                {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
+                | ({"manifest_sha256"} if manifest_v2 else set())
+            )
+        ):
+            raise PermissionError("pinned Skill binding does not match the Mission identity")
+
+        if not (self.validator_socket_path and self.validator_public_key and self.validator_key_id):
+            raise ValueError("independent Validator is not configured")
+        payload = _load_draft_skill_payload(self.workspace, tenant_id, skill_id)
+        if not isinstance(payload, dict):
+            raise FileNotFoundError("Draft Skill candidate was not found in this tenant")
+        skill = Skill.from_dict(payload)
+        self._validate_executable_contract(skill)
+        current_binding = build_skill_replay_binding(skill, context)
+        if current_binding != binding:
+            raise PermissionError("Draft Skill candidate changed after the original Replay")
+
+        stage_outcome = self._ensure_stage_receipt(
+            skill=skill, mission_context=context,
+            stage_request_id=stage_request_id,
+        )
+        execution_outcome = self.broker_request_status(execution_request_id, context)
+        promotion_outcome = self.broker_request_status(promotion_request_id, context)
+        promotion_status = promotion_outcome.get("status")
+        if promotion_status not in {"completed", "indeterminate", "not_found"}:
+            raise ValueError("promotion status is not eligible for controlled recovery")
+        validator_outcome = self.validator_request_status(validation_request_id, context)
+
+        broker_outcomes = {
+            "stage": stage_outcome,
+            "execution": execution_outcome,
+            "promotion": promotion_outcome,
+        }
+        verified = self.verify_recovery_responses(
+            mission_context=context,
+            skill_binding=binding,
+            stage_request_id=stage_request_id,
+            execution_request_id=execution_request_id,
+            validation_request_id=validation_request_id,
+            promotion_request_id=promotion_request_id,
+            broker_outcomes=broker_outcomes,
+            validator_outcome=validator_outcome,
+        )
+        if (
+            verified.get("broker_stage") != "verified"
+            or verified.get("broker_execution") != "verified"
+            or verified.get("execution_succeeded") is not True
+            or verified.get("validator") != "verified"
+        ):
+            raise PermissionError("signed Stage, execution, or Validator evidence did not verify")
+
+        broker_envelope = execution_outcome.get("response")
+        if not isinstance(broker_envelope, dict):
+            raise ValueError("verified Broker execution receipt is missing")
+        expected_identity = {
+            "workspace_id": self.workspace_id,
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+            "broker_request_id": execution_request_id,
+            "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            "trust_level": _VALIDATED_TRUST_LEVEL,
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+        }
+        validation_attestation = verify_validation_response(
+            validator_outcome.get("response"),
+            public_key=self.validator_public_key,
+            expected_key_id=self.validator_key_id,
+            expected_request_id=validation_request_id,
+            expected_identity=expected_identity,
+        )
+        expected_promotion_id = _deterministic_request_id("promotion", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+            "validation_attestation": validation_attestation,
+        })
+        if expected_promotion_id != promotion_request_id:
+            raise PermissionError("promotion request ID does not match the original signed Validator attestation")
+
+        if promotion_status == "completed":
+            # A crash may occur after Broker has durably published and signed
+            # the receipt but before Mission state is written back. Reconcile
+            # only after every original receipt (including promotion) verifies.
+            if verified.get("broker_promotion") != "verified":
+                raise PermissionError("completed Broker promotion receipt did not verify")
+            receipt = promotion_outcome.get("response")
+            if not isinstance(receipt, dict) or not isinstance(receipt.get("artifact"), dict):
+                raise ValueError("completed Broker promotion receipt is missing its artifact identity")
+        else:
+            receipt = promote_skill_candidate_via_broker(
+                self.socket_path,
+                self.workspace_id,
+                mission_context=context,
+                skill_id=skill.id,
+                skill_version=skill.version,
+                content_sha256=binding["content_sha256"],
+                trust_level=_VALIDATED_TRUST_LEVEL,
+                validation_attestation=validation_attestation,
+                public_key=self.broker_public_key,
+                expected_key_id=self.broker_key_id,
+                manifest_sha256=binding.get("manifest_sha256"),
+                request_id=promotion_request_id,
+            )
+        return {
+            "status": "published",
+            "artifact": receipt["artifact"],
+            "validation_provenance": receipt.get("validation_provenance"),
+            "promotion_request_id": promotion_request_id,
+            "reconciled_existing_publication": promotion_status == "completed",
+        }
+
+    @staticmethod
+    def _validate_mission_delivery_acceptance(parameters: Mapping[str, Any]) -> None:
+        """Require the accepted delivery evidence attached by the candidate writer.
+
+        The candidate writer is not the execution boundary: candidates can also
+        be imported or written by other admin paths. Re-check the acceptance
+        envelope immediately before Broker staging so a forged/legacy Draft
+        cannot bypass Mission delivery acceptance.
+        """
+        acceptance = parameters.get("acceptance")
+        evidence = parameters.get("validation_evidence")
+        evidence_ids = parameters.get("evidence_ids")
+        origin_task_id = parameters.get("candidate_origin_task_id")
+        if (
+            not isinstance(acceptance, Mapping)
+            or acceptance.get("evaluation_verdict") != "pass"
+            or acceptance.get("has_target_dir") is not True
+            or isinstance(acceptance.get("components_min"), bool)
+            or not isinstance(acceptance.get("components_min"), int)
+            or acceptance.get("components_min") < 0
+        ):
+            raise ValueError("Mission delivery acceptance evidence is missing or not passed")
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("verdict") != "pass"
+            or not isinstance(evidence.get("analyze_task_id"), str)
+            or not evidence.get("analyze_task_id").strip()
+            or not isinstance(evidence.get("reconstruct_task_id"), str)
+            or not evidence.get("reconstruct_task_id").strip()
+            or not isinstance(origin_task_id, str)
+            or not origin_task_id.strip()
+            or origin_task_id != evidence.get("reconstruct_task_id")
+            or not isinstance(evidence_ids, list)
+            or not {evidence.get("analyze_task_id"), evidence.get("reconstruct_task_id")}.issubset(
+                {item for item in evidence_ids if isinstance(item, str)}
+            )
+        ):
+            raise ValueError("Mission delivery acceptance evidence lineage is incomplete or inconsistent")
+
+    @staticmethod
+    def _validate_reflection_candidate_provenance(
+        workspace: Path, tenant_id: str, skill: Skill,
+    ) -> None:
+        """Re-verify the accepted Reflection chain before staging its executable draft."""
+        if skill.source != "accepted_reflection_executable_candidate":
+            raise ValueError("Skill is not an accepted Reflection executable candidate")
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        provenance = parameters.get("provenance")
+        synthesis = parameters.get("synthesis")
+        if not isinstance(provenance, Mapping) or not isinstance(synthesis, Mapping):
+            raise ValueError("accepted Reflection candidate provenance is missing")
+        if provenance.get("tenant_id") != tenant_id:
+            raise PermissionError("accepted Reflection candidate tenant binding mismatch")
+        if synthesis.get("method") != "caller_supplied_candidate" or synthesis.get("static_contract_check") != "passed":
+            raise ValueError("accepted Reflection candidate synthesis contract is invalid")
+        code_digest = hashlib.sha256(skill.code.encode("utf-8")).hexdigest()
+        if synthesis.get("code_sha256") != code_digest:
+            raise ValueError("accepted Reflection candidate code digest mismatch")
+
+        from core.experience_reflection import ExperienceReflectionStore, canonical_experience_digest
+
+        accepted = ExperienceReflectionStore(Path(workspace), tenant_id).get_accepted_reflection(
+            str(provenance.get("reflection_id") or ""),
+        )
+        reflection = accepted["reflection"]
+        decision = accepted["decision"]
+        source = accepted["source_experience"]
+        reflection_payload = reflection.metadata.get("experience_reflection", {})
+        decision_payload = decision.metadata.get("experience_reflection_decision", {})
+        expected = {
+            "tenant_id": tenant_id,
+            "source_experience_id": source.id,
+            "source_experience_digest": canonical_experience_digest(source),
+            "reflection_id": reflection.id,
+            "reflection_revision": reflection_payload.get("revision"),
+            "decision_id": decision.id,
+            "reviewer": decision_payload.get("reviewer"),
+            "decision_at": decision_payload.get("decision_at"),
+        }
+        if any(provenance.get(key) != value for key, value in expected.items()):
+            raise PermissionError("accepted Reflection candidate source or reviewer lineage changed")
+
+        recipe_skill_id = provenance.get("recipe_skill_id")
+        if not isinstance(recipe_skill_id, str) or not _ID_RE.fullmatch(recipe_skill_id):
+            raise ValueError("accepted Reflection Recipe binding is invalid")
+        workspace_root = Path(workspace).resolve(strict=True)
+        tenant_root = workspace_root / ".tenants" / tenant_id
+        recipe_dir = tenant_root / "skills" / "draft"
+        for directory in (workspace_root / ".tenants", tenant_root, tenant_root / "skills", recipe_dir):
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError("accepted Reflection Recipe directory is unsafe")
+            try:
+                directory.resolve(strict=True).relative_to(workspace_root)
+            except (OSError, ValueError) as exc:
+                raise ValueError("accepted Reflection Recipe directory escapes workspace") from exc
+        recipe_path = recipe_dir / f"{recipe_skill_id}.json"
+        try:
+            descriptor = os.open(recipe_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as exc:
+            raise ValueError("accepted Reflection Recipe draft is missing or unsafe") from exc
+        try:
+            recipe_info = os.fstat(descriptor)
+            if not stat.S_ISREG(recipe_info.st_mode) or recipe_info.st_size > 512 * 1024:
+                raise ValueError("accepted Reflection Recipe draft is not a bounded regular file")
+            try:
+                recipe_path.resolve(strict=True).relative_to(tenant_root.resolve(strict=True))
+            except (OSError, ValueError) as exc:
+                raise ValueError("accepted Reflection Recipe draft escapes tenant storage") from exc
+            chunks = []
+            remaining = 512 * 1024 + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw_recipe = b"".join(chunks)
+            if len(raw_recipe) > 512 * 1024:
+                raise ValueError("accepted Reflection Recipe draft exceeds its size limit")
+        finally:
+            os.close(descriptor)
+        try:
+            recipe_payload = json.loads(raw_recipe.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("accepted Reflection Recipe draft is unreadable") from exc
+        recipe_digest = hashlib.sha256(
+            json.dumps(recipe_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        recipe_parameters = recipe_payload.get("parameters") if isinstance(recipe_payload, dict) else None
+        recipe_definition = recipe_parameters.get("recipe") if isinstance(recipe_parameters, dict) else None
+        if (
+            not isinstance(recipe_payload, dict)
+            or not isinstance(recipe_parameters, dict)
+            or recipe_payload.get("id") != recipe_skill_id
+            or recipe_payload.get("trust_level") != "draft"
+            or recipe_payload.get("code") != ""
+            or recipe_payload.get("source") != "accepted_experience_reflection_recipe"
+            or parameters.get("recipe") != recipe_definition
+            or provenance.get("recipe_sha256") != recipe_digest
+        ):
+            raise PermissionError("accepted Reflection Recipe binding or digest changed")
+
+    def replay_published_artifact(
+        self, *, tenant_id: str, mission_run: Mapping, node_id: str,
+        task_id: str, skill_binding: Mapping[str, Any],
+    ) -> dict:
+        """Reuse one previously published immutable Skill in a later Mission.
+
+        This path never stages a Draft or republishes an existing version. The
+        Broker resolves the exact tenant/ID/version/digest from its read-only
+        published Artifact Store and verifies the independent Validator
+        attestation before isolated execution.
+        """
+        if not isinstance(tenant_id, str) or not _ID_RE.fullmatch(tenant_id):
+            raise ValueError("tenant_id is invalid")
+        if not isinstance(mission_run, Mapping):
+            raise ValueError("Mission run is required")
+        mission_run_id = str(mission_run.get("mission_run_id") or "").strip()
+        if not _ID_RE.fullmatch(mission_run_id):
+            raise ValueError("Mission run identity is invalid")
+        mission_tenant_id = mission_run.get("tenant_id")
+        if mission_tenant_id != tenant_id:
+            raise PermissionError("Mission tenant does not match published Skill tenant")
+        if not isinstance(node_id, str) or not _ID_RE.fullmatch(node_id):
+            raise ValueError("Mission node identity is invalid")
+        if not isinstance(task_id, str) or not _ID_RE.fullmatch(task_id):
+            raise ValueError("Mission task identity is invalid")
+        plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+        nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+        if not any(isinstance(node, dict) and str(node.get("id") or "") == node_id for node in nodes):
+            raise ValueError("Mission node does not belong to this Mission run")
+        if not isinstance(skill_binding, Mapping):
+            raise ValueError("published Skill binding has unsupported or missing fields")
+        binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+        expected_binding_fields = {
+            "schema_version", "skill_id", "skill_version", "content_sha256",
+            "trust_level", "mission_context",
+        } | ({"manifest_sha256"} if manifest_v2 else set())
+        if set(binding) != expected_binding_fields:
+            raise ValueError("published Skill binding has unsupported or missing fields")
+        context = {
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+        }
+        if binding.get("schema_version") not in {
+            "mission.skill-replay-binding.v1", SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+        }:
+            raise ValueError("unsupported published Skill binding schema")
+        if binding.get("mission_context") != context:
+            raise PermissionError("published Skill binding does not match this Mission task")
+        if binding.get("trust_level") not in {"verified", "cloud"}:
+            raise PermissionError("only independently validated published Skills may be reused")
+        if not isinstance(binding.get("skill_id"), str) or not _ID_RE.fullmatch(binding["skill_id"]):
+            raise ValueError("published Skill identity is invalid")
+        if not isinstance(binding.get("skill_version"), str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}", binding["skill_version"],
+        ):
+            raise ValueError("published Skill version is invalid")
+        if not isinstance(binding.get("content_sha256"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", binding["content_sha256"],
+        ):
+            raise ValueError("published Skill content digest is invalid")
+        if manifest_v2 and (
+            not isinstance(binding.get("manifest_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["manifest_sha256"])
+        ):
+            raise ValueError("published Skill Manifest digest is invalid")
+
+        spec = ExecutionProfileSpec(
+            profile_id=SKILL_REPLAY_PROFILE_ID,
+            target=f"{binding['skill_id']}@{binding['skill_version']}",
+            argv=(), cwd=self.workspace, timeout_seconds=60,
+            max_output_bytes=MAX_OUTPUT_BYTES, network_access=False,
+        )
+        replay = self.adapter.execute(
+            spec, tenant_id=tenant_id, mission_context=context,
+            skill_binding=binding, domain="mission", task_type="published_skill_reuse",
+            input_summary=(
+                f"Reuse published Skill {binding['skill_id']}@{binding['skill_version']} "
+                f"for Mission node {node_id}"
+            ),
+        )
+        return {
+            "schema_version": (
+                "mission.published-skill-reuse-operation.v2"
+                if manifest_v2 else "mission.published-skill-reuse-operation.v1"
+            ),
+            "skill_binding": binding,
+            "replay": replay,
+            "publication": {"status": "reused_existing_immutable_artifact"},
+        }
+
+    def replay_candidate(self, *, tenant_id: str, mission_run: Mapping,
+                         node_id: str, task_id: str, skill_id: str,
+                         on_candidate_bound: Callable[[dict], None] | None = None,
+                         on_validation_request_bound: Callable[[dict], None] | None = None,
+                         on_promotion_request_bound: Callable[[dict], None] | None = None) -> dict:
+        if not isinstance(tenant_id, str) or not _ID_RE.fullmatch(tenant_id):
+            raise ValueError("tenant_id is invalid")
+        if not isinstance(mission_run, Mapping):
+            raise ValueError("Mission run is required")
+        mission_run_id = str(mission_run.get("mission_run_id") or "").strip()
+        if not _ID_RE.fullmatch(mission_run_id):
+            raise ValueError("Mission run identity is invalid")
+        if not isinstance(node_id, str) or not _ID_RE.fullmatch(node_id):
+            raise ValueError("Mission node identity is invalid")
+        if not isinstance(task_id, str) or not _ID_RE.fullmatch(task_id):
+            raise ValueError("Replay task identity is invalid")
+        if not isinstance(skill_id, str) or not _ID_RE.fullmatch(skill_id):
+            raise ValueError("skill_id is invalid")
+        mission_tenant_id = mission_run.get("tenant_id")
+        if not isinstance(mission_tenant_id, str) or not _ID_RE.fullmatch(mission_tenant_id):
+            raise ValueError("Mission run tenant identity is missing or invalid")
+        if mission_tenant_id != tenant_id:
+            raise PermissionError("Mission tenant does not match replay tenant")
+
+        plan = mission_run.get("plan") if isinstance(mission_run.get("plan"), dict) else {}
+        nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
+        if not any(isinstance(node, dict) and str(node.get("id") or "") == node_id for node in nodes):
+            raise ValueError("Mission node does not belong to this Mission run")
+
+        payload = _load_draft_skill_payload(self.workspace, tenant_id, skill_id)
+        if not isinstance(payload, dict):
+            raise FileNotFoundError("Draft Skill candidate was not found in this tenant")
+        skill = Skill.from_dict(payload)
+        if skill.id != skill_id:
+            raise ValueError("loaded Skill identity does not match the requested candidate")
+        self._validate_executable_contract(skill)
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        if skill.source == "accepted_reflection_executable_candidate":
+            self._validate_reflection_candidate_provenance(self.workspace, tenant_id, skill)
+        else:
+            if (
+                str(parameters.get("mission_run_id") or "") != mission_run_id
+                or str(parameters.get("mission_node_id") or "") != node_id
+            ):
+                raise PermissionError("Skill candidate provenance does not match this Mission node")
+            self._validate_mission_delivery_acceptance(parameters)
+
+        manifest = None
+        if parameters.get("manifest") is not None:
+            try:
+                manifest = normalize_skill_manifest(parameters["manifest"])
+            except ValueError as exc:
+                raise ValueError("Skill Manifest is invalid") from exc
+
+        context = {
+            "tenant_id": tenant_id,
+            "mission_run_id": mission_run_id,
+            "node_id": node_id,
+            "task_id": task_id,
+        }
+        binding = build_skill_replay_binding(skill, context)
+        stage_request_id = _deterministic_request_id("stage", {
+            "mission_context": context,
+            "skill_id": skill.id,
+            "skill_version": skill.version,
+            "content_sha256": binding["content_sha256"],
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest is not None else {}),
+        })
+        execution_request_id = build_skill_replay_execution_request_id(context)
+        if on_candidate_bound is not None:
+            if not callable(on_candidate_bound):
+                raise ValueError("on_candidate_bound must be callable")
+            # Persist the immutable candidate and Broker request identities
+            # before either staging or execution can create a side effect.
+            on_candidate_bound({
+                "skill_binding": binding,
+                "stage_request_id": stage_request_id,
+                "execution_request_id": execution_request_id,
+            })
+        stage_receipt = stage_skill_candidate_via_broker(
+            self.socket_path,
+            self.workspace_id,
+            tenant_id=tenant_id,
+            mission_context=context,
+            skill_id=skill.id,
+            skill_version=skill.version,
+            code=skill.code,
+            public_key=self.broker_public_key,
+            manifest=manifest,
+            expected_manifest_sha256=binding.get("manifest_sha256"),
+            expected_key_id=self.broker_key_id,
+            request_id=stage_request_id,
+        )
+        spec = ExecutionProfileSpec(
+            profile_id=SKILL_REPLAY_PROFILE_ID,
+            target=f"{skill.id}@{skill.version}",
+            argv=(),
+            cwd=self.workspace,
+            timeout_seconds=60,
+            max_output_bytes=MAX_OUTPUT_BYTES,
+            network_access=False,
+        )
+        LOGGER.info(
+            "Mission Skill Replay started mission_run_id=%s node_id=%s skill_id=%s version=%s task_id=%s",
+            mission_run_id, node_id, skill.id, skill.version, task_id,
+        )
+        replay = self.adapter.execute(
+            spec,
+            tenant_id=tenant_id,
+            mission_context=context,
+            skill_binding=binding,
+            domain=skill.domain,
+            task_type="skill_replay",
+            input_summary=f"Replay {skill.id}@{skill.version} for Mission node {node_id}",
+        )
+        validation = {"status": "not_configured"}
+        promotion = {"status": "not_attempted"}
+        if replay.get("result", {}).get("execution_succeeded") is not True:
+            validation = {"status": "blocked", "reason": "broker_execution_failed"}
+            promotion = {"status": "blocked", "reason": "broker_execution_failed"}
+        elif self.validator_socket_path and self.validator_public_key and self.validator_key_id:
+            try:
+                evidence_id = str(replay.get("evidence", {}).get("evidence_id") or "")
+                if not evidence_id:
+                    raise ValueError("verified Broker evidence reference is missing")
+                verified_evidence = self.evidence_store.load_verified(
+                    tenant_id=tenant_id, evidence_id=evidence_id,
+                )
+                broker_attestation = verified_evidence.get("broker_attestation")
+                if not isinstance(broker_attestation, dict):
+                    raise ValueError("verified Broker response envelope is missing")
+                broker_request_id = broker_attestation.get("request_id", evidence_id)
+                if broker_request_id != evidence_id:
+                    raise ValueError("Broker request identity does not match persisted evidence ID")
+                broker_attestation_sha256 = broker_response_sha256(broker_attestation)
+                manifest_v2 = manifest is not None
+                validation_identity = (
+                    tenant_id, mission_run_id, node_id, task_id,
+                    broker_request_id, broker_attestation_sha256,
+                    skill.id, skill.version, binding["content_sha256"],
+                ) + ((binding["manifest_sha256"],) if manifest_v2 else ())
+                validation_request_id = str(uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "evo-agent:skill-validation:" + ":".join(validation_identity),
+                ))
+                validation_request = {
+                    "schema_version": VALIDATION_REQUEST_SCHEMA_V2 if manifest_v2 else VALIDATION_REQUEST_SCHEMA,
+                    "request_id": validation_request_id,
+                    "workspace_id": self.workspace_id,
+                    "mission_context": context,
+                    "skill_binding": binding,
+                    "trust_level": _VALIDATED_TRUST_LEVEL,
+                    "broker_attestation": broker_attestation,
+                }
+                if on_validation_request_bound is not None:
+                    if not callable(on_validation_request_bound):
+                        raise ValueError("on_validation_request_bound must be callable")
+                    on_validation_request_bound({
+                        "validation_request_id": validation_request_id,
+                    })
+                validation_attestation = request_skill_validation(
+                    self.validator_socket_path,
+                    request=validation_request,
+                    validator_public_key=self.validator_public_key,
+                    expected_key_id=self.validator_key_id,
+                    expected_identity={
+                        "workspace_id": self.workspace_id,
+                        "tenant_id": tenant_id,
+                        "mission_run_id": mission_run_id,
+                        "node_id": node_id,
+                        "task_id": task_id,
+                        "broker_request_id": broker_request_id,
+                        "broker_attestation_sha256": broker_attestation_sha256,
+                        "skill_id": skill.id,
+                        "skill_version": skill.version,
+                        "content_sha256": binding["content_sha256"],
+                        "trust_level": _VALIDATED_TRUST_LEVEL,
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                    },
+                )
+                validation = {
+                    "status": "passed" if validation_attestation.get("passed") is True else "rejected",
+                    "validation_id": validation_attestation["validation_id"],
+                    "validator_id": validation_attestation["validator_id"],
+                    "policy_id": validation_attestation["policy_id"],
+                    "broker_request_id": validation_attestation.get("broker_request_id", broker_request_id),
+                    "broker_attestation_sha256": validation_attestation.get("broker_attestation_sha256", broker_attestation_sha256),
+                    "checks_sha256": validation_attestation.get("checks_sha256"),
+                }
+            except Exception as exc:
+                # The Validator claims the request before evaluating it.
+                # A lost response, invalid request, untrusted Broker evidence,
+                # or service failure remains indeterminate. Policy failures
+                # return a signed, durable rejection and do not enter this path.
+                raise SkillReplayOutcomeIndeterminate(
+                    "independent Validator outcome is not durably confirmed",
+                    evidence_ref=replay.get("evidence"),
+                ) from exc
+            else:
+                if validation_attestation.get("passed") is True:
+                    try:
+                        promotion_request_id = _deterministic_request_id("promotion", {
+                            "mission_context": context,
+                            "skill_id": skill.id,
+                            "skill_version": skill.version,
+                            "content_sha256": binding["content_sha256"],
+                            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
+                            "validation_attestation": validation_attestation,
+                        })
+                        if on_promotion_request_bound is not None:
+                            if not callable(on_promotion_request_bound):
+                                raise ValueError("on_promotion_request_bound must be callable")
+                            on_promotion_request_bound({
+                                "promotion_request_id": promotion_request_id,
+                            })
+                        receipt = promote_skill_candidate_via_broker(
+                            self.socket_path,
+                            self.workspace_id,
+                            mission_context=context,
+                            skill_id=skill.id,
+                            skill_version=skill.version,
+                            content_sha256=binding["content_sha256"],
+                            trust_level=_VALIDATED_TRUST_LEVEL,
+                            validation_attestation=validation_attestation,
+                            public_key=self.broker_public_key,
+                            expected_key_id=self.broker_key_id,
+                            manifest_sha256=binding.get("manifest_sha256"),
+                            request_id=promotion_request_id,
+                        )
+                        promotion = {
+                            "status": "published",
+                            "artifact": receipt["artifact"],
+                            "validation_provenance": receipt.get("validation_provenance"),
+                        }
+                    except Exception as exc:
+                        # Broker publication is create-once and may have committed
+                        # before the response was lost. Keep the Mission action in
+                        # manual recovery rather than recording a terminal failure.
+                        raise SkillReplayOutcomeIndeterminate(
+                            "Artifact Store publication outcome is not durably confirmed",
+                            evidence_ref=replay.get("evidence"),
+                        ) from exc
+                else:
+                    promotion = {"status": "blocked", "reason": "validator_policy_rejected"}
+        LOGGER.info(
+            "Mission Skill Replay recorded mission_run_id=%s node_id=%s skill_id=%s execution_succeeded=%s evidence_id=%s validation_status=%s promotion_status=%s",
+            mission_run_id, node_id, skill.id,
+            bool(replay.get("result", {}).get("execution_succeeded")),
+            replay.get("evidence", {}).get("evidence_id"),
+            validation.get("status"), promotion.get("status"),
+        )
+        return {
+            "schema_version": (
+                "mission.skill-replay-operation.v2"
+                if manifest is not None else "mission.skill-replay-operation.v1"
+            ),
+            "task_id": task_id,
+            "skill_binding": binding,
+            "stage_receipt": stage_receipt,
+            "replay": replay,
+            "validation": validation,
+            "promotion": promotion,
+        }
+
+
+def _read_public_key(path_value: str, *, label: str = "Broker") -> bytes:
+    path = Path(path_value)
+    if not path.is_absolute() or path.is_symlink():
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key path must be absolute and non-symlink")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key file is unavailable or unsafe") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()}
+            or info.st_mode & 0o022
+            or path.resolve(strict=True) != path
+        ):
+            raise SkillReplayRuntimeConfigurationError(f"{label} public key file is not trusted")
+        raw = os.read(fd, 33)
+    except OSError as exc:
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key file could not be read safely") from exc
+    finally:
+        os.close(fd)
+    if len(raw) != 32:
+        raise SkillReplayRuntimeConfigurationError(f"{label} public key must contain 32 raw Ed25519 bytes")
+    return raw
+
+
+def _validate_evidence_root(path_value: str) -> Path:
+    path = Path(path_value)
+    if not path.is_absolute() or path.is_symlink():
+        raise SkillReplayRuntimeConfigurationError("Evidence root must be absolute and non-symlink")
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise SkillReplayRuntimeConfigurationError("Evidence root must be provisioned before startup") from exc
+    if (
+        not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+        or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o077
+        or path.resolve(strict=True) != path
+    ):
+        raise SkillReplayRuntimeConfigurationError("Evidence root must be private, trusted and canonical")
+    return path
+
+
+def create_skill_replay_runtime(*, workspace: Path, environ: Mapping[str, str] | None = None) -> SkillReplayRuntime | None:
+    """Build the optional runtime; no configuration leaves normal Mission untouched."""
+    values = dict(os.environ if environ is None else environ)
+    configured = {key: str(values.get(env_name) or "").strip() for key, env_name in _CONFIG_ENV.items()}
+    present = {key for key, value in configured.items() if value}
+    validator_configured = {
+        key: str(values.get(env_name) or "").strip()
+        for key, env_name in _VALIDATOR_CONFIG_ENV.items()
+    }
+    validator_present = {key for key, value in validator_configured.items() if value}
+    if not present and not validator_present:
+        return None
+    if not present and validator_present:
+        raise SkillReplayRuntimeConfigurationError("Validator configuration requires the Broker runtime")
+    missing = sorted(set(_CONFIG_ENV) - present)
+    if missing:
+        missing_names = ", ".join(_CONFIG_ENV[key] for key in missing)
+        raise SkillReplayRuntimeConfigurationError(f"Skill Replay configuration is incomplete: {missing_names}")
+    socket_path = configured["socket_path"]
+    if not Path(socket_path).is_absolute() or "\x00" in socket_path:
+        raise SkillReplayRuntimeConfigurationError("Broker socket path must be absolute")
+    workspace_id = configured["workspace_id"]
+    if not _WORKSPACE_RE.fullmatch(workspace_id):
+        raise SkillReplayRuntimeConfigurationError("Broker workspace ID is invalid")
+    broker_key_id = configured["broker_key_id"]
+    if not _ID_RE.fullmatch(broker_key_id):
+        raise SkillReplayRuntimeConfigurationError("Broker key ID is invalid")
+    public_key = _read_public_key(configured["broker_public_key"])
+    evidence_root = _validate_evidence_root(configured["evidence_root"])
+    evidence_store = SkillReplayEvidenceStore(
+        evidence_root,
+        broker_public_key=public_key,
+        broker_key_id=broker_key_id,
+    )
+    validator_socket_path = None
+    validator_public_key = None
+    validator_key_id = None
+    if validator_present:
+        missing_validator = sorted(set(_VALIDATOR_CONFIG_ENV) - validator_present)
+        if missing_validator:
+            missing_names = ", ".join(_VALIDATOR_CONFIG_ENV[key] for key in missing_validator)
+            raise SkillReplayRuntimeConfigurationError(f"Validator configuration is incomplete: {missing_names}")
+        validator_socket_path = validator_configured["validator_socket_path"]
+        if not Path(validator_socket_path).is_absolute() or "\x00" in validator_socket_path:
+            raise SkillReplayRuntimeConfigurationError("Validator socket path must be absolute")
+        validator_key_id = validator_configured["validator_key_id"]
+        if not _ID_RE.fullmatch(validator_key_id):
+            raise SkillReplayRuntimeConfigurationError("Validator key ID is invalid")
+        validator_public_key = _read_public_key(validator_configured["validator_public_key"], label="Validator")
+    return SkillReplayRuntime(
+        workspace=workspace,
+        socket_path=socket_path,
+        workspace_id=workspace_id,
+        broker_public_key=public_key,
+        broker_key_id=broker_key_id,
+        evidence_store=evidence_store,
+        validator_socket_path=validator_socket_path,
+        validator_public_key=validator_public_key,
+        validator_key_id=validator_key_id,
+    )
+
+
+__all__ = [
+    "SkillReplayRuntime",
+    "SkillReplayRuntimeConfigurationError",
+    "create_skill_replay_runtime",
+]

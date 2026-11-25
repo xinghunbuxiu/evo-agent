@@ -124,9 +124,21 @@ class GiteeProvider(GitProvider):
                     "auto_init": auto_init,
                 },
             )
-            if create_resp.status_code not in {201}:
+            if create_resp.status_code == 201:
+                repo_data = create_resp.json()
+            elif create_resp.status_code == 409:
+                # Another worker may have created the deterministic shard name.
+                # Re-read it so concurrent provisioning remains idempotent.
+                existing_resp = await client.get(
+                    f"{self.api_base}/repos/{login}/{name}", headers=headers
+                )
+                if existing_resp.status_code != 200:
+                    raise GitProviderError(
+                        f"并发创建仓库后回读失败: {existing_resp.text}"
+                    )
+                repo_data = existing_resp.json()
+            else:
                 raise GitProviderError(f"创建仓库失败: {create_resp.text}")
-            repo_data = create_resp.json()
             return ManagedRepo(
                 name=repo_data.get("name", name),
                 full_name=repo_data.get("full_name", f"{login}/{name}"),

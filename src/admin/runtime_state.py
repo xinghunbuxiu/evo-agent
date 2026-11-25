@@ -569,6 +569,7 @@ def normalize_child_member_runtime(payload: dict | None, *, index: int = 0) -> d
             "learning_materials_root": str(instance_runtime.get("learning_materials_root") or runtime_paths["learning_materials_root"]).strip() or runtime_paths["learning_materials_root"],
             "official_work_policy": str(instance_runtime.get("official_work_policy") or "employee_self_execution_only").strip() or "employee_self_execution_only",
             "external_project_policy": str(instance_runtime.get("external_project_policy") or "learning_material_only").strip() or "learning_material_only",
+            "organization_worker_ids": _string_list(instance_runtime.get("organization_worker_ids"), fallback=[]),
         },
         "current_jobs": current_jobs,
         "world_observation": {
@@ -993,3 +994,112 @@ def save_learning_tasks(workspace: Path, payload: dict) -> None:
         json.dumps(normalized, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def resolve_member_for_mission(mission_run: dict, members: list[dict]) -> dict | None:
+    """Resolve a mission to its employee using explicit identity or linked workers.
+
+    When a mission contains workers owned by multiple employees, return None rather
+    than attributing the whole mission to whichever employee happens to appear first.
+    """
+    if not isinstance(mission_run, dict) or not isinstance(members, list):
+        return None
+    context = mission_run.get("context", {}) if isinstance(mission_run.get("context"), dict) else {}
+    explicit_member_id = str(
+        context.get("member_id")
+        or context.get("child_member_id")
+        or context.get("target_member_id")
+        or ""
+    ).strip()
+    if explicit_member_id:
+        matched = next(
+            (item for item in members if isinstance(item, dict) and str(item.get("member_id") or "").strip() == explicit_member_id),
+            None,
+        )
+        if isinstance(matched, dict):
+            return matched
+
+    action_items = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    worker_ids: set[str] = set()
+    for action in action_items:
+        if not isinstance(action, dict):
+            continue
+        worker_id = str(action.get("organization_worker_id") or "").strip()
+        claim = action.get("worker_claim", {}) if isinstance(action.get("worker_claim"), dict) else {}
+        worker_id = worker_id or str(claim.get("worker_id") or "").strip()
+        if worker_id:
+            worker_ids.add(worker_id)
+    if worker_ids:
+        matched_members = []
+        for member in members:
+            if not isinstance(member, dict) or str(member.get("status") or "active").strip() == "archived":
+                continue
+            runtime = member.get("instance_runtime", {}) if isinstance(member.get("instance_runtime"), dict) else {}
+            owned_ids = {
+                str(value).strip()
+                for value in runtime.get("organization_worker_ids", [])
+                if str(value).strip()
+            } if isinstance(runtime.get("organization_worker_ids"), list) else set()
+            if worker_ids.intersection(owned_ids):
+                matched_members.append(member)
+        return matched_members[0] if len(matched_members) == 1 else None
+
+    runtime_route = mission_run.get("runtime_route", {}) if isinstance(mission_run.get("runtime_route"), dict) else {}
+    role_hint = str(
+        (mission_run.get("work_type", {}) if isinstance(mission_run.get("work_type"), dict) else {}).get("work_type_id")
+        or runtime_route.get("primary_worker_id")
+        or context.get("runtime_primary_worker_id")
+        or ""
+    ).strip()
+    if role_hint:
+        matched = next(
+            (
+                item for item in members
+                if isinstance(item, dict)
+                and str(item.get("status") or "active").strip() != "archived"
+                and str(item.get("primary_role") or "").strip() == role_hint
+            ),
+            None,
+        )
+        if isinstance(matched, dict):
+            return matched
+    return None
+
+
+def resolve_members_for_mission(mission_run: dict, members: list[dict]) -> list[dict]:
+    """Return per-employee mission action groups without cross-employee attribution."""
+    if not isinstance(mission_run, dict) or not isinstance(members, list):
+        return []
+    actions = mission_run.get("actions", []) if isinstance(mission_run.get("actions"), list) else []
+    groups: dict[str, dict] = {}
+    worker_actions_found = False
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        claim = action.get("worker_claim", {}) if isinstance(action.get("worker_claim"), dict) else {}
+        worker_id = str(action.get("organization_worker_id") or claim.get("worker_id") or "").strip()
+        if not worker_id:
+            continue
+        worker_actions_found = True
+        owners = []
+        for member in members:
+            if not isinstance(member, dict) or str(member.get("status") or "active").strip() == "archived":
+                continue
+            runtime = member.get("instance_runtime", {}) if isinstance(member.get("instance_runtime"), dict) else {}
+            ids = runtime.get("organization_worker_ids", []) if isinstance(runtime.get("organization_worker_ids"), list) else []
+            if worker_id in {str(value).strip() for value in ids if str(value).strip()}:
+                owners.append(member)
+        if len(owners) != 1:
+            continue
+        member = owners[0]
+        member_id = str(member.get("member_id") or "").strip()
+        if not member_id:
+            continue
+        group = groups.setdefault(member_id, {"member": member, "actions": []})
+        group["actions"].append(action)
+    if worker_actions_found:
+        return list(groups.values())
+    member = resolve_member_for_mission(mission_run, members)
+    if not isinstance(member, dict):
+        return []
+    return [{"member": member, "actions": actions}]

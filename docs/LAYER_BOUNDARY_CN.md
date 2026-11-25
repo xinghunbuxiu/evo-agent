@@ -1,45 +1,30 @@
-# Evo 智能体平台分层边界
+# Evo Agent 分层边界
 
-## 原则
+本文件保留为简要入口。完整、权威的目录归属、依赖方向、数据所有权、配置规则和渐进迁移方案见：
 
-1. **`src/core/`** 只放跨领域内核（决策、存储、租户、队列），不写具体工种逻辑
-2. **`src/domains/`** 只放内置能力实现（如 JavaScript analyze/reconstruct）
-3. **`src/admin/`** 负责 HTTP、会话、策略治理与运行时编排
-4. **`src/workers/`** 与 **`executors/`** 放外部工种与执行器，通过能力包与任务队列接入
-5. **运行时数据**（`.queue/`、`.tenants/`、`.admin/`）与代码分离，不入库
+[项目结构与工程约束](PROJECT_STRUCTURE_AND_ENGINEERING_RULES_CN.md)
 
-## 目录结构（当前）
+## 当前目录职责
 
-```
-evo-mcp/
-├── src/
-│   ├── core/           # 内核：capabilities、decision、learning、tenant、task_queue
-│   ├── admin/          # Admin API + 各 runtime（strategy、autonomy、self_media…）
-│   ├── domains/        # 内置能力包（javascript / android 占位 / pc 占位）
-│   ├── workers/        # 工种 worker（如自媒体运营）
-│   └── server.py       # 平台自检（冒烟，非 HTTP 服务）
-├── admin-ui/           # 管理前端
-├── plugins/            # 可插拔能力扩展
-├── executors/          # 外部执行器（CLI/脚本）
-├── openSpec/workers/   # 工种 OpenSpec
-├── .config/            # evo.json 等平台配置
-└── evo_workbench/      # 默认工作区（Docker 挂载）
-```
+- `src/core/`：跨领域模型、协议、共享算法和稳定接口。
+- `src/admin/`：Admin 应用用例、编排和运行时适配。
+- `src/admin/routes/`：HTTP 请求/响应适配；不得实现完整业务流程。
+- `src/domains/`：内置专业能力。
+- `src/workers/`：工种 Worker handler 与注册 manifest。
+- `executors/`：外部平台、浏览器、CLI、设备和脚本适配器。
+- `admin-ui/`：通过 Admin API 操作，不持有权威业务状态。
+- `plugins/`：遵守公开协议的可选扩展。
 
-## 工作区边界
+## 不可跨越的职责边界
 
-| 路径 | 用途 | 清空策略 |
-|------|------|----------|
-| `EVO_ADMIN_WORKSPACE` | 租户数据、经验、输入样本 | 按租户管理 |
-| `.cache/` | 分布式缓存、指纹等 | 可重建 |
-| `.queue/` | 异步任务 | 消费后归档或清理 |
-| `.tenants/` | 租户隔离目录 | 勿删生产租户 |
-| `.admin/` | Admin 运行时 JSON | 服务可重建 |
+1. Mission 是任务目标、拆解、依赖、授权、验收和重规划的唯一决策者。
+2. Talent Center 是 Role、Employee、Worker 生命周期的权威管理者。
+3. TaskQueue 是队列执行状态的权威来源。
+4. Broker 是不可信 Skill 的执行授权和隔离边界。
+5. Validator 独立作出策略验证判定并签名。
+6. Artifact Store 保存 Broker 管理的不可变 Skill 产物。
+7. Experience 记录有来源的结果，不授予执行权限。
 
-## 调用边界
+## 重构约束
 
-- **对外入口**：`admin.server:create_app`（FastAPI），非 MCP stdio
-- **能力调用**：`DecisionEngine` → `CapabilityRegistry` → `domains/*` 或 `plugins/*`
-- **指纹**：`POST /api/fingerprint/generate`，实现见 `domains/javascript/fingerprint.py`
-
-更完整的模块说明见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+不做一次性大搬迁。每次迁移一个完整职责单元，先补 characterization/contract tests，再迁移调用方，最后删除旧入口。禁止双写、平行状态机、重复 Runtime 和仅为演示而存在的生产分支。

@@ -29,6 +29,8 @@ from admin.intake_runtime import mark_intake_delivered_from_task, mark_intake_in
 from admin.routes.collaboration_routes import register_collaboration_routes
 from admin.routes.intake_routes import register_intake_routes
 from admin.routes.work_nodes_routes import register_work_nodes_routes
+from admin.task_center_runtime import adopt_worker_growth_recommendation
+from admin.learning_task_verification_runtime import attach_learning_task_attestation, require_passed_learning_task_attestation
 from admin.worker_route_runtime import (
     build_generic_automation_job_runtime,
     build_operation_job_runtime,
@@ -45,6 +47,7 @@ def register_system_runtime_routes(
     *,
     workspace: Path,
     tenant_manager,
+    organization_registry,
     task_queue,
     plugin_summary,
     worker_runtime: dict,
@@ -204,12 +207,16 @@ def register_system_runtime_routes(
             for item in (task.get("deliverables") if isinstance(task.get("deliverables"), list) else [])
             if str(item).strip()
         ]
+        task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        independent_verification = task_metadata.get("independent_verification") if isinstance(task_metadata.get("independent_verification"), dict) else {}
+        verification_digest = str(independent_verification.get("sha256") or "").strip()
         now_iso = datetime.now().isoformat()
         evidence = [
             *( [f"task:{str(task.get('task_id') or '').strip()}"] if str(task.get("task_id") or "").strip() else [] ),
             *( [f"title:{task_title}"] if task_title else [] ),
             *( [f"deliverables:{len(deliverables)}"] if deliverables else [] ),
             *( [f"objective:{task_objective}"] if task_objective else [] ),
+            *( [f"independent_verification_sha256:{verification_digest}"] if verification_digest else [] ),
         ]
         summary = result_summary or reflection or f"{task_title} 已完成，正在形成第一轮岗位经验。"
         current_pattern = (
@@ -1931,31 +1938,72 @@ def register_system_runtime_routes(
             ),
             None,
         ) if recommendation_id else None
-        now_iso = datetime.now().isoformat()
-        task_id = f"task:{member_id}:{int(datetime.now().timestamp() * 1000)}"
-        task = upsert_task(task_center, {
-            "task_id": task_id,
-            "member_id": member_id,
-            "assigned_by_member_id": "talent_development_officer",
-            "title": title,
-            "objective": objective,
-            "deliverables": deliverable_items,
-            "status": "assigned",
-            "assigned_at": now_iso,
-            "started_at": None,
-            "submitted_at": None,
-            "approved_at": None,
-            "result_summary": None,
-            "reflection": None,
-            "review_note": None,
-            "metadata": {
-                **(payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}),
-                **({"recommendation_id": recommendation_id} if recommendation_id else {}),
-            },
-        })
-        if isinstance(selected_recommendation, dict):
-            selected_recommendation["status"] = "adopted"
-            selected_recommendation["adopted_at"] = now_iso
+        now_iso = datetime.now().astimezone().isoformat()
+        selected_metadata = (
+            selected_recommendation.get("metadata")
+            if isinstance(selected_recommendation, dict) and isinstance(selected_recommendation.get("metadata"), dict)
+            else {}
+        )
+        is_worker_growth = selected_metadata.get("source") == "talent_center_worker_growth"
+        if recommendation_id and not isinstance(selected_recommendation, dict):
+            return error_response("指定的任务建议不存在", 404)
+        if is_worker_growth:
+            if (
+                title != str(selected_recommendation.get("title") or "").strip()
+                or objective != str(selected_recommendation.get("objective") or "").strip()
+            ):
+                return error_response("Worker Growth 任务内容必须与原始建议一致", 400)
+            try:
+                adoption = adopt_worker_growth_recommendation(
+                    task_center,
+                    recommendation_id=recommendation_id,
+                    member_id=member_id,
+                    assigned_by_member_id="talent_development_officer",
+                    now=now_iso,
+                )
+            except ValueError as exc:
+                return error_response(str(exc), 409)
+            task = adoption["task"]
+            task_id = str(task.get("task_id") or "")
+            deliverable_items = list(task.get("deliverables") or [])
+            if not adoption["created"]:
+                return success_response(
+                    {"task": task, "idempotent": True},
+                    "该 Worker Growth 建议已采纳，返回原 Learning Task",
+                )
+            training_plan = target_member.get("training_plan") if isinstance(target_member.get("training_plan"), dict) else {}
+            target_member["training_plan"] = {
+                **training_plan,
+                "stage": "training_assigned",
+                "owner_member_id": "talent_development_officer",
+                "next_action": f"Learning Task {task_id} 已分配；等待员工开始训练并提交结果",
+            }
+            runtime["child_members"] = members
+        else:
+            task_id = f"task:{member_id}:{int(datetime.now().timestamp() * 1000)}"
+            task = upsert_task(task_center, {
+                "task_id": task_id,
+                "member_id": member_id,
+                "assigned_by_member_id": "talent_development_officer",
+                "title": title,
+                "objective": objective,
+                "deliverables": deliverable_items,
+                "status": "assigned",
+                "assigned_at": now_iso,
+                "started_at": None,
+                "submitted_at": None,
+                "approved_at": None,
+                "result_summary": None,
+                "reflection": None,
+                "review_note": None,
+                "metadata": {
+                    **(payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}),
+                    **({"recommendation_id": recommendation_id} if recommendation_id else {}),
+                },
+            })
+            if isinstance(selected_recommendation, dict):
+                selected_recommendation["status"] = "adopted"
+                selected_recommendation["adopted_at"] = now_iso
         relationship_center = runtime.get("relationship_center", {}) if isinstance(runtime.get("relationship_center"), dict) else {}
         append_relationship_message(
             relationship_center,
@@ -1998,6 +2046,40 @@ def register_system_runtime_routes(
         )
         return success_response({"autonomy": enriched, "task": task}, "育成官已分配首轮正式任务")
 
+    @app.post("/api/autonomy/tasks/start")
+    async def start_autonomy_task(request: Request):
+        data = await request.json()
+        payload = data if isinstance(data, dict) else {}
+        normalized_tenant_id = resolve_tenant_id(payload.get("tenant_id"))
+        task_id = str(payload.get("task_id") or "").strip()
+        worker_id = str(payload.get("worker_id") or "").strip()
+        if not task_id or not worker_id:
+            return error_response("task_id 和 worker_id 必填", 400)
+        runtime = load_autonomy_runtime(workspace, normalized_tenant_id)
+        task_center = runtime.get("task_center", {}) if isinstance(runtime.get("task_center"), dict) else {}
+        items = task_center.get("items") if isinstance(task_center.get("items"), list) else []
+        task = next((item for item in items if isinstance(item, dict) and str(item.get("task_id") or "").strip() == task_id), None)
+        if not isinstance(task, dict):
+            return error_response("任务不存在", 404)
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        expected_worker_id = str(metadata.get("worker_id") or "").strip()
+        if metadata.get("source") == "talent_center_worker_growth_adoption" and worker_id != expected_worker_id:
+            return error_response("Worker Growth Learning Task 只能由绑定的 Worker 执行", 403)
+        status = str(task.get("status") or "").strip()
+        if status == "in_progress":
+            if str(metadata.get("executing_worker_id") or "").strip() != worker_id:
+                return error_response("任务已由其他 Worker 接管", 409)
+            return success_response({"task": task, "idempotent": True}, "任务已处于执行中")
+        if status != "assigned":
+            return error_response("只有 assigned 状态的任务可以开始执行", 409)
+        now_iso = datetime.now().astimezone().isoformat()
+        task["status"] = "in_progress"
+        task["started_at"] = task.get("started_at") or now_iso
+        task["metadata"] = {**metadata, "executing_worker_id": worker_id}
+        runtime["task_center"] = task_center
+        save_autonomy_runtime(workspace, runtime, normalized_tenant_id)
+        return success_response({"task": task}, "Learning Task 已进入执行中")
+
     @app.post("/api/autonomy/tasks/submit")
     async def submit_autonomy_task(request: Request):
         data = await request.json()
@@ -2019,7 +2101,23 @@ def register_system_runtime_routes(
         if not isinstance(task, dict):
             return error_response("任务不存在", 404)
         member_id = str(task.get("member_id") or "").strip()
-        now_iso = datetime.now().isoformat()
+        task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        is_worker_growth_task = task_metadata.get("source") == "talent_center_worker_growth_adoption"
+        if is_worker_growth_task:
+            if str(task.get("status") or "").strip() != "in_progress":
+                return error_response("Worker Growth Learning Task 必须先进入 in_progress 才能提交", 409)
+            submitted_worker_id = str(payload.get("worker_id") or "").strip()
+            if (
+                not submitted_worker_id
+                or submitted_worker_id != str(task_metadata.get("executing_worker_id") or "").strip()
+                or submitted_worker_id != str(task_metadata.get("worker_id") or "").strip()
+            ):
+                return error_response("提交 Worker 与任务执行绑定不一致", 403)
+            execution_event_id = str(payload.get("execution_event_id") or "").strip()
+            if not execution_event_id:
+                return error_response("execution_event_id 必填，用于绑定独立验证证据", 400)
+            task["metadata"] = {**task_metadata, "execution_event_id": execution_event_id, "independent_verification": None}
+        now_iso = datetime.now().astimezone().isoformat()
         task["status"] = "submitted"
         task["started_at"] = task.get("started_at") or now_iso
         task["submitted_at"] = now_iso
@@ -2064,6 +2162,29 @@ def register_system_runtime_routes(
         )
         return success_response({"autonomy": enriched, "task": task}, "子女已提交任务结果与复盘")
 
+    @app.post("/api/autonomy/tasks/verify")
+    async def verify_autonomy_task(request: Request):
+        data = await request.json()
+        payload = data if isinstance(data, dict) else {}
+        normalized_tenant_id = resolve_tenant_id(payload.get("tenant_id"))
+        task_id = str(payload.get("task_id") or "").strip()
+        attestation = payload.get("attestation")
+        if not task_id:
+            return error_response("task_id 必填", 400)
+        runtime = load_autonomy_runtime(workspace, normalized_tenant_id)
+        task_center = runtime.get("task_center", {}) if isinstance(runtime.get("task_center"), dict) else {}
+        items = task_center.get("items") if isinstance(task_center.get("items"), list) else []
+        task = next((item for item in items if isinstance(item, dict) and str(item.get("task_id") or "").strip() == task_id), None)
+        if not isinstance(task, dict):
+            return error_response("任务不存在", 404)
+        try:
+            verification = attach_learning_task_attestation(workspace, normalized_tenant_id, task, attestation)
+        except ValueError as exc:
+            return error_response(str(exc), 409)
+        runtime["task_center"] = task_center
+        save_autonomy_runtime(workspace, runtime, normalized_tenant_id)
+        return success_response({"task": task, "verification": verification}, "独立验证证据已验证并绑定到 Learning Task")
+
     @app.post("/api/autonomy/tasks/approve")
     async def approve_autonomy_task(request: Request):
         data = await request.json()
@@ -2079,6 +2200,14 @@ def register_system_runtime_routes(
         task = next((item for item in items if isinstance(item, dict) and str(item.get("task_id") or "").strip() == task_id), None)
         if not isinstance(task, dict):
             return error_response("任务不存在", 404)
+        task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if task_metadata.get("source") == "talent_center_worker_growth_adoption":
+            if str(task.get("status") or "").strip() != "submitted":
+                return error_response("Worker Growth Learning Task 必须先提交结果", 409)
+            try:
+                require_passed_learning_task_attestation(workspace, normalized_tenant_id, task)
+            except ValueError as exc:
+                return error_response(str(exc), 409)
         member_id = str(task.get("member_id") or "").strip()
         members = normalize_child_members_runtime(
             runtime.get("child_members"),
@@ -2552,6 +2681,23 @@ def register_system_runtime_routes(
         if str(employee.get("member_id") or "").strip() in existing_ids:
             return error_response("同名员工实例已存在，请修改名称或角色标识", 400)
 
+        requested_worker_id = str(payload.get("worker_id") or "").strip()
+        if requested_worker_id:
+            try:
+                bound_worker = organization_registry.bind_worker_owner(
+                    worker_id=requested_worker_id,
+                    owner_tenant_id=normalized_tenant_id,
+                    owner_member_id=str(employee.get("member_id") or "").strip(),
+                )
+            except (KeyError, ValueError) as exc:
+                return error_response(f"员工与执行 Worker 绑定失败：{exc}", 400)
+            employee_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
+            employee_runtime["organization_worker_ids"] = list(dict.fromkeys([
+                *employee_runtime.get("organization_worker_ids", []),
+                requested_worker_id,
+            ]))
+            employee["instance_runtime"] = employee_runtime
+
         instance_runtime = employee.get("instance_runtime", {}) if isinstance(employee.get("instance_runtime"), dict) else {}
         for key in ("workspace_root", "memory_root", "artifacts_root", "learning_materials_root"):
             relative_path = str(instance_runtime.get(key) or "").strip()
@@ -2570,6 +2716,7 @@ def register_system_runtime_routes(
         return success_response({
             "employee": employee,
             "member": employee,
+            "bound_worker": bound_worker if requested_worker_id else None,
             "autonomy": enriched,
         }, "员工实例已创建，后续由育成师继续建立画像与边界")
 

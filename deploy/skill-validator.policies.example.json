@@ -1,0 +1,17 @@
+{
+  "schema_version": "mission.skill-validation-policy.v1",
+  "policies": [
+    {
+      "policy_id": "example-skill-v1",
+      "tenant_id": "tenant-a",
+      "skill_id": "example-skill",
+      "skill_version": "1.0.0",
+      "content_sha256": "REPLACE_WITH_64_HEX_SOURCE_SHA256",
+      "trust_level": "verified",
+      "checks": [
+        {"type": "json_value_equals", "key_path": ["ok"], "expected": true},
+        {"type": "json_value_type", "key_path": ["items"], "expected_type": "array"}
+      ]
+    }
+  ]
+}

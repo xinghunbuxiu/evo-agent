@@ -1,3 +1,4 @@
+from .experience_reflections import register_experience_reflection_routes
 from .auth import register_auth_routes
 from .evolution_strategy import register_evolution_strategy_routes
 from .catalog import register_catalog_routes
@@ -12,6 +13,7 @@ from .tenant_policies import register_tenant_policy_routes
 __all__ = [
     "register_auth_routes",
     "register_evolution_strategy_routes",
+    "register_experience_reflection_routes",
     "register_catalog_routes",
     "register_finance_routes",
     "register_git_knowledge_routes",

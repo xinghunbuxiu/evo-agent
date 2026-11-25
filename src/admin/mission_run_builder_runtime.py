@@ -71,6 +71,9 @@ def create_mission_run_builder(
         mission_skill_ids = action_state.get("matched_verified_skill_ids", [])
         if not isinstance(mission_skill_ids, list):
             mission_skill_ids = []
+        staffing_requests = action_state.get("staffing_requests", [])
+        if not isinstance(staffing_requests, list):
+            staffing_requests = []
 
         return {
             "mission_run_id": mission_run_id,
@@ -90,6 +93,8 @@ def create_mission_run_builder(
             "context": resolved_context,
             "counts": counts,
             "matched_verified_skill_ids": mission_skill_ids,
+            "staffing_requests": staffing_requests,
+            "staffing_assignments": [],
             "submitted_task_ids": submitted_task_ids,
             "actions": actions,
             "plan": plan,
