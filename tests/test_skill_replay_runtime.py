@@ -385,6 +385,8 @@ class SkillReplayRuntimeTests(unittest.TestCase):
             skill_version="1.0.0",
             code=skill.code,
             public_key=runtime.broker_public_key,
+            manifest=None,
+            expected_manifest_sha256=None,
             expected_key_id=runtime.broker_key_id,
             request_id=request_id,
         )
