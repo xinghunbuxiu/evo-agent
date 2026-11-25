@@ -30,6 +30,7 @@ from core.sandbox_broker_protocol import SKILL_REPLAY_OUTPUT_SCHEMA
 from core.sandbox_broker_transport import serve_listener
 from core.sandbox_runner import RunnerProcessOutput
 from core.skill_artifact_store import SkillArtifactStore
+from core.skill_manifest import manifest_sha256
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_validator import SkillValidatorService
 from core.skill_validator_transport import serve_validator_listener
@@ -73,6 +74,7 @@ def _mission_replay_request():
 class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
     def _run_mission_replay_integration(
         self, *, validator_accepts: bool, reflection_candidate: bool = False,
+        manifest_v2: bool = False,
     ):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -99,6 +101,8 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
             }
 
             code = "def run(context):\n    return {'ok': True}\n"
+            manifest = None
+            manifest_digest = None
             if reflection_candidate:
                 source = Experience(
                     id="accepted-source-experience", domain="python",
@@ -168,9 +172,50 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                     trust_level=SkillTrustLevel.DRAFT,
                     version="1.0.0",
                 )
+                if manifest_v2:
+                    manifest = {
+                        "schema_version": "mission.skill-manifest.v1",
+                        "skill_id": skill.id, "skill_version": skill.version,
+                        "name": skill.name, "domain": skill.domain,
+                        "capability_type": skill.capability_type,
+                        "description": skill.description,
+                        "task_types": ["automation"],
+                        "input_schema": {
+                            "type": "object", "properties": {},
+                            "required": [], "additionalProperties": False,
+                        },
+                        "output_schema": {
+                            "type": "object", "properties": {"ok": {"type": "boolean"}},
+                            "required": ["ok"], "additionalProperties": False,
+                        },
+                        "runtime_contract": {
+                            "id": "python.run_context.v1", "entrypoint": "run",
+                            "call_signature": "run(context)",
+                        },
+                        "compatibility": {
+                            "runtime": "python", "min_version": "3.10", "max_version": "3.13",
+                        },
+                    }
+                    skill.parameters["manifest"] = manifest
+                    manifest_digest = manifest_sha256(manifest)
                 write_skill_candidate(workspace, tenant_id, skill)
 
             digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+            policy = {
+                "policy_id": "integration-policy",
+                "tenant_id": tenant_id,
+                "skill_id": skill.id,
+                "skill_version": skill.version,
+                "content_sha256": digest,
+                "trust_level": "verified",
+                "checks": [{
+                    "type": "json_value_equals",
+                    "key_path": ["ok"],
+                    "expected": True,
+                }],
+            }
+            if manifest_v2:
+                policy["manifest_sha256"] = manifest_digest
             validator = SkillValidatorService(
                 validator_id="independent-validator",
                 key_id=validator_key_id,
@@ -178,19 +223,8 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 broker_public_key=broker_public_key,
                 broker_key_id=broker_key_id,
                 workspace_ids=[workspace_id],
-                policies=[{
-                    "policy_id": "integration-policy",
-                    "tenant_id": tenant_id,
-                    "skill_id": skill.id,
-                    "skill_version": skill.version,
-                    "content_sha256": digest,
-                    "trust_level": "verified",
-                    "checks": [{
-                        "type": "json_value_equals",
-                        "key_path": ["ok"],
-                        "expected": True,
-                    }],
-                }],
+                policies=[] if manifest_v2 else [policy],
+                manifest_policies=[policy] if manifest_v2 else [],
             )
             artifact_store = SkillArtifactStore(
                 artifact_root,
@@ -418,7 +452,10 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
 
             published_binding = dict(operation["skill_binding"])
             published_binding["trust_level"] = "verified"
-            published = artifact_store.load_for_binding(published_binding)
+            published = (
+                artifact_store.load_published_manifest(published_binding)
+                if manifest_v2 else artifact_store.load_for_binding(published_binding)
+            )
             self.assertEqual(published.id, skill.id)
             self.assertEqual(published.version, skill.version)
             self.assertEqual(published.code, code)
@@ -442,6 +479,9 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
                 expected_mission_context,
             )
             self.assertEqual(registry_skill.parameters["content_sha256"], digest)
+            if manifest_v2:
+                self.assertEqual(registry_skill.parameters["manifest"], manifest)
+                self.assertEqual(registry_skill.parameters["manifest"]["skill_id"], skill.id)
 
     def test_mission_replay_persists_experience_and_publishes_validator_attested_artifact(self):
         self._run_mission_replay_integration(validator_accepts=True)
@@ -452,6 +492,11 @@ class MissionBrokerArtifactIntegrationTests(unittest.TestCase):
     def test_accepted_reflection_candidate_runs_through_broker_validator_and_artifact_store(self):
         self._run_mission_replay_integration(
             validator_accepts=True, reflection_candidate=True,
+        )
+
+    def test_manifest_v2_mission_replay_validates_and_publishes_immutable_artifact(self):
+        self._run_mission_replay_integration(
+            validator_accepts=True, manifest_v2=True,
         )
 
 
