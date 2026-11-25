@@ -24,8 +24,13 @@ from core.sandbox_broker_protocol import (
     SKILL_REPLAY_PROFILE_ID,
     SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
     SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+    SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA,
+    SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA,
     SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+    SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA,
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
+    SKILL_VALIDATION_PROVENANCE_SCHEMA_V2,
+    SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
     broker_response_sha256,
     verify_broker_response,
 )
@@ -36,13 +41,15 @@ from core.sandbox_broker_transport import (
     list_published_skills_via_broker,
 )
 from core.skill_validator import (
-    VALIDATION_REQUEST_SCHEMA, verify_validation_response,
+    VALIDATION_REQUEST_SCHEMA, VALIDATION_REQUEST_SCHEMA_V2,
+    verify_validation_response,
 )
 from core.skill_validator_transport import (
     request_skill_validation,
     request_skill_validator_status,
 )
 from core.skill_replay_contract import build_skill_replay_binding
+from core.skill_manifest import normalize_skill_manifest
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_replay_mission import SkillReplayMissionAdapter, build_skill_replay_execution_request_id
 
@@ -463,6 +470,8 @@ class SkillReplayRuntime:
             skill_version=skill.version,
             code=skill.code,
             public_key=self.broker_public_key,
+            manifest=manifest,
+            expected_manifest_sha256=binding.get("manifest_sha256"),
             expected_key_id=self.broker_key_id,
             request_id=stage_request_id,
         )
@@ -899,17 +908,12 @@ class SkillReplayRuntime:
                 raise PermissionError("Skill candidate provenance does not match this Mission node")
             self._validate_mission_delivery_acceptance(parameters)
 
-        # Manifest v2 is currently staged by a separate Broker contract, but
-        # the execution request, Validator attestation and published Artifact
-        # path still accept only the v1 binding. Do not stage a v1 code-only
-        # candidate and then attempt to execute it with a v2 local binding.
-        # This guard runs before callbacks or any Broker side effect.
+        manifest = None
         if parameters.get("manifest") is not None:
-            raise SkillReplayRuntimeConfigurationError(
-                "Manifest-bearing candidates are blocked until Broker execution, "
-                "Validator attestation, and immutable Artifact publication bind "
-                "the same Manifest digest"
-            )
+            try:
+                manifest = normalize_skill_manifest(parameters["manifest"])
+            except ValueError as exc:
+                raise ValueError("Skill Manifest is invalid") from exc
 
         context = {
             "tenant_id": tenant_id,
@@ -923,6 +927,7 @@ class SkillReplayRuntime:
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": binding["content_sha256"],
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest is not None else {}),
         })
         execution_request_id = build_skill_replay_execution_request_id(context)
         if on_candidate_bound is not None:
@@ -944,6 +949,8 @@ class SkillReplayRuntime:
             skill_version=skill.version,
             code=skill.code,
             public_key=self.broker_public_key,
+            manifest=manifest,
+            expected_manifest_sha256=binding.get("manifest_sha256"),
             expected_key_id=self.broker_key_id,
             request_id=stage_request_id,
         )
@@ -989,17 +996,18 @@ class SkillReplayRuntime:
                 if broker_request_id != evidence_id:
                     raise ValueError("Broker request identity does not match persisted evidence ID")
                 broker_attestation_sha256 = broker_response_sha256(broker_attestation)
+                manifest_v2 = manifest is not None
+                validation_identity = (
+                    tenant_id, mission_run_id, node_id, task_id,
+                    broker_request_id, broker_attestation_sha256,
+                    skill.id, skill.version, binding["content_sha256"],
+                ) + ((binding["manifest_sha256"],) if manifest_v2 else ())
                 validation_request_id = str(uuid.uuid5(
                     uuid.NAMESPACE_URL,
-                    "evo-agent:skill-validation:"
-                    + ":".join((
-                        tenant_id, mission_run_id, node_id, task_id,
-                        broker_request_id, broker_attestation_sha256,
-                        skill.id, skill.version, binding["content_sha256"],
-                    )),
+                    "evo-agent:skill-validation:" + ":".join(validation_identity),
                 ))
                 validation_request = {
-                    "schema_version": VALIDATION_REQUEST_SCHEMA,
+                    "schema_version": VALIDATION_REQUEST_SCHEMA_V2 if manifest_v2 else VALIDATION_REQUEST_SCHEMA,
                     "request_id": validation_request_id,
                     "workspace_id": self.workspace_id,
                     "mission_context": context,
@@ -1030,6 +1038,7 @@ class SkillReplayRuntime:
                         "skill_version": skill.version,
                         "content_sha256": binding["content_sha256"],
                         "trust_level": _VALIDATED_TRUST_LEVEL,
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                     },
                 )
                 validation = {
@@ -1058,6 +1067,7 @@ class SkillReplayRuntime:
                             "skill_id": skill.id,
                             "skill_version": skill.version,
                             "content_sha256": binding["content_sha256"],
+                            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                             "validation_attestation": validation_attestation,
                         })
                         if on_promotion_request_bound is not None:
@@ -1077,6 +1087,7 @@ class SkillReplayRuntime:
                             validation_attestation=validation_attestation,
                             public_key=self.broker_public_key,
                             expected_key_id=self.broker_key_id,
+                            manifest_sha256=binding.get("manifest_sha256"),
                             request_id=promotion_request_id,
                         )
                         promotion = {
@@ -1102,7 +1113,10 @@ class SkillReplayRuntime:
             validation.get("status"), promotion.get("status"),
         )
         return {
-            "schema_version": "mission.skill-replay-operation.v1",
+            "schema_version": (
+                "mission.skill-replay-operation.v2"
+                if manifest is not None else "mission.skill-replay-operation.v1"
+            ),
             "task_id": task_id,
             "skill_binding": binding,
             "stage_receipt": stage_receipt,
