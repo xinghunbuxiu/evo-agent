@@ -18,6 +18,7 @@ from core.sandbox_broker_protocol import (
     SKILL_VALIDATION_PROVENANCE_SCHEMA,
     broker_response_sha256,
 )
+from core.skill_manifest import manifest_sha256
 from admin.skill_replay_runtime import (
     SkillReplayOutcomeIndeterminate,
     SkillReplayRuntimeConfigurationError,
@@ -755,35 +756,51 @@ class SkillReplayRuntimeTests(unittest.TestCase):
         stage.assert_not_called()
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
-    def test_manifest_candidate_fails_closed_before_any_broker_side_effect(self, stage):
+    def test_manifest_candidate_uses_v2_binding_and_stage_contract(self, stage):
         from admin.knowledge_runtime import write_skill_candidate
 
         candidate = self._skill()
-        candidate.parameters["manifest"] = {"schema_version": "mission.skill-manifest.v1"}
+        manifest = {
+            "schema_version": "mission.skill-manifest.v1",
+            "skill_id": candidate.id, "skill_version": candidate.version,
+            "name": candidate.name, "domain": candidate.domain,
+            "capability_type": candidate.capability_type, "description": candidate.description,
+            "task_types": ["automation"],
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}},
+                              "required": ["ok"], "additionalProperties": False},
+            "runtime_contract": {"id": "python.run_context.v1", "entrypoint": "run",
+                                 "call_signature": "run(context)"},
+            "compatibility": {"runtime": "python", "min_version": "3.10", "max_version": "3.13"},
+        }
+        candidate.parameters["manifest"] = manifest
         write_skill_candidate(self.workspace, "tenant-a", candidate)
         runtime = create_skill_replay_runtime(workspace=self.workspace, environ=self.environ)
-        runtime.adapter.execute = lambda *args, **kwargs: self.fail(
-            "Manifest candidate must not reach the Broker executor"
-        )
+        stage.return_value = {"schema_version": "mission.skill-candidate-stage-response.v2"}
+        runtime.adapter.execute = lambda *args, **kwargs: {
+            "schema_version": "mission.skill-replay-result.v1",
+            "result": {"execution_succeeded": True},
+            "evidence": {"evidence_id": "evidence-manifest"},
+            "experience": {"id": "experience-manifest"},
+        }
         bound = []
-        with self.assertRaisesRegex(
-            SkillReplayRuntimeConfigurationError,
-            "Manifest-bearing candidates are blocked",
-        ):
-            runtime.replay_candidate(
-                tenant_id="tenant-a",
-                mission_run={
-                    "mission_run_id": "mission-1",
-                    "tenant_id": "tenant-a",
-                    "plan": {"nodes": [{"id": "node-1"}]},
-                },
-                node_id="node-1",
-                task_id="task-1",
-                skill_id="skill-demo",
-                on_candidate_bound=bound.append,
-            )
-        stage.assert_not_called()
-        self.assertEqual(bound, [])
+        result = runtime.replay_candidate(
+            tenant_id="tenant-a",
+            mission_run={
+                "mission_run_id": "mission-1", "tenant_id": "tenant-a",
+                "plan": {"nodes": [{"id": "node-1"}]},
+            },
+            node_id="node-1", task_id="task-1", skill_id="skill-demo",
+            on_candidate_bound=bound.append,
+        )
+        stage.assert_called_once()
+        binding = result["skill_binding"]
+        self.assertEqual(binding["schema_version"], "mission.skill-replay-binding.v2")
+        self.assertEqual(binding["manifest_sha256"], manifest_sha256(manifest))
+        self.assertEqual(bound[0]["skill_binding"], binding)
+        self.assertEqual(stage.call_args.kwargs["manifest"]["skill_id"], candidate.id)
+        self.assertEqual(stage.call_args.kwargs["expected_manifest_sha256"], binding["manifest_sha256"])
+        self.assertEqual(result["schema_version"], "mission.skill-replay-operation.v2")
 
     @patch("admin.skill_replay_runtime.stage_skill_candidate_via_broker")
     def test_replay_rejects_recipe_before_broker_staging(self, stage):

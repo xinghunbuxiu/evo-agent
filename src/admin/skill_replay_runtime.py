@@ -270,6 +270,7 @@ class SkillReplayRuntime:
         """Re-verify cached Broker and Validator receipts without side effects."""
         context = dict(mission_context)
         binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
         result = {
             "broker_stage": "not_checked",
             "broker_execution": "not_checked",
@@ -290,7 +291,6 @@ class SkillReplayRuntime:
                 ):
                     raise ValueError("cached Broker stage request identity is missing or invalid")
                 stage_envelope = stage_outcome.get("response")
-                manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
                 expected_stage_payload = {
                     "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
                     "request_id": stage_request_id,
