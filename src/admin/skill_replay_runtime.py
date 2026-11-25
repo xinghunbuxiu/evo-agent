@@ -290,18 +290,20 @@ class SkillReplayRuntime:
                 ):
                     raise ValueError("cached Broker stage request identity is missing or invalid")
                 stage_envelope = stage_outcome.get("response")
+                manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
                 expected_stage_payload = {
-                    "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
+                    "schema_version": SKILL_CANDIDATE_STAGE_RESPONSE_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_STAGE_RESPONSE_SCHEMA,
                     "request_id": stage_request_id,
                     "workspace_id": self.workspace_id,
                     "mission_context": context,
                     "candidate_artifact": {
-                        "schema_version": SKILL_CANDIDATE_ARTIFACT_SCHEMA,
+                        "schema_version": SKILL_CANDIDATE_ARTIFACT_V2_SCHEMA if manifest_v2 else SKILL_CANDIDATE_ARTIFACT_SCHEMA,
                         "tenant_id": context["tenant_id"],
                         "skill_id": binding["skill_id"],
                         "skill_version": binding["skill_version"],
                         "content_sha256": binding["content_sha256"],
                         "trust_level": "draft",
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                     },
                 }
                 if (
@@ -386,6 +388,7 @@ class SkillReplayRuntime:
                     "skill_version": binding["skill_version"],
                     "content_sha256": binding["content_sha256"],
                     "trust_level": _VALIDATED_TRUST_LEVEL,
+                    **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                 }
                 attestation = verify_validation_response(
                     validator_outcome.get("response"),
@@ -410,7 +413,7 @@ class SkillReplayRuntime:
         ):
             try:
                 provenance = {
-                    "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA,
+                    "schema_version": SKILL_VALIDATION_PROVENANCE_SCHEMA_V2 if manifest_v2 else SKILL_VALIDATION_PROVENANCE_SCHEMA,
                     "validation_id": validation_attestation["validation_id"],
                     "validator_id": validation_attestation["validator_id"],
                     "policy_id": validation_attestation["policy_id"],
@@ -418,19 +421,21 @@ class SkillReplayRuntime:
                     "checks_sha256": validation_attestation["checks_sha256"],
                     "broker_request_id": execution_request_id,
                     "broker_attestation_sha256": broker_response_sha256(broker_envelope),
+                    **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                 }
                 expected_payload = {
-                    "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
+                    "schema_version": SKILL_CANDIDATE_PROMOTION_RESPONSE_V3_SCHEMA if manifest_v2 else SKILL_CANDIDATE_PROMOTION_RESPONSE_SCHEMA,
                     "request_id": promotion_request_id,
                     "workspace_id": self.workspace_id,
                     "mission_context": context,
                     "artifact": {
-                        "schema_version": "mission.skill-artifact.v2",
+                        "schema_version": "mission.skill-artifact.v3" if manifest_v2 else "mission.skill-artifact.v2",
                         "tenant_id": context["tenant_id"],
                         "skill_id": binding["skill_id"],
                         "skill_version": binding["skill_version"],
                         "content_sha256": binding["content_sha256"],
                         "trust_level": _VALIDATED_TRUST_LEVEL,
+                        **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
                     },
                     "validation_provenance": provenance,
                 }
@@ -461,19 +466,19 @@ class SkillReplayRuntime:
             raise SkillReplayOutcomeIndeterminate(
                 "Broker Stage outcome cannot be safely resumed; operator review is required"
             )
+        parameters = skill.parameters if isinstance(skill.parameters, dict) else {}
+        manifest = normalize_skill_manifest(parameters["manifest"]) if parameters.get("manifest") is not None else None
         stage_skill_candidate_via_broker(
-            self.socket_path,
-            self.workspace_id,
+            self.socket_path, self.workspace_id,
             tenant_id=mission_context["tenant_id"],
             mission_context=dict(mission_context),
-            skill_id=skill.id,
-            skill_version=skill.version,
-            code=skill.code,
-            public_key=self.broker_public_key,
-            manifest=manifest,
-            expected_manifest_sha256=binding.get("manifest_sha256"),
-            expected_key_id=self.broker_key_id,
-            request_id=stage_request_id,
+            skill_id=skill.id, skill_version=skill.version, code=skill.code,
+            public_key=self.broker_public_key, manifest=manifest,
+            expected_manifest_sha256=(
+                __import__("core.skill_manifest", fromlist=["manifest_sha256"]).manifest_sha256(manifest)
+                if manifest is not None else None
+            ),
+            expected_key_id=self.broker_key_id, request_id=stage_request_id,
         )
         recovered = self.broker_request_status(stage_request_id, mission_context)
         if not isinstance(recovered, Mapping) or recovered.get("status") != "completed":
@@ -523,11 +528,16 @@ class SkillReplayRuntime:
         if not isinstance(skill_binding, Mapping):
             raise ValueError("pinned Skill binding is missing")
         binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
         if (
-            binding.get("schema_version") != "mission.skill-replay-binding.v1"
+            binding.get("schema_version") not in {"mission.skill-replay-binding.v1", SKILL_REPLAY_MANIFEST_BINDING_SCHEMA}
             or binding.get("skill_id") != skill_id
             or binding.get("trust_level") != "draft"
             or binding.get("mission_context") != context
+            or set(binding) != (
+                {"schema_version", "skill_id", "skill_version", "content_sha256", "trust_level", "mission_context"}
+                | ({"manifest_sha256"} if manifest_v2 else set())
+            )
         ):
             raise PermissionError("pinned Skill binding does not match the Mission identity")
 
@@ -591,6 +601,7 @@ class SkillReplayRuntime:
             "skill_version": skill.version,
             "content_sha256": binding["content_sha256"],
             "trust_level": _VALIDATED_TRUST_LEVEL,
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
         }
         validation_attestation = verify_validation_response(
             validator_outcome.get("response"),
@@ -604,6 +615,7 @@ class SkillReplayRuntime:
             "skill_id": skill.id,
             "skill_version": skill.version,
             "content_sha256": binding["content_sha256"],
+            **({"manifest_sha256": binding["manifest_sha256"]} if manifest_v2 else {}),
             "validation_attestation": validation_attestation,
         })
         if expected_promotion_id != promotion_request_id:
@@ -630,6 +642,7 @@ class SkillReplayRuntime:
                 validation_attestation=validation_attestation,
                 public_key=self.broker_public_key,
                 expected_key_id=self.broker_key_id,
+                manifest_sha256=binding.get("manifest_sha256"),
                 request_id=promotion_request_id,
             )
         return {
@@ -811,19 +824,25 @@ class SkillReplayRuntime:
         nodes = plan.get("nodes") if isinstance(plan.get("nodes"), list) else []
         if not any(isinstance(node, dict) and str(node.get("id") or "") == node_id for node in nodes):
             raise ValueError("Mission node does not belong to this Mission run")
-        if not isinstance(skill_binding, Mapping) or set(skill_binding) != {
-            "schema_version", "skill_id", "skill_version", "content_sha256",
-            "trust_level", "mission_context",
-        }:
+        if not isinstance(skill_binding, Mapping):
             raise ValueError("published Skill binding has unsupported or missing fields")
         binding = dict(skill_binding)
+        manifest_v2 = binding.get("schema_version") == SKILL_REPLAY_MANIFEST_BINDING_SCHEMA
+        expected_binding_fields = {
+            "schema_version", "skill_id", "skill_version", "content_sha256",
+            "trust_level", "mission_context",
+        } | ({"manifest_sha256"} if manifest_v2 else set())
+        if set(binding) != expected_binding_fields:
+            raise ValueError("published Skill binding has unsupported or missing fields")
         context = {
             "tenant_id": tenant_id,
             "mission_run_id": mission_run_id,
             "node_id": node_id,
             "task_id": task_id,
         }
-        if binding.get("schema_version") != "mission.skill-replay-binding.v1":
+        if binding.get("schema_version") not in {
+            "mission.skill-replay-binding.v1", SKILL_REPLAY_MANIFEST_BINDING_SCHEMA,
+        }:
             raise ValueError("unsupported published Skill binding schema")
         if binding.get("mission_context") != context:
             raise PermissionError("published Skill binding does not match this Mission task")
@@ -839,6 +858,11 @@ class SkillReplayRuntime:
             r"[0-9a-f]{64}", binding["content_sha256"],
         ):
             raise ValueError("published Skill content digest is invalid")
+        if manifest_v2 and (
+            not isinstance(binding.get("manifest_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["manifest_sha256"])
+        ):
+            raise ValueError("published Skill Manifest digest is invalid")
 
         spec = ExecutionProfileSpec(
             profile_id=SKILL_REPLAY_PROFILE_ID,
@@ -855,7 +879,10 @@ class SkillReplayRuntime:
             ),
         )
         return {
-            "schema_version": "mission.published-skill-reuse-operation.v1",
+            "schema_version": (
+                "mission.published-skill-reuse-operation.v2"
+                if manifest_v2 else "mission.published-skill-reuse-operation.v1"
+            ),
             "skill_binding": binding,
             "replay": replay,
             "publication": {"status": "reused_existing_immutable_artifact"},
