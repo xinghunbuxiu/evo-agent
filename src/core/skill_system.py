@@ -134,8 +134,9 @@ class SkillRegistry:
         and execution provenance. The injected store must be mounted read-only
         for this process; publication remains Broker-owned.
         """
-        if self.artifact_store is None or not callable(
-            getattr(self.artifact_store, "load_for_binding", None)
+        if self.artifact_store is None or not (
+            callable(getattr(self.artifact_store, "load_for_binding", None))
+            or callable(getattr(self.artifact_store, "load_published_manifest", None))
         ):
             raise RuntimeError("Broker Skill Artifact Store is not configured")
 
@@ -147,27 +148,53 @@ class SkillRegistry:
         if binding.get("trust_level") not in {"verified", "cloud"}:
             raise ValueError("only independently validated published Skills may be loaded")
 
-        artifact = self.artifact_store.load_for_binding(binding)
+        manifest_v2 = binding.get("schema_version") == "mission.skill-replay-binding.v2"
+        if manifest_v2:
+            expected_fields = {
+                "schema_version", "skill_id", "skill_version", "content_sha256",
+                "manifest_sha256", "trust_level", "mission_context",
+            }
+            if set(binding) != expected_fields or not callable(
+                getattr(self.artifact_store, "load_published_manifest", None)
+            ):
+                raise ValueError("Manifest Skill binding is unsupported")
+            artifact = self.artifact_store.load_published_manifest(binding)
+        else:
+            if set(binding) != {
+                "schema_version", "skill_id", "skill_version", "content_sha256",
+                "trust_level", "mission_context",
+            } or not callable(getattr(self.artifact_store, "load_for_binding", None)):
+                raise ValueError("Skill binding is unsupported")
+            artifact = self.artifact_store.load_for_binding(binding)
         if (
             getattr(artifact, "tenant_id", None) != self.tenant_id
             or getattr(artifact, "id", None) != binding.get("skill_id")
             or getattr(artifact, "version", None) != binding.get("skill_version")
             or getattr(artifact, "content_sha256", None) != binding.get("content_sha256")
             or getattr(artifact, "trust_level", None) != binding.get("trust_level")
+            or (
+                manifest_v2
+                and getattr(artifact, "manifest_sha256", None) != binding.get("manifest_sha256")
+            )
         ):
             raise ValueError("loaded Skill artifact does not match its pinned binding")
 
         trust_level = SkillTrustLevel(artifact.trust_level)
+        manifest = getattr(artifact, "manifest", None)
+        parameters = {
+            "mission_context": dict(context),
+            "content_sha256": artifact.content_sha256,
+        }
+        if manifest_v2:
+            parameters["manifest"] = manifest
         return Skill(
             id=artifact.id,
-            name=artifact.id,
-            domain="mission",
-            description="Broker-published immutable Mission Skill",
+            name=manifest.get("name", artifact.id) if isinstance(manifest, dict) else artifact.id,
+            domain=manifest.get("domain", "mission") if isinstance(manifest, dict) else "mission",
+            capability_type=manifest.get("capability_type", "general_dev") if isinstance(manifest, dict) else "general_dev",
+            description=manifest.get("description", "Broker-published immutable Mission Skill") if isinstance(manifest, dict) else "Broker-published immutable Mission Skill",
             code=artifact.code,
-            parameters={
-                "mission_context": dict(context),
-                "content_sha256": artifact.content_sha256,
-            },
+            parameters=parameters,
             trust_level=trust_level,
             source="broker_artifact",
             version=artifact.version,

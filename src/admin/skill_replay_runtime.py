@@ -49,7 +49,7 @@ from core.skill_validator_transport import (
     request_skill_validator_status,
 )
 from core.skill_replay_contract import build_skill_replay_binding
-from core.skill_manifest import normalize_skill_manifest
+from core.skill_manifest import normalize_skill_manifest, manifest_sha256
 from core.skill_replay_evidence_store import SkillReplayEvidenceStore
 from core.skill_replay_mission import SkillReplayMissionAdapter, build_skill_replay_execution_request_id
 
@@ -475,7 +475,7 @@ class SkillReplayRuntime:
             skill_id=skill.id, skill_version=skill.version, code=skill.code,
             public_key=self.broker_public_key, manifest=manifest,
             expected_manifest_sha256=(
-                __import__("core.skill_manifest", fromlist=["manifest_sha256"]).manifest_sha256(manifest)
+                manifest_sha256(manifest)
                 if manifest is not None else None
             ),
             expected_key_id=self.broker_key_id, request_id=stage_request_id,
